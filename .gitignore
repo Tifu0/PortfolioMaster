@@ -1,2 +1,54 @@
-# Local claude
+# Local Claude / AI Assistants
 .claude/
+
+# Virtual environments
+venv/
+.env/
+.venv/
+
+# IDE & Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Distribution & packaging
+build/
+dist/
+*.egg-info/
+
+# Local config & secrets
+config.env
+.env
+.env.local
+*.env
+!.env.example
+
+# Data stores (SQLite)
+portfolio.db
+*.db
+*.db-journal
+
+# Streamlit
+.streamlit/
+
+# Generated exports & scratch data
+exports/
+*.csv
+*.xlsx
+
+# OS generated
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
