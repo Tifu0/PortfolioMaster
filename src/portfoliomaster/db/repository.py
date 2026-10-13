@@ -125,6 +125,72 @@ def get_all_instruments():
     return [_row_to_instrument(row) for row in rows]
 
 
+def get_instrument_by_ticker(ticker: str) -> Instrument | None:
+    """Retrieve an instrument by its user_ticker."""
+    if not ticker:
+        return None
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM instruments WHERE user_ticker = ?", (ticker.strip(),))
+    row = cursor.fetchone()
+    conn.close()
+    if row:
+        return _row_to_instrument(row)
+    return None
+
+
+def get_quote_by_instrument_id(instrument_id: int) -> Quote | None:
+    """Retrieve the latest quote for an instrument by instrument_id."""
+    if not instrument_id:
+        return None
+    conn = get_connection()
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM quotes WHERE instrument_id = ?", (instrument_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if not row:
+        return None
+
+    from ..core.models import QuoteStatus
+    try:
+        status_enum = QuoteStatus[row["status"]] if row["status"] else QuoteStatus.UNAVAILABLE
+    except (KeyError, ValueError):
+        status_enum = QuoteStatus.UNAVAILABLE
+
+    return Quote(
+        id=row["id"],
+        instrument_id=row["instrument_id"],
+        price=_safe_decimal(row["price"]),
+        previous_close=_safe_decimal(row["previous_close"]),
+        quote_timestamp=_parse_date(row["quote_timestamp"]),
+        fetched_at=_parse_date(row["fetched_at"]),
+        provider=row["provider"] or "",
+        status=status_enum,
+        error_message=row["error_message"],
+    )
+
+
+def delete_instrument(ticker: str) -> bool:
+    """Delete an instrument and its quotes by user_ticker."""
+    if not ticker:
+        return False
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id FROM instruments WHERE user_ticker = ?", (ticker.strip(),))
+    row = cursor.fetchone()
+    if not row:
+        conn.close()
+        return False
+    inst_id = row[0]
+    cursor.execute("DELETE FROM quotes WHERE instrument_id = ?", (inst_id,))
+    cursor.execute("DELETE FROM instruments WHERE id = ?", (inst_id,))
+    conn.commit()
+    conn.close()
+    return True
+
+
 def _parse_date(value):
     """Parse a date/DATETIME string from SQLite into a Python date.
 
