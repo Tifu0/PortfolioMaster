@@ -106,7 +106,15 @@ If you want to customize application behavior:
 
 ---
 
-## 🔒 Privacy & Legal Disclaimer
+## 🔒 Privacy Disclaimer
 
 - **Local-First:** All your portfolio data and quotes are stored locally on your machine (`portfolio.db`). No financial information is transmitted to external servers.
 - **Market Data:** Price quotes are retrieved using the `yfinance` library from Yahoo Finance. This tool is intended solely for personal tracking and research. It does not execute trades nor does it constitute financial advice.
+
+---
+
+## 📄 License
+
+This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. 
+
+See the [LICENSE](LICENSE) file for full details. GPL-3.0 guarantees that PortfolioMaster remains free and open-source, provides explicit patent protection, and prohibits non-free closed-source redistribution.
