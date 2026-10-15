@@ -1,0 +1,8 @@
+# Robots.txt for PortfolioMaster
+# Allow all search engine and AI crawlers (GPTBot, ClaudeBot, PerplexityBot, etc.)
+
+User-agent: *
+Allow: /
+Disallow: /api/
+
+Sitemap: https://portfoliomaster.local/sitemap.xml

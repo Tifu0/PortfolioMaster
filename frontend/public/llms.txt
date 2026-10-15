@@ -1,0 +1,24 @@
+# PortfolioMaster
+
+> Investment watchlist, real-time market data quotes, derived calculations, and target price tracking system.
+
+PortfolioMaster is built with Next.js (App Router, TypeScript, Tailwind CSS) and FastAPI (Python 3.12).
+
+## Core Capabilities
+- **Watchlist (/):** Real-time instrument tracking, quotes, daily variation, variation vs analysis reference price, and distance to target price.
+- **Import (/import):** Ingestion and validation of CSV/Excel portfolio spreadsheets with column mapping and ticker normalization.
+- **Manual Management:** Adding, editing, deleting instruments, and setting manual or Yahoo Finance quotes.
+- **Quote Refresh:** Batch updates and single-instrument updates via Yahoo Finance.
+
+## API Endpoints (FastAPI :8000)
+- `GET /api/positions`: Returns list of all instruments with their latest quotes and server-computed variation metrics.
+- `GET /api/metrics`: Aggregate portfolio metrics (total, best performer, worst performer, average daily change).
+- `GET /api/instruments`: List of all active instruments.
+- `POST /api/instruments`: Create a new instrument with optional quote or Yahoo fetch.
+- `PUT /api/instruments/{ticker}`: Update instrument parameters.
+- `DELETE /api/instruments/{ticker}`: Delete an instrument.
+- `POST /api/refresh`: Batch refresh quotes from Yahoo Finance.
+- `POST /api/instruments/{ticker}/refresh`: Single-ticker refresh.
+- `POST /api/import/preview`: Preview and validate spreadsheet import.
+- `POST /api/import/confirm`: Commit spreadsheet instruments to SQLite database.
+- `DELETE /api/database`: Wipe all portfolio data.
