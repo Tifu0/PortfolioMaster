@@ -31,7 +31,19 @@ COLUMN_MAPPING = {
         "PRECIO COMPRA",
     ],
     "currency": ["Currency", "Moneda", "Divisa"],
-    "comment": ["Comment", "Comentarios", "Comentario", "COMENTARIO", "Nota"],
+    "comment": [
+        "Comment",
+        "Comentarios",
+        "Comentario",
+        "COMENTARIO",
+        "Nota",
+        "Notas",
+        "Descripcion",
+        "Descripción",
+        "DESCRIPCION",
+        "DESCRIPCIÓN",
+        "Description",
+    ],
     "active": ["Active", "Is Active", "Activo S/N"],
 }
 

@@ -5,9 +5,10 @@
 // modal all require interactive React state (useState, useMemo, useCallback)
 // and TanStack Table client-side hooks.
 
-import React, { useCallback, useMemo, useState, useTransition } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ColumnDef,
+  ColumnSizingState,
   flexRender,
   getCoreRowModel,
   getFilteredRowModel,
@@ -25,6 +26,7 @@ import {
   TrendingUp,
   Info,
   RefreshCw,
+  RotateCcw,
   Trash2,
   X,
   AlertTriangle,
@@ -33,14 +35,16 @@ import {
   Edit3,
   PlusCircle,
   Calendar,
+  FileText,
 } from 'lucide-react';
-import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse } from '@/lib/types';
+import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse, AppConfig } from '@/lib/types';
 import {
   getPositions,
   getMetrics,
   refreshAll,
   refreshInstrument,
   resolveMissingAnalysisPrices,
+  updateInstrument,
   wipeDatabase,
 } from '@/lib/api';
 
@@ -51,6 +55,7 @@ import {
 interface WatchlistTableProps {
   initialPositions: Position[];
   initialMetrics?: PortfolioMetrics | null;
+  appConfig?: AppConfig | null;
   onDataChange?: (positions: Position[], metrics: PortfolioMetrics | null) => void;
   onEditTicker?: (ticker: string) => void;
   onAddInstrument?: () => void;
@@ -71,6 +76,85 @@ function formatPercent(value: number | null | undefined, valid: boolean): { text
     return { text: formatted, colorClass: 'text-rose-400 font-semibold font-mono' };
   }
   return { text: formatted, colorClass: 'text-zinc-300 font-mono' };
+}
+
+function formatDeclineToTarget(
+  value: number | null | undefined,
+  valid: boolean
+): { text: string; colorClass: string } {
+  // Para empresas que no tengan precio objetivo (o cálculo no válido),
+  // se asigna por predeterminado un -100% de caída (mínima intensidad roja)
+  const effectiveValue =
+    !valid || value === null || value === undefined || isNaN(value)
+      ? -100
+      : value;
+
+  const formatted = `${effectiveValue >= 0 ? '+' : ''}${effectiveValue.toFixed(2)}%`;
+
+  // Si ya ha alcanzado o superado el objetivo (caída restante <= 0%)
+  if (effectiveValue >= 0) {
+    return {
+      text: formatted,
+      colorClass:
+        'text-emerald-300 font-bold font-mono text-xs px-2 py-0.5 rounded-md bg-emerald-500/20 border border-emerald-500/40 shadow-sm shadow-emerald-950/40',
+    };
+  }
+
+  // Cuanto más cerca del objetivo (menor % de caída restante), más intenso es el rojo:
+  // El recuadro / badge se aplica a partir de -10% hacia delante (hacia 0%):
+  const absVal = Math.abs(effectiveValue);
+
+  if (absVal <= 2) {
+    // Alerta inminente (≤ 2%, ej. 1%): Máxima intensidad roja con recuadro pulsante
+    return {
+      text: formatted,
+      colorClass:
+        'text-rose-100 font-bold font-mono text-xs px-2 py-0.5 rounded-md bg-rose-600/40 border border-rose-500/60 shadow-md shadow-rose-950/60 animate-pulse',
+    };
+  }
+  if (absVal <= 5) {
+    // Muy cerca (2% a 5%): Rojo intenso con recuadro destacado
+    return {
+      text: formatted,
+      colorClass:
+        'text-rose-200 font-bold font-mono text-xs px-1.5 py-0.5 rounded bg-rose-500/25 border border-rose-500/40',
+    };
+  }
+  if (absVal <= 10) {
+    // De -10% hacia delante: Rojo vivo con recuadro suave
+    return {
+      text: formatted,
+      colorClass:
+        'text-rose-300 font-semibold font-mono text-xs px-1.5 py-0.5 rounded bg-rose-500/15 border border-rose-500/25',
+    };
+  }
+  // A partir de más de -10% de caída (más lejos), SIN recuadro:
+  if (absVal <= 30) {
+    // Distancia media (10% a 30%): Rojo estándar sin recuadro
+    return {
+      text: formatted,
+      colorClass: 'text-rose-400 font-medium font-mono text-xs',
+    };
+  }
+  if (absVal <= 50) {
+    // Distancia moderada (30% a 50%): Rojo moderado sin recuadro
+    return {
+      text: formatted,
+      colorClass: 'text-rose-400/80 font-normal font-mono text-xs',
+    };
+  }
+  if (absVal <= 75) {
+    // Distancia lejana (50% a 75%, ej. 70%): Rojo leve sin recuadro
+    return {
+      text: formatted,
+      colorClass: 'text-rose-400/50 font-normal font-mono text-xs',
+    };
+  }
+  // Distancia muy lejana (75% a 100%+ o sin objetivo, ej. -100%): Mínima intensidad roja sin recuadro
+  return {
+    text: formatted,
+    colorClass: 'text-rose-400/30 font-normal font-mono text-xs',
+  };
 }
 
 function formatCurrency(price: number | null | undefined, currency: string): string {
@@ -298,7 +382,8 @@ function WipeDatabaseModal({
 
 export function WatchlistTable({
   initialPositions,
-  initialMetrics,
+  initialMetrics: _initialMetrics,
+  appConfig,
   onDataChange,
   onEditTicker,
   onAddInstrument,
@@ -308,6 +393,43 @@ export function WatchlistTable({
   const [globalFilter, setGlobalFilter] = useState('');
   const [selectedExchange, setSelectedExchange] = useState<string>('ALL');
   const [selectedCurrency, setSelectedCurrency] = useState<string>('ALL');
+
+  // Column sizing states
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem('portfoliomaster_column_sizing');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          setColumnSizing(parsed);
+        }
+      }
+    } catch {
+      // ignore storage access errors
+    }
+  }, []);
+
+  const handleColumnSizingChange = useCallback(
+    (updater: React.SetStateAction<ColumnSizingState>) => {
+      setColumnSizing((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        try {
+          localStorage.setItem('portfoliomaster_column_sizing', JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    []
+  );
+
+  const hasCustomColumnSizing = useMemo(
+    () => Object.keys(columnSizing).length > 0,
+    [columnSizing]
+  );
 
   // Refresh states
   const [batchRefreshing, setBatchRefreshing] = useState(false);
@@ -330,6 +452,66 @@ export function WatchlistTable({
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  const handleResetColumnWidths = useCallback(() => {
+    setColumnSizing({});
+    try {
+      localStorage.removeItem('portfoliomaster_column_sizing');
+    } catch {
+      // ignore
+    }
+    addToast('info', 'Ancho de columnas restablecido a los valores por defecto');
+  }, [addToast]);
+
+  // Description / Notes states
+  const [expandedDescriptionTickers, setExpandedDescriptionTickers] = useState<Set<string>>(new Set());
+  const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
+  const [savingCommentTicker, setSavingCommentTicker] = useState<string | null>(null);
+
+  const toggleDescription = useCallback((ticker: string) => {
+    setExpandedDescriptionTickers((prev) => {
+      const next = new Set(prev);
+      if (next.has(ticker)) {
+        next.delete(ticker);
+      } else {
+        next.add(ticker);
+        setCommentDrafts((drafts) => {
+          if (drafts[ticker] === undefined) {
+            const currentPos = data.find((p) => p.user_ticker === ticker);
+            return { ...drafts, [ticker]: currentPos?.comment || '' };
+          }
+          return drafts;
+        });
+      }
+      return next;
+    });
+  }, [data]);
+
+  const handleCommentChange = useCallback((ticker: string, value: string) => {
+    setCommentDrafts((prev) => ({ ...prev, [ticker]: value }));
+  }, []);
+
+  const handleSaveComment = useCallback(async (pos: Position) => {
+    const ticker = pos.user_ticker;
+    const newComment = commentDrafts[ticker] !== undefined ? commentDrafts[ticker] : (pos.comment || '');
+    setSavingCommentTicker(ticker);
+    try {
+      await updateInstrument(ticker, { comment: newComment });
+      setData((prev) => {
+        const updated = prev.map((item) =>
+          item.user_ticker === ticker ? { ...item, comment: newComment } : item
+        );
+        onDataChange?.(updated, _initialMetrics ?? null);
+        return updated;
+      });
+      addToast('success', `Descripción de ${ticker} guardada correctamente`);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      addToast('error', `Error al guardar la descripción de ${ticker}: ${msg}`);
+    } finally {
+      setSavingCommentTicker(null);
+    }
+  }, [commentDrafts, addToast, onDataChange, _initialMetrics]);
 
   // ── Reload data from API ────────────────────────────────────────────── //
 
@@ -357,17 +539,36 @@ export function WatchlistTable({
     }
   }, [onDataChange]);
 
-  // ── Batch Refresh ───────────────────────────────────────────────────── //
+  // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
 
   const handleBatchRefresh = useCallback(async () => {
     if (batchRefreshing) return;
     setBatchRefreshing(true);
     try {
-      const result: RefreshBatchResponse = await refreshAll();
-      const failedMsg = result.failed > 0 ? ` (${result.failed} fallidas)` : '';
+      const [quotesRes, analysisRes] = await Promise.allSettled([
+        refreshAll(),
+        resolveMissingAnalysisPrices(),
+      ]);
+
+      let updatedQuotes = 0;
+      let totalQuotes = 0;
+      let failedQuotes = 0;
+      if (quotesRes.status === 'fulfilled') {
+        updatedQuotes = quotesRes.value.updated;
+        totalQuotes = quotesRes.value.total;
+        failedQuotes = quotesRes.value.failed;
+      }
+
+      let updatedAnalysis = 0;
+      if (analysisRes.status === 'fulfilled') {
+        updatedAnalysis = analysisRes.value.updated;
+      }
+
+      const failedMsg = failedQuotes > 0 ? ` (${failedQuotes} fallidas)` : '';
+      const analysisMsg = updatedAnalysis > 0 ? ` · ${updatedAnalysis} precios de análisis resueltos` : '';
       addToast(
-        result.failed > 0 ? 'info' : 'success',
-        `${result.updated} de ${result.total} cotizaciones actualizadas${failedMsg}`
+        failedQuotes > 0 ? 'info' : 'success',
+        `${updatedQuotes} de ${totalQuotes} cotizaciones actualizadas${failedMsg}${analysisMsg}`
       );
       await reloadData();
     } catch (err: unknown) {
@@ -483,6 +684,9 @@ export function WatchlistTable({
     () => [
       {
         accessorKey: 'user_ticker',
+        size: 130,
+        minSize: 85,
+        maxSize: 350,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -500,6 +704,37 @@ export function WatchlistTable({
         ),
         cell: ({ row }) => {
           const pos = row.original;
+          const isTargetReached =
+            pos.target_price !== null &&
+            pos.latest_price !== null &&
+            pos.target_price > 0 &&
+            pos.latest_price > 0 &&
+            pos.latest_price <= pos.target_price;
+
+          if (isTargetReached) {
+            return (
+              <div
+                className="inline-flex flex-col px-2.5 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/50 shadow-[0_0_12px_rgba(16,185,129,0.35)] transition-all"
+                title={`¡Precio objetivo alcanzado! Cotización (${pos.latest_price} ${pos.currency}) ≤ Objetivo (${pos.target_price} ${pos.currency})`}
+              >
+                <div className="flex items-center gap-1.5">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
+                  </span>
+                  <span className="font-bold text-emerald-200 tracking-wide font-mono text-xs">
+                    {pos.user_ticker}
+                  </span>
+                </div>
+                {pos.provider_symbol && pos.provider_symbol !== pos.user_ticker && (
+                  <span className="text-[10px] text-emerald-400/80 font-mono pl-3.5">
+                    {pos.provider_symbol}
+                  </span>
+                )}
+              </div>
+            );
+          }
+
           return (
             <div className="flex flex-col">
               <span className="font-semibold text-white tracking-wide font-mono">
@@ -516,6 +751,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'company_name',
+        size: 240,
+        minSize: 130,
+        maxSize: 600,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -539,6 +777,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'exchange',
+        size: 105,
+        minSize: 80,
+        maxSize: 220,
         header: 'Mercado',
         cell: ({ row }) => (
           <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-zinc-800 text-zinc-300 border border-zinc-700/60">
@@ -548,6 +789,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'currency',
+        size: 85,
+        minSize: 65,
+        maxSize: 160,
         header: 'Divisa',
         cell: ({ row }) => (
           <span className="text-xs font-mono text-zinc-400">
@@ -557,6 +801,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'latest_price',
+        size: 160,
+        minSize: 110,
+        maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -590,6 +837,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'daily_variation',
+        size: 130,
+        minSize: 95,
+        maxSize: 260,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -626,6 +876,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'variation_since_analysis',
+        size: 150,
+        minSize: 110,
+        maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -670,7 +923,14 @@ export function WatchlistTable({
         },
       },
       {
-        accessorKey: 'decline_to_target',
+        accessorFn: (row) =>
+          row.decline_to_target_valid && row.decline_to_target !== null
+            ? row.decline_to_target
+            : -100,
+        id: 'decline_to_target',
+        size: 150,
+        minSize: 110,
+        maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -687,12 +947,12 @@ export function WatchlistTable({
           </button>
         ),
         cell: ({ row }) => {
-          const { text, colorClass } = formatPercent(
+          const { text, colorClass } = formatDeclineToTarget(
             row.original.decline_to_target,
             row.original.decline_to_target_valid
           );
           return (
-            <div className="flex justify-end">
+            <div className="flex items-center justify-end">
               <span className={colorClass}>{text}</span>
             </div>
           );
@@ -700,6 +960,9 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'target_price',
+        size: 130,
+        minSize: 95,
+        maxSize: 260,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -721,15 +984,45 @@ export function WatchlistTable({
           </div>
         ),
       },
-      // Actions column — per-row refresh & edit
+      // Actions column — per-row description, edit & refresh
       {
         id: 'actions',
+        size: 115,
+        minSize: 115,
+        maxSize: 115,
+        enableResizing: false,
         header: '',
         cell: ({ row }) => {
           const ticker = row.original.user_ticker;
           const isRefreshing = refreshingTickers.has(ticker);
+          const isExpanded = expandedDescriptionTickers.has(ticker);
+          const hasComment = Boolean(row.original.comment && row.original.comment.trim());
+
           return (
             <div className="flex items-center justify-end gap-1">
+              {/* Description toggle button */}
+              <button
+                onClick={() => toggleDescription(ticker)}
+                className={`p-1.5 rounded-lg transition-all relative ${
+                  isExpanded
+                    ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
+                    : hasComment
+                    ? 'text-blue-400 hover:text-blue-300 hover:bg-blue-500/10'
+                    : 'text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800'
+                }`}
+                title={
+                  hasComment
+                    ? `Descripción: "${row.original.comment.slice(0, 60)}${row.original.comment.length > 60 ? '...' : ''}" (clic para ${isExpanded ? 'ocultar' : 'desplegar'})`
+                    : `Añadir descripción para ${ticker}`
+                }
+              >
+                <FileText className="w-3.5 h-3.5" />
+                {hasComment && (
+                  <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-400" />
+                )}
+              </button>
+
+              {/* Edit instrument modal button */}
               <button
                 onClick={() => onEditTicker?.(ticker)}
                 className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-all"
@@ -737,6 +1030,8 @@ export function WatchlistTable({
               >
                 <Edit3 className="w-3.5 h-3.5" />
               </button>
+
+              {/* Refresh quote button */}
               <button
                 onClick={() => handleSingleRefresh(ticker)}
                 disabled={isRefreshing || batchRefreshing}
@@ -752,10 +1047,16 @@ export function WatchlistTable({
             </div>
           );
         },
-        size: 72,
       },
     ],
-    [refreshingTickers, batchRefreshing, handleSingleRefresh, onEditTicker]
+    [
+      refreshingTickers,
+      batchRefreshing,
+      handleSingleRefresh,
+      onEditTicker,
+      expandedDescriptionTickers,
+      toggleDescription,
+    ]
   );
 
   // eslint-disable-next-line react-hooks/incompatible-library
@@ -764,8 +1065,12 @@ export function WatchlistTable({
     columns,
     state: {
       sorting,
+      columnSizing,
     },
     onSortingChange: setSorting,
+    onColumnSizingChange: handleColumnSizingChange,
+    columnResizeMode: 'onChange',
+    enableColumnResizing: true,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -791,28 +1096,29 @@ export function WatchlistTable({
       />
 
       {/* Search, Filters & Action Buttons Bar */}
-      <div className="flex flex-col md:flex-row items-stretch md:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-3.5 rounded-xl">
-        {/* Left side: Search Input */}
-        <div className="relative flex-1 max-w-md">
-          <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400" />
-          <input
-            type="text"
-            placeholder="Buscar por ticker o empresa..."
-            value={globalFilter}
-            onChange={(e) => setGlobalFilter(e.target.value)}
-            className="w-full bg-zinc-950/70 border border-zinc-800 rounded-lg pl-10 pr-3.5 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-sans"
-          />
-        </div>
+      <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-2.5 sm:p-3 rounded-xl">
+        {/* Left side: Search & Filter Controls */}
+        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1 min-w-0">
+          {/* Search Input */}
+          <div className="relative min-w-[160px] sm:min-w-[200px] max-w-xs flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
+            <input
+              type="text"
+              placeholder="Buscar ticker o empresa..."
+              value={globalFilter}
+              onChange={(e) => setGlobalFilter(e.target.value)}
+              className="w-full bg-zinc-950/70 border border-zinc-800 rounded-lg pl-9 pr-3 py-1.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-sans h-9"
+            />
+          </div>
 
-        {/* Middle: Filters */}
-        <div className="flex flex-wrap items-center gap-2.5">
-          <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 py-1.5">
+          {/* Mercado Filter */}
+          <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 h-9 shrink-0">
             <Filter className="w-3.5 h-3.5 text-zinc-400" />
             <span className="text-xs text-zinc-400">Mercado:</span>
             <select
               value={selectedExchange}
               onChange={(e) => setSelectedExchange(e.target.value)}
-              className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer"
+              className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer pr-1"
             >
               <option value="ALL" className="bg-zinc-900 text-zinc-200">Todos</option>
               {exchanges.map((ex) => (
@@ -823,12 +1129,13 @@ export function WatchlistTable({
             </select>
           </div>
 
-          <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 py-1.5">
+          {/* Divisa Filter */}
+          <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 h-9 shrink-0">
             <span className="text-xs text-zinc-400">Divisa:</span>
             <select
               value={selectedCurrency}
               onChange={(e) => setSelectedCurrency(e.target.value)}
-              className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer"
+              className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer pr-1"
             >
               <option value="ALL" className="bg-zinc-900 text-zinc-200">Todas</option>
               {currencies.map((curr) => (
@@ -839,21 +1146,22 @@ export function WatchlistTable({
             </select>
           </div>
 
-          <div className="text-xs text-zinc-400 px-2 font-mono">
-            Mostrando <span className="text-zinc-200 font-semibold">{filteredData.length}</span> de{' '}
-            <span className="text-zinc-200 font-semibold">{data.length}</span>
+          {/* Counter Badge */}
+          <div className="inline-flex items-center text-xs text-zinc-400 px-2.5 h-9 font-mono whitespace-nowrap shrink-0 bg-zinc-950/40 border border-zinc-800/80 rounded-lg">
+            Mostrando <span className="text-zinc-200 font-semibold mx-1">{filteredData.length}</span> de{' '}
+            <span className="text-zinc-200 font-semibold ml-1">{data.length}</span>
           </div>
         </div>
 
         {/* Right side: Action Buttons */}
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
           {/* Add Instrument Button */}
           {onAddInstrument && (
             <button
               onClick={onAddInstrument}
-              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all
+              className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
-                hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm"
+                hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
               title="Añadir un nuevo valor manualmente"
             >
               <PlusCircle className="w-4 h-4 text-emerald-400" />
@@ -861,38 +1169,15 @@ export function WatchlistTable({
             </button>
           )}
 
-          {/* Resolve Missing Analysis Prices */}
-          <button
-            onClick={handleResolveAnalysisPrices}
-            disabled={resolvingAnalysisPrices || batchRefreshing || data.length === 0}
-            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-medium transition-all
-              bg-blue-500/10 text-blue-400 border border-blue-500/20
-              hover:bg-blue-500/20 hover:text-blue-300 hover:border-blue-500/40
-              disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Buscar en Yahoo Finance el precio de cierre en la fecha de análisis para los que no tienen cotización de referencia"
-          >
-            {resolvingAnalysisPrices ? (
-              <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                <span className="hidden lg:inline">Resolviendo Fechas...</span>
-              </>
-            ) : (
-              <>
-                <Calendar className="w-3.5 h-3.5" />
-                <span className="hidden lg:inline">Precios Fecha Análisis</span>
-              </>
-            )}
-          </button>
-
-          {/* Batch Refresh */}
+          {/* Batch Refresh (Cotizaciones + Precios de Análisis) */}
           <button
             onClick={handleBatchRefresh}
             disabled={batchRefreshing || data.length === 0}
-            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg text-xs font-medium transition-all
+            className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
               bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
               hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
-              disabled:opacity-40 disabled:cursor-not-allowed"
-            title="Actualizar todas las cotizaciones desde Yahoo Finance"
+              disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+            title="Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance"
           >
             {batchRefreshing ? (
               <>
@@ -907,14 +1192,33 @@ export function WatchlistTable({
             )}
           </button>
 
+          {/* Reset Column Widths Button */}
+          <button
+            onClick={handleResetColumnWidths}
+            disabled={!hasCustomColumnSizing}
+            className={`h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all shrink-0 border ${
+              hasCustomColumnSizing
+                ? 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm cursor-pointer'
+                : 'bg-zinc-900/40 text-zinc-600 border-zinc-800/60 cursor-not-allowed opacity-50'
+            }`}
+            title={
+              hasCustomColumnSizing
+                ? 'Restablecer el ancho de las columnas a los valores por defecto'
+                : 'Las columnas ya tienen su ancho por defecto'
+            }
+          >
+            <RotateCcw className="w-3.5 h-3.5" />
+            <span className="hidden xl:inline">Restablecer Columnas</span>
+          </button>
+
           {/* Wipe Database */}
           <button
             onClick={() => setWipeModalOpen(true)}
             disabled={batchRefreshing || wipingDb}
-            className="inline-flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all
+            className="h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all
               bg-rose-500/5 text-zinc-500 border border-zinc-800
               hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30
-              disabled:opacity-30 disabled:cursor-not-allowed"
+              disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
             title="Borrar todos los datos de la base de datos"
           >
             <Trash2 className="w-4 h-4" />
@@ -925,7 +1229,10 @@ export function WatchlistTable({
 
       {/* Table Container */}
       <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur shadow-2xl">
-        <table className="w-full text-left text-sm text-zinc-300 divide-y divide-zinc-800/80">
+        <table
+          className="w-full text-left text-sm text-zinc-300 divide-y divide-zinc-800/80 table-fixed"
+          style={{ width: `${table.getTotalSize()}px`, minWidth: '100%' }}
+        >
           <thead className="bg-zinc-950/70 text-xs text-zinc-400">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
@@ -933,14 +1240,41 @@ export function WatchlistTable({
                   <th
                     key={header.id}
                     scope="col"
-                    className="py-3.5 px-4 font-semibold text-zinc-400"
+                    style={{ width: `${header.getSize()}px` }}
+                    className="py-3.5 px-4 font-semibold text-zinc-400 relative select-none group/th"
                   >
-                    {header.isPlaceholder
-                      ? null
-                      : flexRender(
-                          header.column.columnDef.header,
-                          header.getContext()
-                        )}
+                    <div className="truncate">
+                      {header.isPlaceholder
+                        ? null
+                        : flexRender(
+                            header.column.columnDef.header,
+                            header.getContext()
+                          )}
+                    </div>
+
+                    {/* Column Resizer Handle */}
+                    {header.column.getCanResize() && (
+                      <div
+                        onMouseDown={header.getResizeHandler()}
+                        onTouchStart={header.getResizeHandler()}
+                        onDoubleClick={() => header.column.resetSize()}
+                        onClick={(e) => e.stopPropagation()}
+                        className={`absolute right-0 top-0 h-full w-2.5 cursor-col-resize select-none touch-none flex items-center justify-center transition-all group-hover/th:opacity-100 z-20 ${
+                          header.column.getIsResizing()
+                            ? 'opacity-100'
+                            : 'opacity-0'
+                        }`}
+                        title="Arrastra para redimensionar (doble clic para valor por defecto)"
+                      >
+                        <div
+                          className={`w-[2px] transition-all rounded-full ${
+                            header.column.getIsResizing()
+                              ? 'bg-emerald-400 h-full shadow-[0_0_8px_rgba(52,211,153,0.9)]'
+                              : 'bg-zinc-600 hover:bg-emerald-400 h-4'
+                          }`}
+                        />
+                      </div>
+                    )}
                   </th>
                 ))}
               </tr>
@@ -951,22 +1285,114 @@ export function WatchlistTable({
               table.getRowModel().rows.map((row) => {
                 const ticker = row.original.user_ticker;
                 const isRefreshingRow = refreshingTickers.has(ticker);
+                const isExpanded = expandedDescriptionTickers.has(ticker);
+                const currentComment =
+                  commentDrafts[ticker] !== undefined
+                    ? commentDrafts[ticker]
+                    : row.original.comment || '';
+                const hasUnsavedChanges =
+                  currentComment !== (row.original.comment || '');
+
                 return (
-                  <tr
-                    key={row.id}
-                    className={`hover:bg-zinc-800/30 transition-colors group ${
-                      isRefreshingRow ? 'opacity-60' : ''
-                    }`}
-                  >
-                    {row.getVisibleCells().map((cell) => (
-                      <td key={cell.id} className="py-3.5 px-4 align-middle">
-                        {flexRender(
-                          cell.column.columnDef.cell,
-                          cell.getContext()
-                        )}
-                      </td>
-                    ))}
-                  </tr>
+                  <React.Fragment key={row.id}>
+                    <tr
+                      className={`hover:bg-zinc-800/30 transition-colors group ${
+                        isRefreshingRow ? 'opacity-60' : ''
+                      } ${isExpanded ? 'bg-zinc-850/60' : ''}`}
+                    >
+                      {row.getVisibleCells().map((cell) => (
+                        <td
+                          key={cell.id}
+                          style={{ width: `${cell.column.getSize()}px` }}
+                          className="py-3.5 px-4 align-middle overflow-hidden"
+                        >
+                          {flexRender(
+                            cell.column.columnDef.cell,
+                            cell.getContext()
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                    {isExpanded && (
+                      <tr className="bg-zinc-900/95 border-b border-zinc-800">
+                        <td
+                          colSpan={row.getVisibleCells().length}
+                          className="px-4 py-3.5 sm:px-6"
+                        >
+                          <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3 shadow-lg animate-in fade-in-50 duration-150">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2.5">
+                                <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                                  <FileText className="w-4 h-4" />
+                                </div>
+                                <div>
+                                  <span className="text-xs font-semibold text-white">
+                                    Descripción de la Empresa
+                                  </span>
+                                  <span className="text-xs text-zinc-400 ml-2 font-mono">
+                                    {row.original.user_ticker} · {row.original.company_name}
+                                  </span>
+                                </div>
+                              </div>
+                              <button
+                                onClick={() => toggleDescription(ticker)}
+                                className="text-zinc-500 hover:text-zinc-300 p-1 rounded-lg hover:bg-zinc-800 transition"
+                                title="Cerrar panel de descripción"
+                              >
+                                <X className="w-4 h-4" />
+                              </button>
+                            </div>
+
+                            <textarea
+                              value={currentComment}
+                              onChange={(e) =>
+                                handleCommentChange(ticker, e.target.value)
+                              }
+                              placeholder={`Escribe aquí la descripción, notas o tesis de inversión de ${row.original.company_name}...`}
+                              rows={3}
+                              className="w-full bg-zinc-900/90 border border-zinc-800 rounded-lg p-3 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-sans leading-relaxed resize-y"
+                            />
+
+                            <div className="flex items-center justify-between text-xs pt-0.5">
+                              <span className="text-zinc-500 text-[11px] font-mono">
+                                {currentComment.length} caracteres
+                                {hasUnsavedChanges && (
+                                  <span className="ml-2 text-amber-400">
+                                    • Cambios sin guardar
+                                  </span>
+                                )}
+                              </span>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => toggleDescription(ticker)}
+                                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition"
+                                >
+                                  Cerrar
+                                </button>
+                                <button
+                                  onClick={() => handleSaveComment(row.original)}
+                                  disabled={savingCommentTicker === ticker}
+                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                                >
+                                  {savingCommentTicker === ticker ? (
+                                    <>
+                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                      Guardando...
+                                    </>
+                                  ) : (
+                                    <>
+                                      <Check className="w-3.5 h-3.5" />
+                                      Guardar Descripción
+                                    </>
+                                  )}
+                                </button>
+                              </div>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
                 );
               })
             ) : (
@@ -996,6 +1422,40 @@ export function WatchlistTable({
                         Añadir Primer Valor
                       </button>
                     )}
+                  </div>
+                </td>
+              </tr>
+            )}
+
+            {/* Permanent Bottom Row: Añadir un nuevo valor */}
+            {onAddInstrument && (
+              <tr
+                onClick={onAddInstrument}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    onAddInstrument();
+                  }
+                }}
+                tabIndex={0}
+                role="button"
+                className="group cursor-pointer border-t-2 border-dashed border-zinc-800/80 bg-zinc-950/30 hover:bg-emerald-500/[0.07] hover:border-emerald-500/30 transition-all select-none focus:outline-none focus:bg-emerald-500/[0.09]"
+                title="Añadir un nuevo valor manualmente al watchlist"
+              >
+                <td
+                  colSpan={columns.length}
+                  className="py-3 px-4 text-left"
+                >
+                  <div className="flex items-center gap-3">
+                    <span className="w-6 h-6 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center group-hover:bg-emerald-500/20 group-hover:border-emerald-500/40 group-hover:scale-105 transition-all text-emerald-400 shrink-0">
+                      <PlusCircle className="w-3.5 h-3.5" />
+                    </span>
+                    <span className="text-xs font-semibold text-emerald-400 group-hover:text-emerald-300 transition-colors">
+                      Añadir un nuevo valor
+                    </span>
+                    <span className="hidden sm:inline text-[11px] text-zinc-500 group-hover:text-zinc-400 transition-colors">
+                      — Haz clic aquí para registrar un instrumento o cotización manualmente
+                    </span>
                   </div>
                 </td>
               </tr>

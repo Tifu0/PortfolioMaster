@@ -5,7 +5,22 @@ engine all agree on thresholds and batch sizes. Nothing external is
 imported so this file stays testable in isolation.
 """
 
+import os
+from pathlib import Path
 from decimal import Decimal
+from typing import Optional
+
+# Attempt to load .env from project root or working directory
+try:
+    from dotenv import load_dotenv
+
+    _root_env = Path(__file__).resolve().parents[3] / ".env"
+    if _root_env.exists():
+        load_dotenv(dotenv_path=_root_env)
+    else:
+        load_dotenv()
+except ImportError:
+    pass
 
 from .models import FreshnessConfig, Exchange
 
@@ -18,14 +33,49 @@ DEFAULT_STALENESS_SECONDS: float = 2 * 24 * 60 * 60  # 48 hours
 
 # Batch runner tuning. Start conservative and measure before increasing.
 DEFAULT_BATCH_SIZE: int = 10
-MAX_BATCH_SIZE: int = 50
+MAX_BATCH_SIZE: int = 100
 MAX_RETRIES: int = 2
 BASE_BACKOFF_SECONDS: float = 0.5
 MAX_BACKOFF_SECONDS: float = 5.0
 
 # Refresh scheduler.
 DEFAULT_REFRESH_INTERVAL_SECONDS: float = 5 * 60  # 5 minutes
-MIN_REFRESH_INTERVAL_SECONDS: float = 60  # one minute floor
+MIN_REFRESH_INTERVAL_SECONDS: float = 5  # safety floor in seconds
+
+
+def get_refresh_interval() -> float:
+    """Return the configured refresh interval in seconds from environment.
+
+    Reads REFRESH_INTERVAL_SECONDS. If set <= 0, returns 0.0 (auto-refresh disabled).
+    Enforces a minimum safety floor of MIN_REFRESH_INTERVAL_SECONDS (5s) for positive values.
+    Defaults to DEFAULT_REFRESH_INTERVAL_SECONDS (300s).
+    """
+    raw = os.getenv("REFRESH_INTERVAL_SECONDS")
+    if raw is not None and raw.strip():
+        try:
+            val = float(raw.strip())
+            if val <= 0:
+                return 0.0
+            return max(float(MIN_REFRESH_INTERVAL_SECONDS), val)
+        except ValueError:
+            pass
+    return float(DEFAULT_REFRESH_INTERVAL_SECONDS)
+
+
+def get_batch_size() -> int:
+    """Return the batch size for market data queries from environment.
+
+    Reads REFRESH_BATCH_SIZE (or fallback BATCH_SIZE).
+    Defaults to DEFAULT_BATCH_SIZE (10). Enforces a minimum of 1.
+    """
+    raw = os.getenv("REFRESH_BATCH_SIZE") or os.getenv("BATCH_SIZE")
+    if raw is not None and raw.strip():
+        try:
+            val = int(raw.strip())
+            return max(1, val)
+        except ValueError:
+            pass
+    return DEFAULT_BATCH_SIZE
 
 # Database.
 DATABASE_FILENAME: str = "portfolio.db"

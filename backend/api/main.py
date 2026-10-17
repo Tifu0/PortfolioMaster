@@ -7,10 +7,13 @@ the modules in ``src/portfoliomaster/``.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 import math
 import os
 import sys
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
@@ -31,16 +34,22 @@ _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".
 _SRC_DIR = os.path.join(_PROJECT_ROOT, "src")
 if _SRC_DIR not in sys.path:
     sys.path.insert(0, _SRC_DIR)
+if _PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, _PROJECT_ROOT)
 
 # ---------------------------------------------------------------------------
-# Imports from the existing (untouched) business-logic package.
+# Imports from the existing business-logic package.
 # ---------------------------------------------------------------------------
 from portfoliomaster.core.calculations import (  # noqa: E402
     daily_variation,
     decline_to_target,
     variation_since_analysis,
 )
-from portfoliomaster.core.config import get_yahoo_suffix  # noqa: E402
+from portfoliomaster.core.config import (  # noqa: E402
+    get_yahoo_suffix,
+    get_refresh_interval,
+    get_batch_size,
+)
 from portfoliomaster.core.models import (  # noqa: E402
     Exchange,
     Instrument,
@@ -53,6 +62,7 @@ from portfoliomaster.db.repository import (  # noqa: E402
     get_all_instruments,
     get_instrument_by_ticker,
     get_quote_by_instrument_id,
+    update_instrument_by_id,
     upsert_instrument,
     upsert_quote,
     wipe_database,
@@ -63,15 +73,81 @@ from portfoliomaster.providers.yahoo_adapter import YahooAdapter  # noqa: E402
 from portfoliomaster.refresh.batch_runner import BatchRunner  # noqa: E402
 
 # ========================================================================== #
+# Logging & Runtime State
+# ========================================================================== #
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
+logger = logging.getLogger("portfoliomaster.api")
+
+_refresh_lock = threading.Lock()
+_state: dict = {
+    "last_refresh_at": None,
+    "last_refresh_result": None,
+}
+
+
+async def background_refresh_loop():
+    """Background worker that periodically refreshes market data quotes."""
+    # Give the app a couple seconds to complete startup before initial check
+    await asyncio.sleep(2)
+    while True:
+        try:
+            interval = get_refresh_interval()
+            if interval <= 0:
+                logger.info("[AutoRefresh] Automatic refresh disabled (REFRESH_INTERVAL_SECONDS <= 0).")
+                await asyncio.sleep(60)
+                continue
+
+            logger.info(
+                f"[AutoRefresh] Worker running. Interval: {interval:.0f}s | "
+                f"Batch size: {get_batch_size()} tickers."
+            )
+            await asyncio.sleep(interval)
+
+            instruments = get_all_instruments()
+            if not instruments:
+                logger.info("[AutoRefresh] No instruments registered. Skipping scheduled refresh.")
+                continue
+
+            logger.info(
+                f"[AutoRefresh] Starting scheduled refresh for {len(instruments)} instruments "
+                f"(batch size: {get_batch_size()})..."
+            )
+            result = await asyncio.to_thread(_execute_refresh_all)
+            logger.info(
+                f"[AutoRefresh] Refresh finished: {result.get('updated', 0)} updated, "
+                f"{result.get('failed', 0)} failed of {result.get('total', 0)} total."
+            )
+        except asyncio.CancelledError:
+            logger.info("[AutoRefresh] Background worker stopping.")
+            break
+        except Exception as e:
+            logger.error(f"[AutoRefresh] Unexpected error during refresh cycle: {e}")
+            await asyncio.sleep(5)
+
+
+# ========================================================================== #
 # App setup
 # ========================================================================== #
 
 
 @asynccontextmanager
 async def lifespan(application: FastAPI):
-    """Initialise the database on startup."""
+    """Initialise database on startup and run background refresh worker."""
     init_db()
-    yield
+    task = asyncio.create_task(background_refresh_loop())
+    try:
+        yield
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
 
 
 app = FastAPI(
@@ -197,6 +273,7 @@ class InstrumentCreate(BaseModel):
 
 
 class InstrumentUpdate(BaseModel):
+    new_ticker: Optional[str] = None
     company_name: Optional[str] = None
     target_price: Optional[float] = None
     analysis_reference_price: Optional[float] = None
@@ -367,6 +444,95 @@ def list_instruments():
     }
 
 
+@app.get("/api/instruments/check-yahoo")
+def check_yahoo_ticker(ticker: str, currency: Optional[str] = None):
+    """Check if a ticker is valid and available on Yahoo Finance."""
+    if not ticker or not ticker.strip():
+        raise HTTPException(status_code=400, detail="El ticker es requerido")
+
+    curr = (currency or "").strip().upper()
+    norm_ticker, detected_exchange = normalize(ticker.strip(), curr)
+    suffix = get_yahoo_suffix(ticker.strip(), detected_exchange, curr)
+    if suffix and not norm_ticker.upper().endswith(suffix.upper()):
+        provider_symbol = f"{norm_ticker}{suffix}"
+    else:
+        provider_symbol = norm_ticker
+
+    try:
+        t = yf.Ticker(provider_symbol)
+        price = None
+        prev_close = None
+        resolved_currency = curr or None
+
+        # 1. Quick check using fast_info
+        try:
+            fi = getattr(t, "fast_info", None)
+            if fi:
+                lp = getattr(fi, "last_price", None)
+                if lp is not None and not math.isnan(lp) and lp > 0:
+                    price = round(float(lp), 4)
+                pc = getattr(fi, "previous_close", None)
+                if pc is not None and not math.isnan(pc) and pc > 0:
+                    prev_close = round(float(pc), 4)
+                c_val = getattr(fi, "currency", None)
+                if c_val:
+                    resolved_currency = str(c_val).upper()
+        except Exception:
+            pass
+
+        # 2. Fallback check using history
+        if price is None:
+            hist = t.history(period="5d")
+            if not hist.empty and "Close" in hist and len(hist) > 0:
+                p_val = hist["Close"].iloc[-1]
+                if pd.notna(p_val) and float(p_val) > 0:
+                    price = round(float(p_val), 4)
+                    if len(hist) > 1:
+                        prev_val = hist["Close"].iloc[-2]
+                        if pd.notna(prev_val) and float(prev_val) > 0:
+                            prev_close = round(float(prev_val), 4)
+
+        # Resolve company name if available
+        comp_name = None
+        try:
+            inf = getattr(t, "info", None)
+            if isinstance(inf, dict):
+                comp_name = inf.get("shortName") or inf.get("longName")
+        except Exception:
+            pass
+
+        if price is not None and price > 0:
+            return {
+                "status": "ok",
+                "available": True,
+                "ticker": ticker.strip(),
+                "provider_symbol": provider_symbol,
+                "exchange": detected_exchange.value if isinstance(detected_exchange, Exchange) else str(detected_exchange),
+                "currency": resolved_currency,
+                "company_name": comp_name,
+                "price": price,
+                "previous_close": prev_close,
+                "message": f"Ticker disponible en Yahoo Finance ({provider_symbol})",
+            }
+        else:
+            return {
+                "status": "ok",
+                "available": False,
+                "ticker": ticker.strip(),
+                "provider_symbol": provider_symbol,
+                "company_name": comp_name,
+                "message": f"Yahoo Finance no devolvió cotización para '{provider_symbol}'",
+            }
+    except Exception as e:
+        return {
+            "status": "ok",
+            "available": False,
+            "ticker": ticker.strip(),
+            "provider_symbol": provider_symbol,
+            "message": f"Error al consultar Yahoo Finance: {str(e)}",
+        }
+
+
 @app.get("/api/instruments/{ticker}")
 def get_instrument(ticker: str):
     """Single instrument with its quote."""
@@ -387,7 +553,9 @@ def create_instrument(data: InstrumentCreate):
     if not ticker_clean:
         raise HTTPException(status_code=400, detail="user_ticker is required")
 
-    curr = data.currency.strip().upper()
+    curr = (data.currency or "").strip().upper()
+    if curr == "AUTO":
+        curr = ""
 
     # Normalise ticker → provider symbol
     norm_ticker, detected_exchange = normalize(ticker_clean, curr)
@@ -405,6 +573,50 @@ def create_instrument(data: InstrumentCreate):
         provider_symbol = f"{norm_ticker}{suffix}"
     else:
         provider_symbol = norm_ticker
+
+    # Check if currency or company_name need auto-resolution
+    company_name_clean = (data.company_name or "").strip()
+    is_name_auto = not company_name_clean or company_name_clean.upper() == "AUTO"
+    is_curr_auto = not curr or curr == "AUTO"
+
+    if (is_name_auto or is_curr_auto) and provider_symbol:
+        try:
+            yt = yf.Ticker(provider_symbol)
+            if is_curr_auto:
+                fi_curr = getattr(getattr(yt, "fast_info", None), "currency", None)
+                if fi_curr:
+                    curr = str(fi_curr).upper()
+            if is_name_auto:
+                inf = getattr(yt, "info", None)
+                if isinstance(inf, dict):
+                    resolved_name = inf.get("shortName") or inf.get("longName")
+                    if resolved_name:
+                        company_name_clean = str(resolved_name).strip()
+        except Exception:
+            pass
+
+    # Fallback currency if still not resolved
+    if not curr:
+        DEFAULT_EXCHANGE_CURRENCIES = {
+            Exchange.US: "USD",
+            Exchange.UK: "GBP",
+            Exchange.SWITZERLAND: "CHF",
+            Exchange.JAPAN: "JPY",
+            Exchange.CANADA: "CAD",
+            Exchange.AUSTRALIA: "AUD",
+            Exchange.SWEDEN: "SEK",
+            Exchange.NORWAY: "NOK",
+            Exchange.DENMARK: "DKK",
+            Exchange.POLAND: "PLN",
+            Exchange.BRAZIL: "BRL",
+            Exchange.MEXICO: "MXN",
+            Exchange.HONG_KONG: "HKD",
+            Exchange.SINGAPORE: "SGD",
+        }
+        curr = DEFAULT_EXCHANGE_CURRENCIES.get(exchange, "EUR")
+
+    if not company_name_clean or company_name_clean.upper() == "AUTO":
+        company_name_clean = ticker_clean
 
     ref_dec = Decimal(str(data.analysis_reference_price)) if data.analysis_reference_price and data.analysis_reference_price > 0 else None
     tgt_dec = Decimal(str(data.target_price)) if data.target_price and data.target_price > 0 else None
@@ -429,7 +641,7 @@ def create_instrument(data: InstrumentCreate):
         provider_symbol=provider_symbol,
         exchange=exchange,
         currency=curr,
-        company_name=data.company_name.strip() or ticker_clean,
+        company_name=company_name_clean,
         analysis_date=analysis_dt,
         analysis_reference_price=ref_dec,
         target_price=tgt_dec,
@@ -495,6 +707,22 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
 
+    if data.new_ticker and data.new_ticker.strip():
+        new_t = data.new_ticker.strip()
+        if new_t.upper() != ticker.upper():
+            existing = get_instrument_by_ticker(new_t)
+            if existing and existing.id != inst.id:
+                raise HTTPException(status_code=400, detail=f"El ticker '{new_t}' ya existe en el portfolio.")
+            inst.user_ticker = new_t
+            norm_ticker, detected_exchange = normalize(new_t, inst.currency)
+            suffix = get_yahoo_suffix(new_t, detected_exchange, inst.currency)
+            if suffix and not norm_ticker.upper().endswith(suffix.upper()):
+                inst.provider_symbol = f"{norm_ticker}{suffix}"
+            else:
+                inst.provider_symbol = norm_ticker
+            if detected_exchange != Exchange.UNKNOWN:
+                inst.exchange = detected_exchange
+
     if data.company_name is not None:
         inst.company_name = data.company_name.strip() or inst.user_ticker
     if data.target_price is not None:
@@ -512,7 +740,7 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
     if data.comment is not None:
         inst.comment = data.comment.strip()
 
-    upsert_instrument(inst)
+    update_instrument_by_id(inst)
 
     # Optionally update the quote (manual edit)
     if data.latest_price is not None and data.latest_price > 0 and inst.id:
@@ -593,9 +821,8 @@ def fetch_analysis_price_endpoint(ticker: str, target_date: Optional[str] = None
     }
 
 
-@app.post("/api/instruments/resolve-missing-analysis-prices")
-def resolve_missing_analysis_prices():
-    """Auto-resolve analysis_reference_price from Yahoo Finance for instruments with analysis_date."""
+def _execute_resolve_missing_analysis_prices() -> dict:
+    """Core logic to auto-resolve analysis_reference_price from Yahoo Finance for instruments with analysis_date."""
     instruments = get_all_instruments()
     updated = 0
     failed = 0
@@ -624,6 +851,12 @@ def resolve_missing_analysis_prices():
         "skipped": skipped,
         "total": len(instruments),
     }
+
+
+@app.post("/api/instruments/resolve-missing-analysis-prices")
+def resolve_missing_analysis_prices():
+    """Auto-resolve analysis_reference_price from Yahoo Finance for instruments with analysis_date."""
+    return _execute_resolve_missing_analysis_prices()
 
 
 @app.delete("/api/instruments/{ticker}")
@@ -668,45 +901,85 @@ def refresh_single(ticker: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _execute_refresh_all() -> dict:
+    """Core logic to batch-refresh quotes for all active instruments with Yahoo Finance."""
+    with _refresh_lock:
+        instruments = get_all_instruments()
+        if not instruments:
+            return {"status": "ok", "updated": 0, "failed": 0, "total": 0}
+
+        # Re-normalise symbols before fetching (mirrors render_refresh_control)
+        for inst in instruments:
+            norm_ticker, exchange = normalize(inst.user_ticker, inst.currency)
+            suffix = get_yahoo_suffix(inst.user_ticker, exchange, inst.currency)
+            expected = (
+                f"{norm_ticker}{suffix}"
+                if suffix and not norm_ticker.upper().endswith(suffix.upper())
+                else norm_ticker
+            )
+            if inst.provider_symbol != expected or inst.exchange != exchange:
+                inst.provider_symbol = expected
+                inst.exchange = exchange
+                upsert_instrument(inst)
+
+        symbols = [inst.provider_symbol for inst in instruments if inst.provider_symbol]
+        provider = YahooAdapter()
+        batch_size = get_batch_size()
+        runner = BatchRunner(provider=provider, batch_size=batch_size)
+        quotes = runner.run(symbols)
+
+        instrument_map = {inst.provider_symbol: inst.id for inst in instruments}
+        updated = 0
+        failed = 0
+        for symbol, quote in quotes.items():
+            quote.instrument_id = instrument_map.get(symbol)
+            if quote.instrument_id:
+                upsert_quote(quote)
+                if quote.is_valid():
+                    updated += 1
+                else:
+                    failed += 1
+
+        result = {
+            "status": "ok",
+            "updated": updated,
+            "failed": failed,
+            "total": len(instruments),
+        }
+
+        # Auto-resolve analysis reference prices for instruments that have analysis_date but no reference price
+        try:
+            analysis_res = _execute_resolve_missing_analysis_prices()
+            if analysis_res.get("updated", 0) > 0:
+                logger.info(
+                    "[AutoRefresh] Resolved %d missing analysis reference prices.",
+                    analysis_res["updated"],
+                )
+                result["analysis_prices_updated"] = analysis_res["updated"]
+        except Exception as e:
+            logger.warning("Could not auto-resolve missing analysis prices during batch refresh: %s", e)
+
+        _state["last_refresh_at"] = datetime.now().isoformat()
+        _state["last_refresh_result"] = result
+        return result
+
+
 @app.post("/api/refresh")
 def refresh_all():
     """Batch refresh every instrument's quote from Yahoo Finance."""
-    instruments = get_all_instruments()
-    if not instruments:
-        return {"status": "ok", "updated": 0, "failed": 0, "total": 0}
+    return _execute_refresh_all()
 
-    # Re-normalise symbols before fetching (mirrors render_refresh_control)
-    for inst in instruments:
-        norm_ticker, exchange = normalize(inst.user_ticker, inst.currency)
-        suffix = get_yahoo_suffix(inst.user_ticker, exchange, inst.currency)
-        expected = (
-            f"{norm_ticker}{suffix}"
-            if suffix and not norm_ticker.upper().endswith(suffix.upper())
-            else norm_ticker
-        )
-        if inst.provider_symbol != expected or inst.exchange != exchange:
-            inst.provider_symbol = expected
-            inst.exchange = exchange
-            upsert_instrument(inst)
 
-    symbols = [inst.provider_symbol for inst in instruments if inst.provider_symbol]
-    provider = YahooAdapter()
-    runner = BatchRunner(provider=provider)
-    quotes = runner.run(symbols)
-
-    instrument_map = {inst.provider_symbol: inst.id for inst in instruments}
-    updated = 0
-    failed = 0
-    for symbol, quote in quotes.items():
-        quote.instrument_id = instrument_map.get(symbol)
-        if quote.instrument_id:
-            upsert_quote(quote)
-            if quote.is_valid():
-                updated += 1
-            else:
-                failed += 1
-
-    return {"status": "ok", "updated": updated, "failed": failed, "total": len(instruments)}
+@app.get("/api/config")
+def get_config():
+    """Return runtime configuration including refresh interval and batch size."""
+    return {
+        "status": "ok",
+        "refresh_interval_seconds": get_refresh_interval(),
+        "batch_size": get_batch_size(),
+        "last_refresh_at": _state.get("last_refresh_at"),
+        "last_refresh_result": _state.get("last_refresh_result"),
+    }
 
 
 # ---- CSV / Excel import -------------------------------------------------- #

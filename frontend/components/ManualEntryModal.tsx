@@ -18,8 +18,11 @@ import {
   Calendar,
   FileText,
   Target,
+  Search,
+  CheckCircle,
+  AlertCircle,
 } from 'lucide-react';
-import type { Position, Instrument, Exchange } from '@/lib/types';
+import type { Position, Instrument, Exchange, CheckYahooResponse } from '@/lib/types';
 import {
   createInstrument,
   updateInstrument,
@@ -28,6 +31,7 @@ import {
   getInstruments,
   getInstrument,
   fetchAnalysisPrice,
+  checkYahooTicker,
 } from '@/lib/api';
 
 const POPULAR_EXCHANGES: { label: string; value: string }[] = [
@@ -44,7 +48,18 @@ const POPULAR_EXCHANGES: { label: string; value: string }[] = [
   { label: 'Hong Kong — HKEX (HONG_KONG)', value: 'HONG_KONG' },
 ];
 
-const POPULAR_CURRENCIES = ['EUR', 'USD', 'GBP', 'CHF', 'JPY', 'CAD', 'AUD', 'SEK', 'NOK'];
+const POPULAR_CURRENCIES: { label: string; value: string }[] = [
+  { label: 'AUTO (Detección automática)', value: 'AUTO' },
+  { label: 'EUR — Euro (€)', value: 'EUR' },
+  { label: 'USD — Dólar estadounidense ($)', value: 'USD' },
+  { label: 'GBP — Libra esterlina (£)', value: 'GBP' },
+  { label: 'CHF — Franco suizo (CHF)', value: 'CHF' },
+  { label: 'JPY — Yen japonés (¥)', value: 'JPY' },
+  { label: 'CAD — Dólar canadiense (CAD)', value: 'CAD' },
+  { label: 'AUD — Dólar australiano (AUD)', value: 'AUD' },
+  { label: 'SEK — Corona sueca (SEK)', value: 'SEK' },
+  { label: 'NOK — Corona noruega (NOK)', value: 'NOK' },
+];
 
 interface ManualEntryModalProps {
   isOpen: boolean;
@@ -61,7 +76,7 @@ export function ManualEntryModal({
   onSuccess,
   onError,
 }: ManualEntryModalProps) {
-  const [activeTab, setActiveTab] = useState<'add' | 'edit'>('add');
+  const isEditMode = Boolean(initialTickerToEdit);
   const [loading, setLoading] = useState(false);
   const [instrumentsList, setInstrumentsList] = useState<Instrument[]>([]);
 
@@ -69,7 +84,7 @@ export function ManualEntryModal({
   const [addTicker, setAddTicker] = useState('');
   const [addCompanyName, setAddCompanyName] = useState('');
   const [addExchange, setAddExchange] = useState('AUTO');
-  const [addCurrency, setAddCurrency] = useState('EUR');
+  const [addCurrency, setAddCurrency] = useState('AUTO');
   const [addTargetPrice, setAddTargetPrice] = useState('');
   const [addAnalysisPrice, setAddAnalysisPrice] = useState('');
   const [addAnalysisDate, setAddAnalysisDate] = useState(
@@ -79,9 +94,11 @@ export function ManualEntryModal({
   const [addFetchYahoo, setAddFetchYahoo] = useState(true);
   const [addManualPrice, setAddManualPrice] = useState('');
   const [addManualPrevClose, setAddManualPrevClose] = useState('');
+  const [checkingAddYahoo, setCheckingAddYahoo] = useState(false);
 
   // ── Edit Instrument Form State ───────────────────────────────────────── //
-  const [selectedEditTicker, setSelectedEditTicker] = useState<string>('');
+  const [originalTickerToEdit, setOriginalTickerToEdit] = useState<string>('');
+  const [editTicker, setEditTicker] = useState<string>('');
   const [editCompanyName, setEditCompanyName] = useState('');
   const [editTargetPrice, setEditTargetPrice] = useState('');
   const [editAnalysisPrice, setEditAnalysisPrice] = useState('');
@@ -91,43 +108,48 @@ export function ManualEntryModal({
   const [editPrevClose, setEditPrevClose] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [fetchingHistorical, setFetchingHistorical] = useState(false);
+  const [checkingYahoo, setCheckingYahoo] = useState(false);
+  const [yahooCheckResult, setYahooCheckResult] = useState<CheckYahooResponse | null>(null);
 
-  // Load available instruments for the edit dropdown
+  // Load available instruments
   const loadInstruments = useCallback(async () => {
     try {
       const res = await getInstruments();
       setInstrumentsList(res.instruments || []);
-      if (res.instruments && res.instruments.length > 0 && !selectedEditTicker) {
-        setSelectedEditTicker(res.instruments[0].user_ticker);
-      }
     } catch {
       // Backend might be offline
     }
-  }, [selectedEditTicker]);
+  }, []);
 
   useEffect(() => {
     if (isOpen) {
       loadInstruments();
       if (initialTickerToEdit) {
-        setActiveTab('edit');
-        setSelectedEditTicker(initialTickerToEdit);
-      } else {
+        setOriginalTickerToEdit(initialTickerToEdit);
+        setEditTicker(initialTickerToEdit);
+        setYahooCheckResult(null);
         setConfirmDelete(false);
+      } else {
+        setOriginalTickerToEdit('');
+        setEditTicker('');
+        setConfirmDelete(false);
+        setYahooCheckResult(null);
       }
     }
   }, [isOpen, initialTickerToEdit, loadInstruments]);
 
-  // When selectedEditTicker changes, fetch details
+  // When originalTickerToEdit changes, fetch details
   useEffect(() => {
-    if (!selectedEditTicker) return;
+    if (!originalTickerToEdit) return;
     let isMounted = true;
     (async () => {
       try {
-        const detail = await getInstrument(selectedEditTicker);
+        const detail = await getInstrument(originalTickerToEdit);
         if (!isMounted) return;
         const inst = (detail as any).instrument || detail;
         const quote = (detail as any).quote || detail.quote;
 
+        setEditTicker(inst.user_ticker || originalTickerToEdit);
         setEditCompanyName(inst.company_name || '');
         setEditTargetPrice(
           inst.target_price !== null && inst.target_price !== undefined
@@ -153,6 +175,7 @@ export function ManualEntryModal({
             : ''
         );
         setConfirmDelete(false);
+        setYahooCheckResult(null);
       } catch (err: unknown) {
         console.error('Error fetching instrument details:', err);
       }
@@ -160,9 +183,46 @@ export function ManualEntryModal({
     return () => {
       isMounted = false;
     };
-  }, [selectedEditTicker]);
+  }, [originalTickerToEdit]);
 
   if (!isOpen) return null;
+
+  // ── Auto-Detect Company Name and Currency for Add ────────────────────── //
+  const handleAutoDetectForAdd = async () => {
+    const ticker = addTicker.trim();
+    if (!ticker) {
+      onError?.('Introduce un ticker primero para consultar en Yahoo Finance.');
+      return;
+    }
+    setCheckingAddYahoo(true);
+    try {
+      const res = await checkYahooTicker(
+        ticker,
+        addCurrency === 'AUTO' ? undefined : addCurrency
+      );
+      if (res.available) {
+        if (res.company_name) {
+          setAddCompanyName(res.company_name);
+        }
+        if (res.currency) {
+          setAddCurrency(res.currency);
+        }
+        if (res.price !== undefined && res.price !== null && !addManualPrice) {
+          setAddManualPrice(String(res.price));
+        }
+        onSuccess?.(
+          `Datos detectados de Yahoo: ${res.company_name || ticker} (${res.currency || ''})`
+        );
+      } else {
+        onError?.(res.message || 'Yahoo Finance no encontró información para este ticker.');
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onError?.(`Error al consultar Yahoo Finance: ${msg}`);
+    } finally {
+      setCheckingAddYahoo(false);
+    }
+  };
 
   // ── Submit Add Instrument ────────────────────────────────────────────── //
   const handleAddSubmit = async (e: React.FormEvent) => {
@@ -193,8 +253,10 @@ export function ManualEntryModal({
       // Reset form
       setAddTicker('');
       setAddCompanyName('');
-      setAddTargetPrice('');
-      setAddAnalysisPrice('');
+      setAddExchange('AUTO');
+      setAddCurrency('AUTO');
+      addTargetPrice && setAddTargetPrice('');
+      addAnalysisPrice && setAddAnalysisPrice('');
       setAddComment('');
       setAddManualPrice('');
       setAddManualPrevClose('');
@@ -207,14 +269,58 @@ export function ManualEntryModal({
     }
   };
 
+  // ── Yahoo Availability Check for Edit Ticker ────────────────────────── //
+  const handleCheckYahoo = async () => {
+    const ticker = editTicker.trim();
+    if (!ticker) {
+      onError?.('Introduce un ticker para verificar en Yahoo Finance.');
+      return;
+    }
+    setCheckingYahoo(true);
+    setYahooCheckResult(null);
+    try {
+      const res = await checkYahooTicker(ticker);
+      setYahooCheckResult(res);
+      if (res.available) {
+        onSuccess?.(
+          `Ticker ${ticker} disponible en Yahoo Finance (${res.currency || ''} ${res.price ?? ''})`
+        );
+        if (res.price !== undefined && res.price !== null && !editLatestPrice) {
+          setEditLatestPrice(String(res.price));
+        }
+        if (res.company_name && !editCompanyName) {
+          setEditCompanyName(res.company_name);
+        }
+      } else {
+        onError?.(res.message || `El ticker ${ticker} no parece estar disponible en Yahoo.`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onError?.(`Error al consultar Yahoo Finance: ${msg}`);
+      setYahooCheckResult({
+        available: false,
+        message: msg,
+      });
+    } finally {
+      setCheckingYahoo(false);
+    }
+  };
+
   // ── Submit Edit Instrument ───────────────────────────────────────────── //
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedEditTicker) return;
+    const targetTicker = originalTickerToEdit || editTicker.trim();
+    if (!targetTicker) return;
+
+    const trimmedNewTicker = editTicker.trim().toUpperCase();
+    if (!trimmedNewTicker) {
+      onError?.('El ticker no puede estar vacío.');
+      return;
+    }
 
     setLoading(true);
     try {
-      await updateInstrument(selectedEditTicker, {
+      const payload: Parameters<typeof updateInstrument>[1] = {
         company_name: editCompanyName.trim() || null,
         target_price: editTargetPrice ? parseFloat(editTargetPrice) : null,
         analysis_reference_price: editAnalysisPrice ? parseFloat(editAnalysisPrice) : null,
@@ -222,9 +328,15 @@ export function ManualEntryModal({
         comment: editComment.trim() || null,
         latest_price: editLatestPrice ? parseFloat(editLatestPrice) : null,
         previous_close: editPrevClose ? parseFloat(editPrevClose) : null,
-      });
+      };
 
-      onSuccess?.(`Instrumento ${selectedEditTicker} actualizado correctamente.`);
+      if (trimmedNewTicker !== targetTicker.toUpperCase()) {
+        payload.new_ticker = trimmedNewTicker;
+      }
+
+      await updateInstrument(targetTicker, payload);
+
+      onSuccess?.(`Instrumento ${trimmedNewTicker} actualizado correctamente.`);
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -236,10 +348,11 @@ export function ManualEntryModal({
 
   // ── Fetch historical quote for analysis date ───────────────────────── //
   const handleFetchHistoricalForEdit = async () => {
-    if (!selectedEditTicker) return;
+    const targetTicker = originalTickerToEdit || editTicker.trim();
+    if (!targetTicker) return;
     setFetchingHistorical(true);
     try {
-      const res = await fetchAnalysisPrice(selectedEditTicker, editAnalysisDate || undefined);
+      const res = await fetchAnalysisPrice(targetTicker, editAnalysisDate || undefined);
       if (res.status === 'ok') {
         setEditAnalysisPrice(String(res.analysis_reference_price));
         if (res.analysis_date) setEditAnalysisDate(res.analysis_date);
@@ -275,12 +388,13 @@ export function ManualEntryModal({
 
   // ── Refresh Quote Now for Edited Instrument ─────────────────────────── //
   const handleSingleYahooRefresh = async () => {
-    if (!selectedEditTicker) return;
+    const targetTicker = originalTickerToEdit || editTicker.trim();
+    if (!targetTicker) return;
     setLoading(true);
     try {
-      const res = await refreshInstrument(selectedEditTicker);
+      const res = await refreshInstrument(targetTicker);
       if (res.status === 'ok') {
-        onSuccess?.(`${selectedEditTicker}: cotización actualizada desde Yahoo Finance.`);
+        onSuccess?.(`${targetTicker}: cotización actualizada desde Yahoo Finance.`);
         if (res.price !== undefined && res.price !== null) {
           setEditLatestPrice(String(res.price));
         }
@@ -288,7 +402,7 @@ export function ManualEntryModal({
           setEditPrevClose(String(res.previous_close));
         }
       } else {
-        onError?.(`${selectedEditTicker}: ${res.detail || 'sin datos disponibles'}`);
+        onError?.(`${targetTicker}: ${res.detail || 'sin datos disponibles'}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -300,11 +414,12 @@ export function ManualEntryModal({
 
   // ── Delete Instrument ────────────────────────────────────────────────── //
   const handleDeleteInstrument = async () => {
-    if (!selectedEditTicker) return;
+    const targetTicker = originalTickerToEdit || editTicker.trim();
+    if (!targetTicker) return;
     setLoading(true);
     try {
-      await deleteInstrument(selectedEditTicker);
-      onSuccess?.(`Instrumento ${selectedEditTicker} eliminado de la base de datos.`);
+      await deleteInstrument(targetTicker);
+      onSuccess?.(`Instrumento ${targetTicker} eliminado de la base de datos.`);
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -328,15 +443,25 @@ export function ManualEntryModal({
         {/* Header */}
         <div className="flex items-center justify-between px-6 py-4 border-b border-zinc-800 bg-zinc-950/60">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
-              <PlusCircle className="w-4 h-4" />
+            <div
+              className={`w-8 h-8 rounded-lg border flex items-center justify-center ${
+                isEditMode
+                  ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                  : 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+              }`}
+            >
+              {isEditMode ? <Edit3 className="w-4 h-4" /> : <PlusCircle className="w-4 h-4" />}
             </div>
             <div>
               <h2 className="text-base font-bold text-white tracking-tight">
-                Gestión de Valores Manuales
+                {isEditMode
+                  ? `Modificar Instrumento (${originalTickerToEdit || editTicker})`
+                  : 'Añadir Nuevo Instrumento'}
               </h2>
               <p className="text-xs text-zinc-400">
-                Añade o modifica instrumentos y cotizaciones del watchlist
+                {isEditMode
+                  ? 'Edita los datos del valor, actualiza su cotización o elimínalo del watchlist'
+                  : 'Introduce los datos del nuevo valor para añadirlo a tu watchlist'}
               </p>
             </div>
           </div>
@@ -348,45 +473,40 @@ export function ManualEntryModal({
           </button>
         </div>
 
-        {/* Tab Switcher */}
-        <div className="flex border-b border-zinc-800 bg-zinc-950/30 px-6">
-          <button
-            onClick={() => setActiveTab('add')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
-              activeTab === 'add'
-                ? 'border-emerald-500 text-emerald-400 bg-emerald-500/[0.04]'
-                : 'border-transparent text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <PlusCircle className="w-3.5 h-3.5" />
-            Añadir Nuevo Instrumento
-          </button>
-          <button
-            onClick={() => setActiveTab('edit')}
-            className={`flex items-center gap-2 py-3 px-4 text-xs font-semibold border-b-2 transition-all ${
-              activeTab === 'edit'
-                ? 'border-emerald-500 text-emerald-400 bg-emerald-500/[0.04]'
-                : 'border-transparent text-zinc-400 hover:text-zinc-200'
-            }`}
-          >
-            <Edit3 className="w-3.5 h-3.5" />
-            Modificar / Eliminar Existente
-          </button>
-        </div>
-
         {/* Modal Body */}
         <div className="overflow-y-auto p-6 space-y-6 flex-1">
-          {activeTab === 'add' ? (
+          {!isEditMode ? (
             /* ──────────────────────────────────────────────────────────── */
-            /* TAB A: ADD NEW INSTRUMENT                                    */
+            /* ADD NEW INSTRUMENT                                          */
             /* ──────────────────────────────────────────────────────────── */
             <form onSubmit={handleAddSubmit} className="space-y-4">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {/* User Ticker */}
                 <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Ticker <span className="text-rose-400">*</span>
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-zinc-300">
+                      Ticker <span className="text-rose-400">*</span>
+                    </label>
+                    <button
+                      type="button"
+                      onClick={handleAutoDetectForAdd}
+                      disabled={checkingAddYahoo || !addTicker.trim()}
+                      className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 disabled:opacity-40 disabled:hover:text-emerald-400 transition font-medium"
+                      title="Consultar Yahoo Finance para autocompletar nombre y divisa"
+                    >
+                      {checkingAddYahoo ? (
+                        <>
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                          Consultando...
+                        </>
+                      ) : (
+                        <>
+                          <Search className="w-3 h-3" />
+                          Consultar en Yahoo
+                        </>
+                      )}
+                    </button>
+                  </div>
                   <input
                     type="text"
                     required
@@ -403,16 +523,39 @@ export function ManualEntryModal({
 
                 {/* Company Name */}
                 <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Nombre de la Empresa
-                  </label>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="block text-xs font-medium text-zinc-300">
+                      Nombre de la Empresa
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAddCompanyName(
+                          addCompanyName === 'AUTO' || !addCompanyName ? '' : 'AUTO'
+                        )
+                      }
+                      className={`text-[10px] font-medium px-2 py-0.5 rounded-md border transition-colors ${
+                        addCompanyName === 'AUTO' || !addCompanyName
+                          ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+                          : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                      title="Activar detección automática desde Yahoo Finance"
+                    >
+                      {addCompanyName === 'AUTO' || !addCompanyName
+                        ? '✓ Modo AUTO'
+                        : 'Poner en AUTO'}
+                    </button>
+                  </div>
                   <input
                     type="text"
-                    placeholder="ej. Apple Inc."
+                    placeholder="ej. Apple Inc. (o deja 'AUTO' para Yahoo)"
                     value={addCompanyName}
                     onChange={(e) => setAddCompanyName(e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/60"
                   />
+                  <span className="text-[10px] text-zinc-500 mt-1 block">
+                    Si se deja vacío o en <code className="text-zinc-400">AUTO</code>, se obtendrá de Yahoo Finance.
+                  </span>
                 </div>
               </div>
 
@@ -444,8 +587,8 @@ export function ManualEntryModal({
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
                   >
                     {POPULAR_CURRENCIES.map((curr) => (
-                      <option key={curr} value={curr} className="bg-zinc-900">
-                        {curr}
+                      <option key={curr.value} value={curr.value} className="bg-zinc-900">
+                        {curr.label}
                       </option>
                     ))}
                   </select>
@@ -589,28 +732,98 @@ export function ManualEntryModal({
             /* TAB B: EDIT OR DELETE EXISTING INSTRUMENT                    */
             /* ──────────────────────────────────────────────────────────── */
             <div className="space-y-5">
-              {instrumentsList.length === 0 ? (
+              {!originalTickerToEdit && instrumentsList.length === 0 ? (
                 <div className="p-8 text-center text-zinc-400 text-xs">
                   No hay instrumentos registrados todavía en la base de datos.
                 </div>
               ) : (
                 <>
-                  {/* Select Instrument Dropdown */}
-                  <div>
-                    <label className="block text-xs font-medium text-zinc-300 mb-1">
-                      Selecciona Instrumento para Modificar
-                    </label>
-                    <select
-                      value={selectedEditTicker}
-                      onChange={(e) => setSelectedEditTicker(e.target.value)}
-                      className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
-                    >
-                      {instrumentsList.map((inst) => (
-                        <option key={inst.user_ticker} value={inst.user_ticker} className="bg-zinc-900">
-                          {inst.user_ticker} — {inst.company_name || inst.user_ticker} ({inst.exchange} / {inst.currency})
-                        </option>
-                      ))}
-                    </select>
+                  {/* Ticker Input Field & Yahoo Finance Availability Check */}
+                  <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800/80 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <label className="block text-xs font-medium text-zinc-300">
+                        Ticker del Instrumento
+                      </label>
+                      {originalTickerToEdit && editTicker.trim().toUpperCase() !== originalTickerToEdit.toUpperCase() && (
+                        <span className="text-[10px] text-amber-400 font-medium">
+                          Cambiando ticker original ({originalTickerToEdit})
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex gap-2">
+                      <div className="relative flex-1">
+                        <input
+                          type="text"
+                          value={editTicker}
+                          onChange={(e) => {
+                            setEditTicker(e.target.value.toUpperCase());
+                            setYahooCheckResult(null);
+                          }}
+                          placeholder="ej. AAPL, MC.PA, SAN.MC..."
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-100 font-mono font-semibold tracking-wide focus:outline-none focus:border-emerald-500/60 uppercase"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleCheckYahoo}
+                        disabled={checkingYahoo || !editTicker.trim()}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors whitespace-nowrap"
+                        title="Comprobar disponibilidad del ticker en Yahoo Finance"
+                      >
+                        {checkingYahoo ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Comprobando...
+                          </>
+                        ) : (
+                          <>
+                            <Search className="w-3.5 h-3.5" />
+                            Comprobar en Yahoo
+                          </>
+                        )}
+                      </button>
+                    </div>
+
+                    {/* Result banner from Yahoo check */}
+                    {yahooCheckResult && (
+                      <div
+                        className={`flex items-start gap-2 p-2.5 rounded-lg text-xs ${
+                          yahooCheckResult.available
+                            ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
+                            : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
+                        }`}
+                      >
+                        {yahooCheckResult.available ? (
+                          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
+                        ) : (
+                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
+                        )}
+                        <div className="flex-1">
+                          {yahooCheckResult.available ? (
+                            <div>
+                              <p className="font-medium text-emerald-200">
+                                Ticker válido y disponible en Yahoo Finance
+                              </p>
+                              <p className="text-[11px] text-emerald-400/80 mt-0.5 font-mono">
+                                Símbolo: {yahooCheckResult.provider_symbol}
+                                {yahooCheckResult.price !== undefined && yahooCheckResult.price !== null
+                                  ? ` | Precio: ${yahooCheckResult.price} ${yahooCheckResult.currency || ''}`
+                                  : ''}
+                              </p>
+                            </div>
+                          ) : (
+                            <div>
+                              <p className="font-medium text-rose-200">
+                                No se pudo encontrar en Yahoo Finance
+                              </p>
+                              <p className="text-[11px] text-rose-400/80 mt-0.5">
+                                {yahooCheckResult.message || 'Verifica el símbolo o el sufijo de bolsa (.MC, .PA, etc.)'}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <form onSubmit={handleEditSubmit} className="space-y-4">
@@ -763,7 +976,7 @@ export function ManualEntryModal({
                           Eliminar Instrumento
                         </h4>
                         <p className="text-[11px] text-zinc-500 mt-0.5">
-                          Elimina <strong className="text-zinc-300">{selectedEditTicker}</strong> y todas sus cotizaciones asociadas.
+                          Elimina <strong className="text-zinc-300">{originalTickerToEdit || editTicker}</strong> y todas sus cotizaciones asociadas.
                         </p>
                       </div>
 

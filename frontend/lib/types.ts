@@ -148,6 +148,7 @@ export interface InstrumentCreateRequest {
 }
 
 export interface InstrumentUpdateRequest {
+  new_ticker?: string | null;
   company_name?: string | null;
   target_price?: number | null;
   analysis_reference_price?: number | null;
@@ -155,6 +156,19 @@ export interface InstrumentUpdateRequest {
   comment?: string | null;
   latest_price?: number | null;
   previous_close?: number | null;
+}
+
+export interface CheckYahooResponse {
+  status?: string;
+  available: boolean;
+  ticker?: string;
+  provider_symbol?: string;
+  exchange?: string;
+  currency?: string;
+  price?: number;
+  previous_close?: number;
+  message?: string;
+  company_name?: string;
 }
 
 export interface RefreshBatchResponse {
@@ -213,3 +227,12 @@ export interface PortfolioMetrics {
   negative_count: number;
   neutral_count: number;
 }
+
+export interface AppConfig {
+  status: string;
+  refresh_interval_seconds: number;
+  batch_size: number;
+  last_refresh_at?: string | null;
+  last_refresh_result?: RefreshBatchResponse | null;
+}
+

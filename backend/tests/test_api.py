@@ -250,9 +250,46 @@ class TestUpdateInstrument:
         assert inst["company_name"] == "Meta Platforms Inc."
         assert inst["target_price"] == 600.0
 
+    def test_update_rename_ticker(self):
+        client.post("/api/instruments", json={
+            "user_ticker": "AMZN_OLD",
+            "currency": "USD",
+            "fetch_yahoo": False,
+        })
+        r = client.put("/api/instruments/AMZN_OLD", json={
+            "new_ticker": "AMZN_NEW",
+            "company_name": "Amazon New",
+        })
+        assert r.status_code == 200
+        inst = r.json()["instrument"]
+        assert inst["user_ticker"] == "AMZN_NEW"
+        assert inst["company_name"] == "Amazon New"
+
+        # Verify old ticker returns 404, new returns 200
+        assert client.get("/api/instruments/AMZN_OLD").status_code == 404
+        assert client.get("/api/instruments/AMZN_NEW").status_code == 200
+
     def test_update_not_found(self):
         r = client.put("/api/instruments/NOPE", json={"comment": "x"})
         assert r.status_code == 404
+
+
+# ---------------------------------------------------------------------- #
+# GET /api/instruments/check-yahoo
+# ---------------------------------------------------------------------- #
+
+class TestCheckYahooTicker:
+    def test_check_empty_ticker(self):
+        r = client.get("/api/instruments/check-yahoo?ticker=")
+        assert r.status_code == 400
+
+    def test_check_valid_ticker_shape(self):
+        r = client.get("/api/instruments/check-yahoo?ticker=AAPL")
+        assert r.status_code == 200
+        data = r.json()
+        assert "available" in data
+        assert "status" in data
+        assert data["ticker"] == "AAPL"
 
 
 # ---------------------------------------------------------------------- #
@@ -402,6 +439,23 @@ class TestWipeDatabase:
 
         r2 = client.get("/api/instruments")
         assert r2.json()["count"] == 0
+
+
+# ---------------------------------------------------------------------- #
+# GET /api/config
+# ---------------------------------------------------------------------- #
+
+class TestConfig:
+    def test_get_config_returns_expected_fields(self):
+        r = client.get("/api/config")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert "refresh_interval_seconds" in body
+        assert "batch_size" in body
+        assert isinstance(body["refresh_interval_seconds"], (int, float))
+        assert isinstance(body["batch_size"], int)
+        assert body["batch_size"] >= 1
 
 
 # ---------------------------------------------------------------------- #

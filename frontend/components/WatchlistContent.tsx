@@ -6,16 +6,17 @@
 
 import React, { useCallback, useEffect, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import type { Position, PortfolioMetrics } from '@/lib/types';
+import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { MetricCards } from '@/components/MetricCards';
 import { WatchlistTable } from '@/components/WatchlistTable';
 import { ManualEntryModal } from '@/components/ManualEntryModal';
-import { getPositions, getMetrics } from '@/lib/api';
+import { getPositions, getMetrics, getConfig } from '@/lib/api';
 import { Check, AlertTriangle, Info, X } from 'lucide-react';
 
 interface WatchlistContentProps {
   initialPositions: Position[];
   initialMetrics: PortfolioMetrics | null;
+  initialConfig?: AppConfig | null;
 }
 
 interface ToastData {
@@ -62,9 +63,10 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
  * WatchlistContent: Client coordinator for MetricCards, WatchlistTable,
  * ManualEntryModal, and reactive state updates.
  */
-export function WatchlistContent({ initialPositions, initialMetrics }: WatchlistContentProps) {
+export function WatchlistContent({ initialPositions, initialMetrics, initialConfig }: WatchlistContentProps) {
   const [positions, setPositions] = useState<Position[]>(initialPositions);
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
+  const [appConfig, setAppConfig] = useState<AppConfig | null>(initialConfig || null);
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -84,6 +86,25 @@ export function WatchlistContent({ initialPositions, initialMetrics }: Watchlist
 
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
+  }, []);
+
+  // Fetch backend runtime configuration (refresh interval & batch size)
+  useEffect(() => {
+    let isCancelled = false;
+    async function loadConfig() {
+      try {
+        const cfg = await getConfig();
+        if (!isCancelled) {
+          setAppConfig(cfg);
+        }
+      } catch (err) {
+        console.warn('Could not fetch app configuration from backend:', err);
+      }
+    }
+    loadConfig();
+    return () => {
+      isCancelled = true;
+    };
   }, []);
 
   // Listen for ?add=1 or ?edit=TICKER in URL
@@ -120,6 +141,20 @@ export function WatchlistContent({ initialPositions, initialMetrics }: Watchlist
       console.error('Error reloading portfolio data:', err);
     }
   }, []);
+
+  // Auto-refresh timer: synchronizes client table state with backend quotes updates
+  useEffect(() => {
+    if (!appConfig || !appConfig.refresh_interval_seconds || appConfig.refresh_interval_seconds <= 0) {
+      return;
+    }
+
+    const intervalMs = appConfig.refresh_interval_seconds * 1000;
+    const intervalId = setInterval(() => {
+      reloadData();
+    }, intervalMs);
+
+    return () => clearInterval(intervalId);
+  }, [appConfig, reloadData]);
 
   const handleDataChange = useCallback(
     (newPositions: Position[], newMetrics: PortfolioMetrics | null) => {
@@ -174,6 +209,44 @@ export function WatchlistContent({ initialPositions, initialMetrics }: Watchlist
         </div>
       )}
 
+      {/* Header section with page title & top-right runtime auto-refresh badge */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight text-white">
+            Lista de Seguimiento
+          </h1>
+          <p className="text-sm text-zinc-400 mt-1">
+            Valores registrados, cotizaciones en tiempo real y variaciones calculadas en el servidor.
+          </p>
+        </div>
+
+        {/* Top-Right: Auto-refresh & Batch Badge */}
+        {appConfig && (
+          <div
+            className="flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full bg-zinc-900/90 border border-zinc-800 text-xs font-mono text-zinc-300 shadow-sm backdrop-blur-sm"
+            title={`Actualización automática cada ${appConfig.refresh_interval_seconds}s en lotes de ${appConfig.batch_size} tickers`}
+          >
+            <span className="relative flex h-2 w-2">
+              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            </span>
+            <span>
+              Auto{' '}
+              <strong className="text-emerald-400 font-semibold">
+                {appConfig.refresh_interval_seconds}s
+              </strong>
+            </span>
+            <span className="text-zinc-600">·</span>
+            <span className="text-zinc-400">
+              Batch{' '}
+              <strong className="text-zinc-200 font-semibold">
+                {appConfig.batch_size}
+              </strong>
+            </span>
+          </div>
+        )}
+      </div>
+
       {/* Phase 4: Metric Cards */}
       <MetricCards metrics={metrics} positions={positions} />
 
@@ -181,6 +254,7 @@ export function WatchlistContent({ initialPositions, initialMetrics }: Watchlist
       <WatchlistTable
         initialPositions={positions}
         initialMetrics={metrics}
+        appConfig={appConfig}
         onDataChange={handleDataChange}
         onEditTicker={handleOpenEdit}
         onAddInstrument={handleOpenAdd}

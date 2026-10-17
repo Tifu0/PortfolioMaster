@@ -79,6 +79,46 @@ def upsert_instrument(instrument: Instrument):
     conn.close()
 
 
+def update_instrument_by_id(instrument: Instrument):
+    """Update an instrument by its database primary key id."""
+    if not instrument.id:
+        return upsert_instrument(instrument)
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        UPDATE instruments SET
+            user_ticker = ?,
+            provider_symbol = ?,
+            exchange = ?,
+            currency = ?,
+            company_name = ?,
+            analysis_date = ?,
+            analysis_reference_price = ?,
+            target_price = ?,
+            comment = ?,
+            active = ?,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = ?
+        """,
+        (
+            instrument.user_ticker,
+            instrument.provider_symbol,
+            _exchange_value(instrument.exchange),
+            instrument.currency,
+            instrument.company_name,
+            _sql_value(instrument.analysis_date),
+            _sql_value(instrument.analysis_reference_price),
+            _sql_value(instrument.target_price),
+            instrument.comment,
+            int(instrument.active),
+            instrument.id,
+        ),
+    )
+    conn.commit()
+    conn.close()
+
+
 def upsert_quote(quote: Quote):
     """Insert or update a quote."""
     conn = get_connection()

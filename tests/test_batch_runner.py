@@ -19,3 +19,37 @@ def test_batch_runner_chunking():
     assert results["A"].price == Decimal("10")
     assert results["C"].price == Decimal("30")
     assert mock_provider.fetch.call_count == 2
+
+
+def test_batch_runner_env_batch_size(monkeypatch):
+    from portfoliomaster.core.config import get_batch_size, get_refresh_interval
+
+    monkeypatch.setenv("REFRESH_BATCH_SIZE", "5")
+    assert get_batch_size() == 5
+
+    mock_provider = MagicMock(spec=MarketDataProvider)
+    mock_provider.fetch.return_value = {
+        s: Quote(price=Decimal("10")) for s in ["S1", "S2", "S3", "S4", "S5", "S6"]
+    }
+
+    runner = BatchRunner(mock_provider)
+    assert runner.batch_size == 5
+
+    runner.run(["S1", "S2", "S3", "S4", "S5", "S6"])
+    # 6 items in chunks of 5 -> 2 calls
+    assert mock_provider.fetch.call_count == 2
+
+
+def test_refresh_interval_env(monkeypatch):
+    from portfoliomaster.core.config import get_refresh_interval
+
+    monkeypatch.setenv("REFRESH_INTERVAL_SECONDS", "30")
+    assert get_refresh_interval() == 30.0
+
+    monkeypatch.setenv("REFRESH_INTERVAL_SECONDS", "0")
+    assert get_refresh_interval() == 0.0
+
+    monkeypatch.delenv("REFRESH_INTERVAL_SECONDS", raising=False)
+    # Default is 300.0
+    assert get_refresh_interval() == 300.0
+

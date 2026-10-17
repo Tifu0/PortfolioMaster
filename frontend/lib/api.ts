@@ -4,6 +4,7 @@
  */
 
 import type {
+  CheckYahooResponse,
   GenericStatusResponse,
   ImportConfirmResponse,
   ImportPreviewResponse,
@@ -15,6 +16,7 @@ import type {
   PortfolioMetrics,
   RefreshBatchResponse,
   RefreshSingleResponse,
+  AppConfig,
 } from './types';
 
 const API_BASE_URL =
@@ -238,5 +240,27 @@ export async function resolveMissingAnalysisPrices(): Promise<{
     total: number;
   }>(res);
 }
+
+/**
+ * 15. GET /api/instruments/check-yahoo
+ * Validates whether a ticker exists and has quotes available on Yahoo Finance.
+ */
+export async function checkYahooTicker(ticker: string, currency?: string): Promise<CheckYahooResponse> {
+  const url = new URL(`${API_BASE_URL}/api/instruments/check-yahoo`);
+  url.searchParams.set('ticker', ticker);
+  if (currency) url.searchParams.set('currency', currency);
+  const res = await fetch(url.toString());
+  return handleResponse<CheckYahooResponse>(res);
+}
+
+/**
+ * 16. GET /api/config
+ * Retrieves backend runtime configuration (refresh interval, batch size, last refresh status).
+ */
+export async function getConfig(): Promise<AppConfig> {
+  const res = await fetch(`${API_BASE_URL}/api/config`);
+  return handleResponse<AppConfig>(res);
+}
+
 
 

@@ -8,20 +8,29 @@ Built on a decoupled modern architecture:
 
 ---
 
+<p align="center">
+  <img src="" />
+</p>
+
+---
+
 ## ✨ Features
 
 - **📊 Interactive Watchlist Table**:
   - Pre-computed financial metrics: Daily Variation (`±%`), Return vs. Analysis Price (`±%`), and Required Decline to Target Price (`±%`).
+  - **📝 Inline Research Notes & Descriptions**: Clickable document icon (`FileText`) on each ticker to view and edit company analysis notes, investment thesis, and comments directly inline with SQLite persistence.
+  - **↔️ Interactive Column Resizing**: Google Sheets-style column width adjustment with drag handles, double-click to auto-reset individual columns, automatic `localStorage` persistence, and a **`Restore Columns`** button in the toolbar.
   - Multi-column sorting powered by TanStack Table.
   - Real-time instant search by ticker or company name.
-  - Dynamic filters by market exchange and currency.
+  - Dynamic filters by market exchange and currency with single-row responsive layout.
 
-- **📈 Portfolio Metric Cards**:
+- **📈 Portfolio Metric Cards & Header Status**:
   - Live summary statistics displayed at the top: Total active positions, Top gainer, Top loser, and Average daily change.
+  - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 60s · Batch 25`).
 
-- **🔄 Real-Time Market Data & Refresh Engine**:
-  - Batch quote refresh and per-row on-demand updates via Yahoo Finance.
-  - Fault-tolerant background processing with timeout protection and retry strategies.
+- **🔄 Unified Market Data & Analysis Refresh Engine**:
+  - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices for instruments with an analysis date in one unified operation.
+  - Configurable background auto-refresh loop and batch processing with timeout protection and retry strategies.
 
 - **📥 CSV & Excel Spreadsheet Import**:
   - Drag-and-drop file upload supporting `.csv` and `.xlsx` files.
@@ -82,6 +91,25 @@ npm run dev
 
 ---
 
+### ⚙️ Environment Configuration (`.env`)
+
+You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example)):
+
+```ini
+# Path to SQLite database file (default: portfolio.db)
+PORTFOLIOMASTER_DB_PATH=portfolio.db
+
+# Auto-refresh interval in seconds (default: 300, set to 0 to disable background auto-refresh)
+REFRESH_INTERVAL_SECONDS=60
+
+# Number of ticker symbols sent per batch to Yahoo Finance (default: 10)
+REFRESH_BATCH_SIZE=25
+```
+
+These variables are dynamically exposed to the frontend via `/api/config` and displayed in the real-time status badge at the top-right of the dashboard.
+
+---
+
 ## 🗺️ Project Structure
 
 ```text
@@ -90,7 +118,7 @@ PortfolioMaster/
 │   ├── api/
 │   │   └── main.py             # FastAPI application and REST endpoints
 │   └── tests/
-│       └── test_api.py         # Backend API integration tests (22 tests)
+│       └── test_api.py         # Backend API integration tests (26 tests)
 │
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
@@ -127,13 +155,15 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 | `GET` | `/api/instruments` | Raw list of all registered instruments |
 | `GET` | `/api/instruments/{ticker}` | Retrieve details for a specific instrument |
 | `POST` | `/api/instruments` | Create or update an instrument manually |
-| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument |
+| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (targets, analysis price/date, notes) |
 | `DELETE` | `/api/instruments/{ticker}` | Delete an instrument from the watchlist |
-| `POST` | `/api/refresh` | Batch-refresh quotes for all active instruments via Yahoo Finance |
-| `POST` | `/api/refresh/{ticker}` | Refresh market quote for a single instrument |
+| `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and resolve analysis price for a single instrument |
+| `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance and resolve missing analysis prices |
+| `POST` | `/api/instruments/resolve-missing-analysis-prices` | Auto-resolve historical analysis reference prices from Yahoo Finance |
+| `GET` | `/api/config` | Retrieve runtime configuration (refresh interval, batch size, last refresh status) |
 | `POST` | `/api/import/preview` | Dry-run validation of an uploaded CSV/Excel spreadsheet |
 | `POST` | `/api/import/confirm` | Commit validated spreadsheet instruments into the database |
-| `POST` | `/api/wipe-database` | Reset the SQLite database completely |
+| `DELETE` | `/api/database` | Reset the SQLite database completely |
 
 ---
 
@@ -142,7 +172,7 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 Both backend and frontend contain automated test suites.
 
 ### Backend & Core Tests (Python)
-Run all 45 unit and integration tests with `pytest`:
+Run all 51 unit and integration tests with `pytest`:
 ```bash
 venv\Scripts\activate
 pytest

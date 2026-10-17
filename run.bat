@@ -25,7 +25,7 @@ if not exist "frontend\node_modules" (
 
 echo.
 echo Starting FastAPI backend on http://localhost:8000...
-start "PortfolioMaster Backend" cmd /k "call venv\Scripts\activate && uvicorn backend.api.main:app --reload --port 8000"
+start "PortfolioMaster Backend" cmd /k "call venv\Scripts\activate && uvicorn backend.api.main:app --reload --port 8000 --env-file .env"
 
 echo Starting Next.js frontend on http://localhost:3000...
 start "PortfolioMaster Frontend" cmd /k "cd frontend && npm run dev"

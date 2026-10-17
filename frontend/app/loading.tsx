@@ -6,7 +6,7 @@ export default function Loading() {
     <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col animate-pulse">
       {/* Header skeleton */}
       <header className="border-b border-zinc-800/80 bg-zinc-950/80 sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+        <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="w-9 h-9 rounded-lg bg-zinc-800 border border-zinc-700/60 flex items-center justify-center text-zinc-600">
               <BarChart3 className="w-5 h-5 opacity-40" />
@@ -15,7 +15,7 @@ export default function Loading() {
           </div>
           <div className="h-4 w-28 bg-zinc-800/60 rounded" />
         </div>
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex gap-4 border-t border-zinc-900 h-11 items-center">
+        <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 flex gap-4 border-t border-zinc-900 h-11 items-center">
           <div className="h-4 w-20 bg-zinc-800 rounded" />
           <div className="h-4 w-24 bg-zinc-850 rounded" />
           <div className="h-4 w-16 bg-zinc-850 rounded" />
@@ -23,7 +23,7 @@ export default function Loading() {
       </header>
 
       {/* Main skeleton content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
+      <main className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
         <div className="flex flex-col gap-2">
           <div className="h-7 w-52 bg-zinc-800 rounded-lg" />
           <div className="h-4 w-96 bg-zinc-850 rounded" />
