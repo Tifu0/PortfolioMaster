@@ -242,6 +242,47 @@ export async function resolveMissingAnalysisPrices(): Promise<{
 }
 
 /**
+ * POST /api/instruments/{ticker}/fetch-ytd-price
+ * Fetches start of year quote from Yahoo Finance for instrument for current (or given) year.
+ */
+export async function fetchYtdPrice(
+  ticker: string,
+  targetYear?: number
+): Promise<{ status: string; ticker: string; start_of_year_date: string; start_of_year_price: number }> {
+  const url = new URL(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}/fetch-ytd-price`);
+  if (targetYear) {
+    url.searchParams.set('target_year', String(targetYear));
+  }
+  const res = await fetch(url.toString(), {
+    method: 'POST',
+  });
+  return handleResponse<{ status: string; ticker: string; start_of_year_date: string; start_of_year_price: number }>(res);
+}
+
+/**
+ * POST /api/instruments/resolve-missing-ytd-prices
+ * Batch resolves missing start-of-year prices from Yahoo Finance for instruments for the current year.
+ */
+export async function resolveMissingYtdPrices(): Promise<{
+  status: string;
+  updated: number;
+  failed: number;
+  skipped: number;
+  total: number;
+}> {
+  const res = await fetch(`${API_BASE_URL}/api/instruments/resolve-missing-ytd-prices`, {
+    method: 'POST',
+  });
+  return handleResponse<{
+    status: string;
+    updated: number;
+    failed: number;
+    skipped: number;
+    total: number;
+  }>(res);
+}
+
+/**
  * 15. GET /api/instruments/check-yahoo
  * Validates whether a ticker exists and has quotes available on Yahoo Finance.
  */

@@ -44,6 +44,7 @@ import {
   refreshAll,
   refreshInstrument,
   resolveMissingAnalysisPrices,
+  resolveMissingYtdPrices,
   updateInstrument,
   wipeDatabase,
 } from '@/lib/api';
@@ -545,9 +546,10 @@ export function WatchlistTable({
     if (batchRefreshing) return;
     setBatchRefreshing(true);
     try {
-      const [quotesRes, analysisRes] = await Promise.allSettled([
+      const [quotesRes, analysisRes, ytdRes] = await Promise.allSettled([
         refreshAll(),
         resolveMissingAnalysisPrices(),
+        resolveMissingYtdPrices(),
       ]);
 
       let updatedQuotes = 0;
@@ -564,11 +566,17 @@ export function WatchlistTable({
         updatedAnalysis = analysisRes.value.updated;
       }
 
+      let updatedYtd = 0;
+      if (ytdRes.status === 'fulfilled') {
+        updatedYtd = ytdRes.value.updated;
+      }
+
       const failedMsg = failedQuotes > 0 ? ` (${failedQuotes} fallidas)` : '';
       const analysisMsg = updatedAnalysis > 0 ? ` · ${updatedAnalysis} precios de análisis resueltos` : '';
+      const ytdMsg = updatedYtd > 0 ? ` · ${updatedYtd} precios YTD resueltos` : '';
       addToast(
         failedQuotes > 0 ? 'info' : 'success',
-        `${updatedQuotes} de ${totalQuotes} cotizaciones actualizadas${failedMsg}${analysisMsg}`
+        `${updatedQuotes} de ${totalQuotes} cotizaciones actualizadas${failedMsg}${analysisMsg}${ytdMsg}`
       );
       await reloadData();
     } catch (err: unknown) {
@@ -870,6 +878,49 @@ export function WatchlistTable({
                 )
               )}
               <span className={colorClass}>{text}</span>
+            </div>
+          );
+        },
+      },
+      {
+        accessorKey: 'ytd_variation',
+        size: 145,
+        minSize: 110,
+        maxSize: 320,
+        header: ({ column }) => (
+          <button
+            onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+          >
+            Var. YTD
+            {column.getIsSorted() === 'asc' ? (
+              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
+            ) : column.getIsSorted() === 'desc' ? (
+              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
+            ) : (
+              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
+            )}
+          </button>
+        ),
+        cell: ({ row }) => {
+          const pos = row.original;
+          const { text, colorClass } = formatPercent(
+            pos.ytd_variation,
+            pos.ytd_variation_valid
+          );
+          return (
+            <div className="flex flex-col items-end">
+              <span className={colorClass}>{text}</span>
+              {pos.start_of_year_price !== null && pos.start_of_year_price !== undefined ? (
+                <span className="text-[10px] text-zinc-500 font-mono">
+                  {formatCurrency(pos.start_of_year_price, pos.currency)}
+                  {pos.start_of_year_date ? ` (${pos.start_of_year_date})` : ''}
+                </span>
+              ) : (
+                <span className="text-[10px] text-zinc-600 font-mono">
+                  sin ref YTD
+                </span>
+              )}
             </div>
           );
         },

@@ -60,6 +60,8 @@ export interface Instrument {
   company_name: string;
   analysis_date: string | null; // ISO Date YYYY-MM-DD
   analysis_reference_price: number | null;
+  start_of_year_date?: string | null; // ISO Date YYYY-MM-DD
+  start_of_year_price?: number | null;
   target_price: number | null;
   comment: string;
   active: boolean;
@@ -86,6 +88,8 @@ export interface Position {
   company_name: string;
   analysis_date: string | null;
   analysis_reference_price: number | null;
+  start_of_year_date?: string | null;
+  start_of_year_price?: number | null;
   target_price: number | null;
   comment: string;
   active: boolean;
@@ -102,6 +106,8 @@ export interface Position {
   daily_variation_valid: boolean;
   variation_since_analysis: number | null;
   variation_since_analysis_valid: boolean;
+  ytd_variation: number | null;
+  ytd_variation_valid: boolean;
   decline_to_target: number | null;
   decline_to_target_valid: boolean;
 }
@@ -125,6 +131,8 @@ export interface InstrumentDetailResponse {
   company_name?: string;
   analysis_date?: string | null;
   analysis_reference_price?: number | null;
+  start_of_year_date?: string | null;
+  start_of_year_price?: number | null;
   target_price?: number | null;
   comment?: string;
   active?: boolean;
@@ -141,6 +149,8 @@ export interface InstrumentCreateRequest {
   target_price?: number | null;
   analysis_reference_price?: number | null;
   analysis_date?: string | null;
+  start_of_year_price?: number | null;
+  start_of_year_date?: string | null;
   comment?: string;
   fetch_yahoo?: boolean;
   manual_price?: number | null;
@@ -153,6 +163,8 @@ export interface InstrumentUpdateRequest {
   target_price?: number | null;
   analysis_reference_price?: number | null;
   analysis_date?: string | null;
+  start_of_year_price?: number | null;
+  start_of_year_date?: string | null;
   comment?: string | null;
   latest_price?: number | null;
   previous_close?: number | null;

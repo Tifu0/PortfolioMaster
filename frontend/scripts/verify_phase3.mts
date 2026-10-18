@@ -25,6 +25,8 @@ const samplePosition: Position = {
   daily_variation_valid: true,
   variation_since_analysis: 5.88,
   variation_since_analysis_valid: true,
+  ytd_variation: 3.50,
+  ytd_variation_valid: true,
   decline_to_target: 22.22,
   decline_to_target_valid: true,
 };
@@ -44,6 +46,8 @@ const requiredProps: (keyof Position)[] = [
   'daily_variation_valid',
   'variation_since_analysis',
   'variation_since_analysis_valid',
+  'ytd_variation',
+  'ytd_variation_valid',
   'decline_to_target',
   'decline_to_target_valid',
   'target_price',

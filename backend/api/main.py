@@ -44,6 +44,7 @@ from portfoliomaster.core.calculations import (  # noqa: E402
     daily_variation,
     decline_to_target,
     variation_since_analysis,
+    ytd_variation,
 )
 from portfoliomaster.core.config import (  # noqa: E402
     get_yahoo_suffix,
@@ -233,6 +234,8 @@ def _instrument_to_dict(inst: Instrument) -> dict:
         "company_name": inst.company_name or "",
         "analysis_date": inst.analysis_date.isoformat() if inst.analysis_date else None,
         "analysis_reference_price": _to_float(inst.analysis_reference_price),
+        "start_of_year_date": inst.start_of_year_date.isoformat() if inst.start_of_year_date else None,
+        "start_of_year_price": _to_float(inst.start_of_year_price),
         "target_price": _to_float(inst.target_price),
         "comment": inst.comment or "",
         "active": bool(inst.active),
@@ -266,6 +269,8 @@ class InstrumentCreate(BaseModel):
     target_price: Optional[float] = None
     analysis_reference_price: Optional[float] = None
     analysis_date: Optional[str] = None  # ISO date string (YYYY-MM-DD)
+    start_of_year_price: Optional[float] = None
+    start_of_year_date: Optional[str] = None  # ISO date string (YYYY-MM-DD)
     comment: str = ""
     fetch_yahoo: bool = True
     manual_price: Optional[float] = None
@@ -278,6 +283,8 @@ class InstrumentUpdate(BaseModel):
     target_price: Optional[float] = None
     analysis_reference_price: Optional[float] = None
     analysis_date: Optional[str] = None
+    start_of_year_price: Optional[float] = None
+    start_of_year_date: Optional[str] = None
     comment: Optional[str] = None
     latest_price: Optional[float] = None
     previous_close: Optional[float] = None
@@ -321,11 +328,13 @@ def get_positions():
         latest_price = _to_float(row.get("latest_price"))
         prev_close = _to_float(row.get("previous_close"))
         analysis_ref = _to_float(row.get("analysis_reference_price"))
+        start_of_year_price = _to_float(row.get("start_of_year_price"))
         target = _to_float(row.get("target_price"))
 
         # Derived columns — computed in Python (never in TS).
         dv = daily_variation(latest_price, prev_close)
         vsa = variation_since_analysis(latest_price, analysis_ref)
+        ytd = ytd_variation(latest_price, start_of_year_price)
         dtt = decline_to_target(target, latest_price)
 
         analysis_date_raw = row.get("analysis_date")
@@ -336,6 +345,15 @@ def get_positions():
                     analysis_date_str = str(analysis_date_raw)
             except (TypeError, ValueError):
                 analysis_date_str = str(analysis_date_raw)
+
+        start_of_year_date_raw = row.get("start_of_year_date")
+        start_of_year_date_str = None
+        if start_of_year_date_raw is not None:
+            try:
+                if not pd.isna(start_of_year_date_raw):
+                    start_of_year_date_str = str(start_of_year_date_raw)
+            except (TypeError, ValueError):
+                start_of_year_date_str = str(start_of_year_date_raw)
 
         row_id = row.get("id")
         try:
@@ -356,6 +374,8 @@ def get_positions():
                 "company_name": _clean_str(row.get("company_name")),
                 "analysis_date": analysis_date_str,
                 "analysis_reference_price": analysis_ref,
+                "start_of_year_date": start_of_year_date_str,
+                "start_of_year_price": start_of_year_price,
                 "target_price": target,
                 "comment": _clean_str(row.get("comment")),
                 "active": active_bool,
@@ -370,6 +390,8 @@ def get_positions():
                 "daily_variation_valid": bool(dv.daily_variation_valid),
                 "variation_since_analysis": _to_float(vsa.variation_since_analysis),
                 "variation_since_analysis_valid": bool(vsa.variation_since_analysis_valid),
+                "ytd_variation": _to_float(ytd.ytd_variation),
+                "ytd_variation_valid": bool(ytd.ytd_variation_valid),
                 "decline_to_target": _to_float(dtt.decline_to_target),
                 "decline_to_target_valid": bool(dtt.decline_to_target_valid),
             }
@@ -636,6 +658,21 @@ def create_instrument(data: InstrumentCreate):
         if hist_p is not None and hist_p > 0:
             ref_dec = Decimal(str(hist_p))
 
+    soy_dec = Decimal(str(data.start_of_year_price)) if data.start_of_year_price and data.start_of_year_price > 0 else None
+    soy_dt = None
+    if data.start_of_year_date:
+        try:
+            soy_dt = date.fromisoformat(data.start_of_year_date)
+        except ValueError:
+            pass
+
+    # If start of year reference price is missing but Yahoo fetch is enabled, attempt to look it up
+    if soy_dec is None and data.fetch_yahoo and provider_symbol:
+        hist_ytd = _fetch_start_of_year_quote(provider_symbol, date.today().year)
+        if hist_ytd is not None:
+            soy_dec = Decimal(str(hist_ytd[0]))
+            soy_dt = hist_ytd[1]
+
     inst = Instrument(
         user_ticker=ticker_clean,
         provider_symbol=provider_symbol,
@@ -644,6 +681,8 @@ def create_instrument(data: InstrumentCreate):
         company_name=company_name_clean,
         analysis_date=analysis_dt,
         analysis_reference_price=ref_dec,
+        start_of_year_date=soy_dt,
+        start_of_year_price=soy_dec,
         target_price=tgt_dec,
         comment=data.comment.strip(),
         active=True,
@@ -737,6 +776,16 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
                 pass
         else:
             inst.analysis_date = None
+    if data.start_of_year_price is not None:
+        inst.start_of_year_price = Decimal(str(data.start_of_year_price)) if data.start_of_year_price > 0 else None
+    if data.start_of_year_date is not None:
+        if data.start_of_year_date.strip():
+            try:
+                inst.start_of_year_date = date.fromisoformat(data.start_of_year_date.strip())
+            except ValueError:
+                pass
+        else:
+            inst.start_of_year_date = None
     if data.comment is not None:
         inst.comment = data.comment.strip()
 
@@ -762,22 +811,53 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
     return {"status": "ok", "instrument": _instrument_to_dict(inst)}
 
 
-def _fetch_historical_quote_for_date(provider_symbol: str, target_date: date) -> Optional[float]:
-    """Fetch closing price on or shortly after target_date from Yahoo Finance."""
+def _fetch_historical_quote_and_date(
+    provider_symbol: str, target_date: date, window_days: int = 7
+) -> Optional[tuple[float, date]]:
+    """Fetch closing price and trading date on or shortly after target_date from Yahoo Finance."""
     if not provider_symbol or not target_date:
         return None
     try:
         t = yf.Ticker(provider_symbol)
         start_str = target_date.isoformat()
-        end_str = (target_date + timedelta(days=5)).isoformat()
+        end_str = (target_date + timedelta(days=window_days)).isoformat()
         hist = t.history(start=start_str, end=end_str)
+        if hist.empty or "Close" not in hist:
+            # Fallback for start of year if period="ytd" returns valid data
+            if target_date.month == 1 and target_date.day == 1:
+                hist = t.history(period="ytd")
         if not hist.empty and "Close" in hist:
             price = hist["Close"].iloc[0]
             if pd.notna(price) and float(price) > 0:
-                return round(float(price), 4)
+                idx = hist.index[0]
+                actual_dt = (
+                    idx.date()
+                    if hasattr(idx, "date")
+                    else (
+                        idx.to_pydatetime().date()
+                        if hasattr(idx, "to_pydatetime")
+                        else target_date
+                    )
+                )
+                return round(float(price), 4), actual_dt
     except Exception:
         pass
     return None
+
+
+def _fetch_historical_quote_for_date(provider_symbol: str, target_date: date) -> Optional[float]:
+    """Fetch closing price on or shortly after target_date from Yahoo Finance."""
+    res = _fetch_historical_quote_and_date(provider_symbol, target_date, window_days=7)
+    return res[0] if res else None
+
+
+def _fetch_start_of_year_quote(
+    provider_symbol: str, year: Optional[int] = None
+) -> Optional[tuple[float, date]]:
+    """Fetch closing price and trading date for the beginning of the given (or current) year."""
+    y = year or date.today().year
+    target_date = date(y, 1, 1)
+    return _fetch_historical_quote_and_date(provider_symbol, target_date, window_days=10)
 
 
 @app.post("/api/instruments/{ticker}/fetch-analysis-price")
@@ -821,6 +901,37 @@ def fetch_analysis_price_endpoint(ticker: str, target_date: Optional[str] = None
     }
 
 
+@app.post("/api/instruments/{ticker}/fetch-ytd-price")
+def fetch_ytd_price_endpoint(ticker: str, target_year: Optional[int] = None):
+    """Fetch start of year quote from Yahoo Finance for instrument for current (or given) year."""
+    inst = get_instrument_by_ticker(ticker)
+    if not inst:
+        raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
+
+    if not inst.provider_symbol:
+        raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol for Yahoo Finance")
+
+    year = target_year or date.today().year
+    res = _fetch_start_of_year_quote(inst.provider_symbol, year)
+    if res is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No start-of-year quote found on Yahoo Finance for '{inst.provider_symbol}' for year {year}",
+        )
+
+    price, dt = res
+    inst.start_of_year_date = dt
+    inst.start_of_year_price = Decimal(str(price))
+    upsert_instrument(inst)
+
+    return {
+        "status": "ok",
+        "ticker": ticker,
+        "start_of_year_date": dt.isoformat(),
+        "start_of_year_price": price,
+    }
+
+
 def _execute_resolve_missing_analysis_prices() -> dict:
     """Core logic to auto-resolve analysis_reference_price from Yahoo Finance for instruments with analysis_date."""
     instruments = get_all_instruments()
@@ -859,6 +970,52 @@ def resolve_missing_analysis_prices():
     return _execute_resolve_missing_analysis_prices()
 
 
+def _execute_resolve_missing_ytd_prices() -> dict:
+    """Core logic to auto-resolve start_of_year_price from Yahoo Finance for instruments for the current year."""
+    current_year = date.today().year
+    instruments = get_all_instruments()
+    updated = 0
+    failed = 0
+    skipped = 0
+
+    for inst in instruments:
+        if (
+            inst.start_of_year_price is not None
+            and inst.start_of_year_price > 0
+            and inst.start_of_year_date is not None
+            and inst.start_of_year_date.year == current_year
+        ):
+            skipped += 1
+            continue
+        if not inst.provider_symbol:
+            skipped += 1
+            continue
+
+        res = _fetch_start_of_year_quote(inst.provider_symbol, current_year)
+        if res is not None:
+            price, actual_dt = res
+            inst.start_of_year_price = Decimal(str(price))
+            inst.start_of_year_date = actual_dt
+            upsert_instrument(inst)
+            updated += 1
+        else:
+            failed += 1
+
+    return {
+        "status": "ok",
+        "updated": updated,
+        "failed": failed,
+        "skipped": skipped,
+        "total": len(instruments),
+    }
+
+
+@app.post("/api/instruments/resolve-missing-ytd-prices")
+def resolve_missing_ytd_prices():
+    """Auto-resolve start_of_year_price from Yahoo Finance for instruments for current year."""
+    return _execute_resolve_missing_ytd_prices()
+
+
 @app.delete("/api/instruments/{ticker}")
 def remove_instrument(ticker: str):
     """Delete an instrument and its quotes."""
@@ -886,6 +1043,20 @@ def refresh_single(ticker: str):
             q = quotes[inst.provider_symbol]
             q.instrument_id = inst.id
             upsert_quote(q)
+
+            # Auto-resolve YTD start of year price if missing or outdated
+            current_year = date.today().year
+            if (
+                inst.start_of_year_price is None
+                or inst.start_of_year_date is None
+                or inst.start_of_year_date.year != current_year
+            ):
+                res_ytd = _fetch_start_of_year_quote(inst.provider_symbol, current_year)
+                if res_ytd is not None:
+                    inst.start_of_year_price = Decimal(str(res_ytd[0]))
+                    inst.start_of_year_date = res_ytd[1]
+                    upsert_instrument(inst)
+
             return {
                 "status": "ok",
                 "price": _to_float(q.price),
@@ -958,6 +1129,18 @@ def _execute_refresh_all() -> dict:
                 result["analysis_prices_updated"] = analysis_res["updated"]
         except Exception as e:
             logger.warning("Could not auto-resolve missing analysis prices during batch refresh: %s", e)
+
+        # Auto-resolve YTD reference prices for active instruments missing start-of-year price for current year
+        try:
+            ytd_res = _execute_resolve_missing_ytd_prices()
+            if ytd_res.get("updated", 0) > 0:
+                logger.info(
+                    "[AutoRefresh] Resolved %d missing YTD reference prices.",
+                    ytd_res["updated"],
+                )
+                result["ytd_prices_updated"] = ytd_res["updated"]
+        except Exception as e:
+            logger.warning("Could not auto-resolve missing YTD prices during batch refresh: %s", e)
 
         _state["last_refresh_at"] = datetime.now().isoformat()
         _state["last_refresh_result"] = result
@@ -1034,11 +1217,19 @@ def import_confirm(data: ImportConfirmRequest):
 
             ref_price = inst_dict.get("analysis_reference_price")
             tgt_price = inst_dict.get("target_price")
+            soy_price = inst_dict.get("start_of_year_price")
 
             analysis_dt = None
             if inst_dict.get("analysis_date"):
                 try:
                     analysis_dt = date.fromisoformat(str(inst_dict["analysis_date"]))
+                except ValueError:
+                    pass
+
+            soy_dt = None
+            if inst_dict.get("start_of_year_date"):
+                try:
+                    soy_dt = date.fromisoformat(str(inst_dict["start_of_year_date"]))
                 except ValueError:
                     pass
 
@@ -1050,6 +1241,8 @@ def import_confirm(data: ImportConfirmRequest):
                 company_name=inst_dict.get("company_name", ticker),
                 analysis_date=analysis_dt,
                 analysis_reference_price=Decimal(str(ref_price)) if ref_price is not None else None,
+                start_of_year_date=soy_dt,
+                start_of_year_price=Decimal(str(soy_price)) if soy_price is not None else None,
                 target_price=Decimal(str(tgt_price)) if tgt_price is not None else None,
                 comment=inst_dict.get("comment", ""),
                 active=inst_dict.get("active", True),

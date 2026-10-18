@@ -118,6 +118,8 @@ class Instrument:
     company_name: str = ""
     analysis_date: Optional[date] = None
     analysis_reference_price: Optional[Decimal] = None
+    start_of_year_date: Optional[date] = None
+    start_of_year_price: Optional[Decimal] = None
     target_price: Optional[Decimal] = None
     comment: str = ""
     active: bool = True
@@ -179,6 +181,8 @@ class CalculationResult:
     daily_variation_valid: bool = False
     variation_since_analysis: Optional[Decimal] = None
     variation_since_analysis_valid: bool = False
+    ytd_variation: Optional[Decimal] = None
+    ytd_variation_valid: bool = False
     decline_to_target: Optional[Decimal] = None
     decline_to_target_valid: bool = False
     target_reached: bool = False

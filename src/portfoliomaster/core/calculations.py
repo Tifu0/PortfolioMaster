@@ -124,6 +124,29 @@ def variation_since_analysis(
     return result
 
 
+def ytd_variation(
+    latest_price: Number,
+    ytd_reference_price: Number,
+) -> CalculationResult:
+    """(latest_price / ytd_reference_price - 1) * 100."""
+    result = CalculationResult()
+
+    price = _to_decimal(latest_price)
+    ref = _to_decimal(ytd_reference_price)
+
+    result.price_valid = _is_valid_price(price)
+    if ref is None or price is None or not result.price_valid or not _is_valid_price(ref):
+        return result
+
+    ratio = _safe_div(price - ref, ref)
+    if ratio is None:
+        return result
+    result.ytd_variation = _round(ratio * 100)
+    result.ytd_variation_valid = True
+    return result
+
+
+
 def decline_to_target(
     target_price: Number,
     latest_price: Number,

@@ -3,6 +3,7 @@ from decimal import Decimal
 from portfoliomaster.core.calculations import (
     daily_variation,
     variation_since_analysis,
+    ytd_variation,
     decline_to_target,
     is_target_reached,
 )
@@ -33,6 +34,23 @@ def test_variation_since_analysis():
     # Missing/Zero analysis_price
     assert variation_since_analysis(Decimal("120"), None).variation_since_analysis_valid is False
     assert variation_since_analysis(Decimal("120"), Decimal("0")).variation_since_analysis_valid is False
+
+def test_ytd_variation():
+    # (current / ytd_price - 1) * 100
+    # 120 / 100 - 1 = 0.2 * 100 = 20%
+    result = ytd_variation(Decimal("120"), Decimal("100"))
+    assert result.ytd_variation == Decimal("20.00")
+    assert result.ytd_variation_valid is True
+
+    # 85 / 100 - 1 = -0.15 * 100 = -15%
+    result = ytd_variation(Decimal("85"), Decimal("100"))
+    assert result.ytd_variation == Decimal("-15.00")
+    assert result.ytd_variation_valid is True
+
+    # Missing/Zero ytd_price
+    assert ytd_variation(Decimal("120"), None).ytd_variation_valid is False
+    assert ytd_variation(Decimal("120"), Decimal("0")).ytd_variation_valid is False
+    assert ytd_variation(None, Decimal("100")).ytd_variation_valid is False
 
 def test_decline_to_target():
     # ((target_price - latest_price) / latest_price) * 100

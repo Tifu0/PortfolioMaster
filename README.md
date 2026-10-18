@@ -15,7 +15,8 @@ Built on a decoupled modern architecture:
 ## ✨ Features
 
 - **📊 Interactive Watchlist Table**:
-  - Pre-computed financial metrics: Daily Variation (`±%`), Return vs. Analysis Price (`±%`), and Required Decline to Target Price (`±%`).
+  - Pre-computed financial metrics: Daily Variation (`±%`), **Year-To-Date (YTD) Variation (`±%`)** relative to start-of-year price, Return vs. Analysis Price (`±%`), and Required Decline to Target Price (`±%`).
+  - **📅 Start-of-Year (YTD) & Analysis Benchmarks**: Contextual sub-labels showing the exact reference price and date beneath percentage variations (e.g., `5,50 € (2026-01-02)`).
   - **📝 Inline Research Notes & Descriptions**: Clickable document icon (`FileText`) on each ticker to view and edit company analysis notes, investment thesis, and comments directly inline with SQLite persistence.
   - **↔️ Interactive Column Resizing**: Google Sheets-style column width adjustment with drag handles, double-click to auto-reset individual columns, automatic `localStorage` persistence, and a **`Restore Columns`** button in the toolbar.
   - Multi-column sorting powered by TanStack Table.
@@ -27,7 +28,7 @@ Built on a decoupled modern architecture:
   - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 60s · Batch 25`).
 
 - **🔄 Unified Market Data & Analysis Refresh Engine**:
-  - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices for instruments with an analysis date in one unified operation.
+  - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices and start-of-year (YTD) reference prices in one unified operation.
   - Configurable background auto-refresh loop and batch processing with timeout protection and retry strategies.
 
 - **📥 CSV & Excel Spreadsheet Import**:
@@ -36,7 +37,7 @@ Built on a decoupled modern architecture:
   - Automatic column mapping and ticker normalization (e.g. `BME:MAP`, `EPA:MC`, `US` prefixes).
 
 - **➕ Manual Position Management**:
-  - Modal form to quickly register new instruments or edit existing targets, analysis prices, and custom research notes.
+  - Modal form to quickly register new instruments or edit existing targets, analysis prices, start-of-year YTD prices, and custom research notes, with instant Yahoo Finance lookups.
   - Safe instrument deletion and one-click database reset with confirmation guards.
 
 ---
@@ -116,7 +117,7 @@ PortfolioMaster/
 │   ├── api/
 │   │   └── main.py             # FastAPI application and REST endpoints
 │   └── tests/
-│       └── test_api.py         # Backend API integration tests (26 tests)
+│       └── test_api.py         # Backend API integration tests (28 tests)
 │
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
@@ -148,16 +149,19 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 
 | Method | Endpoint | Description |
 |---|---|---|
-| `GET` | `/api/positions` | List active instruments with quotes and calculated financial returns |
+| `GET` | `/api/positions` | List active instruments with quotes and calculated financial returns (Daily, YTD, vs. Analysis, Decline to Target) |
 | `GET` | `/api/metrics` | Portfolio summary metrics (total count, top gainer, top loser, average variation) |
 | `GET` | `/api/instruments` | Raw list of all registered instruments |
 | `GET` | `/api/instruments/{ticker}` | Retrieve details for a specific instrument |
 | `POST` | `/api/instruments` | Create or update an instrument manually |
-| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (targets, analysis price/date, notes) |
+| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (targets, analysis price/date, YTD price/date, notes) |
 | `DELETE` | `/api/instruments/{ticker}` | Delete an instrument from the watchlist |
-| `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and resolve analysis price for a single instrument |
-| `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance and resolve missing analysis prices |
+| `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and auto-resolve analysis and YTD prices for a single instrument |
+| `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance and resolve missing analysis and YTD prices |
+| `POST` | `/api/instruments/{ticker}/fetch-analysis-price` | Fetch historical quote from Yahoo Finance for instrument's analysis date |
+| `POST` | `/api/instruments/{ticker}/fetch-ytd-price` | Fetch start-of-year quote from Yahoo Finance for instrument for current year |
 | `POST` | `/api/instruments/resolve-missing-analysis-prices` | Auto-resolve historical analysis reference prices from Yahoo Finance |
+| `POST` | `/api/instruments/resolve-missing-ytd-prices` | Auto-resolve start-of-year (YTD) reference prices from Yahoo Finance |
 | `GET` | `/api/config` | Retrieve runtime configuration (refresh interval, batch size, last refresh status) |
 | `POST` | `/api/import/preview` | Dry-run validation of an uploaded CSV/Excel spreadsheet |
 | `POST` | `/api/import/confirm` | Commit validated spreadsheet instruments into the database |
@@ -170,7 +174,7 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 Both backend and frontend contain automated test suites.
 
 ### Backend & Core Tests (Python)
-Run all 51 unit and integration tests with `pytest`:
+Run all 54 unit and integration tests with `pytest`:
 ```bash
 venv\Scripts\activate
 pytest

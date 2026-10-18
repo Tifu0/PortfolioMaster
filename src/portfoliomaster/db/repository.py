@@ -47,9 +47,10 @@ def upsert_instrument(instrument: Instrument):
         """
         INSERT INTO instruments (
             user_ticker, provider_symbol, exchange, currency, company_name,
-            analysis_date, analysis_reference_price, target_price, comment, active
+            analysis_date, analysis_reference_price, start_of_year_date, start_of_year_price,
+            target_price, comment, active
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(user_ticker) DO UPDATE SET
             provider_symbol = excluded.provider_symbol,
             exchange = excluded.exchange,
@@ -57,6 +58,8 @@ def upsert_instrument(instrument: Instrument):
             company_name = excluded.company_name,
             analysis_date = excluded.analysis_date,
             analysis_reference_price = excluded.analysis_reference_price,
+            start_of_year_date = COALESCE(excluded.start_of_year_date, instruments.start_of_year_date),
+            start_of_year_price = COALESCE(excluded.start_of_year_price, instruments.start_of_year_price),
             target_price = excluded.target_price,
             comment = excluded.comment,
             active = excluded.active,
@@ -70,6 +73,8 @@ def upsert_instrument(instrument: Instrument):
             instrument.company_name,
             _sql_value(instrument.analysis_date),
             _sql_value(instrument.analysis_reference_price),
+            _sql_value(instrument.start_of_year_date),
+            _sql_value(instrument.start_of_year_price),
             _sql_value(instrument.target_price),
             instrument.comment,
             int(instrument.active),
@@ -95,6 +100,8 @@ def update_instrument_by_id(instrument: Instrument):
             company_name = ?,
             analysis_date = ?,
             analysis_reference_price = ?,
+            start_of_year_date = ?,
+            start_of_year_price = ?,
             target_price = ?,
             comment = ?,
             active = ?,
@@ -109,6 +116,8 @@ def update_instrument_by_id(instrument: Instrument):
             instrument.company_name,
             _sql_value(instrument.analysis_date),
             _sql_value(instrument.analysis_reference_price),
+            _sql_value(instrument.start_of_year_date),
+            _sql_value(instrument.start_of_year_price),
             _sql_value(instrument.target_price),
             instrument.comment,
             int(instrument.active),
@@ -273,6 +282,7 @@ def _row_to_instrument(row: sqlite3.Row) -> Instrument:
     else:
         exchange_enum = Exchange.UNKNOWN
 
+    keys = row.keys() if hasattr(row, "keys") else []
     return Instrument(
         id=row["id"],
         user_ticker=row["user_ticker"],
@@ -282,6 +292,8 @@ def _row_to_instrument(row: sqlite3.Row) -> Instrument:
         company_name=row["company_name"],
         analysis_date=_parse_date(row["analysis_date"]),
         analysis_reference_price=_safe_decimal(row["analysis_reference_price"]),
+        start_of_year_date=_parse_date(row["start_of_year_date"]) if "start_of_year_date" in keys else None,
+        start_of_year_price=_safe_decimal(row["start_of_year_price"]) if "start_of_year_price" in keys else None,
         target_price=_safe_decimal(row["target_price"]),
         comment=row["comment"] or "",
         active=bool(row["active"]),

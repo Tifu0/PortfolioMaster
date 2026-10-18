@@ -88,6 +88,8 @@ class TestGetPositions:
             "manual_previous_close": 148.0,
             "target_price": 200.0,
             "analysis_reference_price": 130.0,
+            "start_of_year_price": 125.0,
+            "start_of_year_date": "2026-01-02",
         })
 
         r = client.get("/api/positions")
@@ -99,12 +101,16 @@ class TestGetPositions:
         assert pos["user_ticker"] == "AAPL"
         assert pos["latest_price"] == 150.0
         assert pos["previous_close"] == 148.0
+        assert pos["start_of_year_price"] == 125.0
+        assert pos["start_of_year_date"] == "2026-01-02"
 
         # Computed columns must be present and valid
         assert pos["daily_variation_valid"] is True
         assert isinstance(pos["daily_variation"], float)
         assert pos["variation_since_analysis_valid"] is True
         assert pos["decline_to_target_valid"] is True
+        assert pos["ytd_variation_valid"] is True
+        assert pos["ytd_variation"] == 20.0
 
     def test_returns_positions_without_quotes(self):
         # Insert instrument without quotes (e.g. from import)
@@ -439,6 +445,26 @@ class TestWipeDatabase:
 
         r2 = client.get("/api/instruments")
         assert r2.json()["count"] == 0
+
+
+# ---------------------------------------------------------------------- #
+# POST /api/instruments/{ticker}/fetch-ytd-price & resolve-missing-ytd-prices
+# ---------------------------------------------------------------------- #
+
+class TestYtdEndpoints:
+    def test_fetch_ytd_price_not_found(self):
+        r = client.post("/api/instruments/NONEXISTENT/fetch-ytd-price")
+        assert r.status_code == 404
+
+    def test_resolve_missing_ytd_prices(self):
+        r = client.post("/api/instruments/resolve-missing-ytd-prices")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert "updated" in body
+        assert "failed" in body
+        assert "skipped" in body
+        assert "total" in body
 
 
 # ---------------------------------------------------------------------- #

@@ -31,6 +31,7 @@ import {
   getInstruments,
   getInstrument,
   fetchAnalysisPrice,
+  fetchYtdPrice,
   checkYahooTicker,
 } from '@/lib/api';
 
@@ -90,6 +91,8 @@ export function ManualEntryModal({
   const [addAnalysisDate, setAddAnalysisDate] = useState(
     new Date().toISOString().split('T')[0]
   );
+  const [addStartOfYearPrice, setAddStartOfYearPrice] = useState('');
+  const [addStartOfYearDate, setAddStartOfYearDate] = useState('');
   const [addComment, setAddComment] = useState('');
   const [addFetchYahoo, setAddFetchYahoo] = useState(true);
   const [addManualPrice, setAddManualPrice] = useState('');
@@ -103,6 +106,8 @@ export function ManualEntryModal({
   const [editTargetPrice, setEditTargetPrice] = useState('');
   const [editAnalysisPrice, setEditAnalysisPrice] = useState('');
   const [editAnalysisDate, setEditAnalysisDate] = useState('');
+  const [editStartOfYearPrice, setEditStartOfYearPrice] = useState('');
+  const [editStartOfYearDate, setEditStartOfYearDate] = useState('');
   const [editComment, setEditComment] = useState('');
   const [editLatestPrice, setEditLatestPrice] = useState('');
   const [editPrevClose, setEditPrevClose] = useState('');
@@ -175,6 +180,13 @@ export function ManualEntryModal({
             : ''
         );
         setEditAnalysisDate(inst.analysis_date || '');
+        setEditStartOfYearPrice(
+          inst.start_of_year_price !== null &&
+          inst.start_of_year_price !== undefined
+            ? String(inst.start_of_year_price)
+            : ''
+        );
+        setEditStartOfYearDate(inst.start_of_year_date || '');
         setEditComment(inst.comment || '');
         setEditLatestPrice(
           quote?.price !== null && quote?.price !== undefined
@@ -254,6 +266,8 @@ export function ManualEntryModal({
         target_price: addTargetPrice ? parseFloat(addTargetPrice) : null,
         analysis_reference_price: addAnalysisPrice ? parseFloat(addAnalysisPrice) : null,
         analysis_date: addAnalysisDate || null,
+        start_of_year_price: addStartOfYearPrice ? parseFloat(addStartOfYearPrice) : null,
+        start_of_year_date: addStartOfYearDate || null,
         comment: addComment.trim(),
         fetch_yahoo: addFetchYahoo,
         manual_price: !addFetchYahoo && addManualPrice ? parseFloat(addManualPrice) : null,
@@ -337,6 +351,8 @@ export function ManualEntryModal({
         target_price: editTargetPrice ? parseFloat(editTargetPrice) : null,
         analysis_reference_price: editAnalysisPrice ? parseFloat(editAnalysisPrice) : null,
         analysis_date: editAnalysisDate || null,
+        start_of_year_price: editStartOfYearPrice ? parseFloat(editStartOfYearPrice) : null,
+        start_of_year_date: editStartOfYearDate || null,
         comment: editComment.trim() || null,
         latest_price: editLatestPrice ? parseFloat(editLatestPrice) : null,
         previous_close: editPrevClose ? parseFloat(editPrevClose) : null,
@@ -369,6 +385,25 @@ export function ManualEntryModal({
         setEditAnalysisPrice(String(res.analysis_reference_price));
         if (res.analysis_date) setEditAnalysisDate(res.analysis_date);
         onSuccess?.(`Cotización en fecha de análisis obtenida de Yahoo: ${res.analysis_reference_price}`);
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onError?.(`Error al consultar Yahoo Finance: ${msg}`);
+    } finally {
+      setFetchingHistorical(false);
+    }
+  };
+
+  const handleFetchYtdForEdit = async () => {
+    const targetTicker = originalTickerToEdit || editTicker.trim();
+    if (!targetTicker) return;
+    setFetchingHistorical(true);
+    try {
+      const res = await fetchYtdPrice(targetTicker);
+      if (res.status === 'ok') {
+        setEditStartOfYearPrice(String(res.start_of_year_price));
+        if (res.start_of_year_date) setEditStartOfYearDate(res.start_of_year_date);
+        onSuccess?.(`Cotización inicio de año (YTD) obtenida de Yahoo: ${res.start_of_year_price}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -925,6 +960,44 @@ export function ManualEntryModal({
                           step="0.01"
                           value={editPrevClose}
                           onChange={(e) => setEditPrevClose(e.target.value)}
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                      <div>
+                        <div className="flex items-center justify-between mb-1">
+                          <label className="block text-xs font-medium text-zinc-300">
+                            Precio Ref. YTD (Inicio Año)
+                          </label>
+                          <button
+                            type="button"
+                            onClick={handleFetchYtdForEdit}
+                            disabled={fetchingHistorical || loading}
+                            className="text-[10px] text-emerald-400 hover:text-emerald-300 underline font-mono"
+                            title="Consultar cotización a inicio de año en Yahoo"
+                          >
+                            {fetchingHistorical ? 'Buscando...' : 'Obtener de Yahoo'}
+                          </button>
+                        </div>
+                        <input
+                          type="number"
+                          step="0.01"
+                          value={editStartOfYearPrice}
+                          onChange={(e) => setEditStartOfYearPrice(e.target.value)}
+                          placeholder="ej. 150.25"
+                          className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-zinc-300 mb-1">
+                          Fecha YTD
+                        </label>
+                        <input
+                          type="date"
+                          value={editStartOfYearDate}
+                          onChange={(e) => setEditStartOfYearDate(e.target.value)}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
                         />
                       </div>

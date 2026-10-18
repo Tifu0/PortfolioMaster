@@ -36,6 +36,8 @@ def init_db():
             company_name TEXT,
             analysis_date DATE,
             analysis_reference_price DECIMAL,
+            start_of_year_date DATE,
+            start_of_year_price DECIMAL,
             target_price DECIMAL,
             comment TEXT,
             active BOOLEAN DEFAULT 1,
@@ -43,6 +45,14 @@ def init_db():
             updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
+    # Migration for existing databases that were created before start_of_year fields
+    cursor.execute("PRAGMA table_info(instruments)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if "start_of_year_date" not in columns:
+        cursor.execute("ALTER TABLE instruments ADD COLUMN start_of_year_date DATE")
+    if "start_of_year_price" not in columns:
+        cursor.execute("ALTER TABLE instruments ADD COLUMN start_of_year_price DECIMAL")
+
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS quotes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
