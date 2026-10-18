@@ -52,3 +52,9 @@ Thumbs.db
 
 # Logs
 *.log
+
+# Playwright browser automation artifacts & sessions
+.playwright/
+.playwright-cli/
+test-results/
+playwright-report/

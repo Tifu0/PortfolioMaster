@@ -138,6 +138,18 @@ export function ManualEntryModal({
     }
   }, [isOpen, initialTickerToEdit, loadInstruments]);
 
+  // Handle Escape key to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        onClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   // When originalTickerToEdit changes, fetch details
   useEffect(() => {
     if (!originalTickerToEdit) return;
@@ -430,6 +442,8 @@ export function ManualEntryModal({
     }
   };
 
+  if (!isOpen) return null;
+
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       {/* Backdrop */}
@@ -467,6 +481,8 @@ export function ManualEntryModal({
           </div>
           <button
             onClick={onClose}
+            aria-label="Cerrar modal"
+            title="Cerrar modal"
             className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
           >
             <X className="w-5 h-5" />

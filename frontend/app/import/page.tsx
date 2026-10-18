@@ -1,7 +1,8 @@
 import React from 'react';
 import Link from 'next/link';
-import { BarChart3, PlusCircle, Upload, ArrowLeft } from 'lucide-react';
+import { BarChart3, ArrowLeft } from 'lucide-react';
 import { ImportView } from '@/components/ImportView';
+import { HeaderNav } from '@/components/HeaderNav';
 
 export const metadata = {
   title: 'Importar Watchlist | PortfolioMaster',
@@ -39,29 +40,7 @@ export default function ImportPage() {
         </div>
 
         {/* Tab Navigation */}
-        <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 flex gap-2 border-t border-zinc-900 overflow-x-auto">
-          <Link
-            href="/"
-            className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition"
-          >
-            <BarChart3 className="w-4 h-4" />
-            Watchlist
-          </Link>
-          <Link
-            href="/?add=1"
-            className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition"
-            title="Añadir nuevo instrumento manualmente"
-          >
-            <PlusCircle className="w-4 h-4" />
-            Añadir Valor
-          </Link>
-          <button
-            className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-emerald-500 text-emerald-400 bg-emerald-500/[0.03]"
-          >
-            <Upload className="w-4 h-4" />
-            Importar
-          </button>
-        </div>
+        <HeaderNav />
       </header>
 
       {/* Main Content Area */}

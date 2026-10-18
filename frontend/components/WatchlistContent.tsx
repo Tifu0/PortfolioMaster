@@ -107,18 +107,36 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
     };
   }, []);
 
-  // Listen for ?add=1 or ?edit=TICKER in URL
+  // Listen for ?add=1 or ?edit=TICKER in URL and custom header events
   useEffect(() => {
-    const addParam = searchParams.get('add');
-    const editParam = searchParams.get('edit');
+    const handleCheckUrl = () => {
+      const currentSearchParams = new URLSearchParams(window.location.search);
+      const addParam = currentSearchParams.get('add') || searchParams.get('add');
+      const editParam = currentSearchParams.get('edit') || searchParams.get('edit');
 
-    if (addParam === '1' || addParam === 'true') {
+      if (addParam === '1' || addParam === 'true') {
+        setTickerToEdit(null);
+        setIsModalOpen(true);
+      } else if (editParam) {
+        setTickerToEdit(editParam);
+        setIsModalOpen(true);
+      }
+    };
+
+    handleCheckUrl();
+
+    const handleCustomOpenAdd = () => {
       setTickerToEdit(null);
       setIsModalOpen(true);
-    } else if (editParam) {
-      setTickerToEdit(editParam);
-      setIsModalOpen(true);
-    }
+    };
+
+    window.addEventListener('portfoliomaster:open-add', handleCustomOpenAdd);
+    window.addEventListener('popstate', handleCheckUrl);
+
+    return () => {
+      window.removeEventListener('portfoliomaster:open-add', handleCustomOpenAdd);
+      window.removeEventListener('popstate', handleCheckUrl);
+    };
   }, [searchParams]);
 
   // Reload data from API

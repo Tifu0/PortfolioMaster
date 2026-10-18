@@ -928,8 +928,8 @@ export function WatchlistTable({
             ? row.decline_to_target
             : -100,
         id: 'decline_to_target',
-        size: 150,
-        minSize: 110,
+        size: 165,
+        minSize: 135,
         maxSize: 320,
         header: ({ column }) => (
           <button
@@ -960,8 +960,8 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'target_price',
-        size: 130,
-        minSize: 95,
+        size: 140,
+        minSize: 115,
         maxSize: 260,
         header: ({ column }) => (
           <button
@@ -1096,9 +1096,9 @@ export function WatchlistTable({
       />
 
       {/* Search, Filters & Action Buttons Bar */}
-      <div className="flex flex-col xl:flex-row items-stretch xl:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-2.5 sm:p-3 rounded-xl">
+      <div className="flex flex-col 2xl:flex-row items-stretch 2xl:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-2.5 sm:p-3 rounded-xl">
         {/* Left side: Search & Filter Controls */}
-        <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 flex-1 min-w-0">
+        <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
           {/* Search Input */}
           <div className="relative min-w-[160px] sm:min-w-[200px] max-w-xs flex-1">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
@@ -1154,7 +1154,7 @@ export function WatchlistTable({
         </div>
 
         {/* Right side: Action Buttons */}
-        <div className="flex items-center gap-2 shrink-0 flex-wrap sm:flex-nowrap">
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {/* Add Instrument Button */}
           {onAddInstrument && (
             <button

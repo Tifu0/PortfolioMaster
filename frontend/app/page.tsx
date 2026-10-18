@@ -3,7 +3,8 @@ import Link from 'next/link';
 import { getPositions, getMetrics, getConfig } from '@/lib/api';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { WatchlistContent } from '@/components/WatchlistContent';
-import { BarChart3, PlusCircle, Upload, AlertCircle } from 'lucide-react';
+import { HeaderNav } from '@/components/HeaderNav';
+import { BarChart3, AlertCircle } from 'lucide-react';
 
 function WatchlistSkeleton() {
   return (
@@ -129,27 +130,7 @@ export default function WatchlistPage() {
         </div>
 
         {/* Tab Navigation */}
-        <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 flex gap-2 border-t border-zinc-900 overflow-x-auto">
-          <button className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-emerald-500 text-emerald-400 bg-emerald-500/[0.03]">
-            <BarChart3 className="w-4 h-4" />
-            Watchlist
-          </button>
-          <Link
-            href="/?add=1"
-            className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition"
-            title="Añadir nuevo instrumento manualmente"
-          >
-            <PlusCircle className="w-4 h-4" />
-            Añadir Valor
-          </Link>
-          <Link
-            href="/import"
-            className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition"
-          >
-            <Upload className="w-4 h-4" />
-            Importar
-          </Link>
-        </div>
+        <HeaderNav />
       </header>
 
       {/* Main Content Area */}
