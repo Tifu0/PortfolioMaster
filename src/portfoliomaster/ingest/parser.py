@@ -66,11 +66,14 @@ def parse_spreadsheet(file_path: str, original_filename: str) -> Tuple[Optional[
     try:
         if original_filename.lower().endswith((".xlsx", ".xlsm", ".xls")):
             wb = load_workbook(file_path, read_only=True, data_only=True)
-            ws = wb.active
-            data = ws.values
-            cols = next(data)
-            df = pd.DataFrame(data, columns=cols)
-            df.columns = [str(col).strip() if col is not None else "" for col in df.columns]
+            try:
+                ws = wb.active
+                data = ws.values
+                cols = next(data)
+                df = pd.DataFrame(data, columns=cols)
+                df.columns = [str(col).strip() if col is not None else "" for col in df.columns]
+            finally:
+                wb.close()
         elif original_filename.lower().endswith(".csv"):
             df = _read_csv(file_path)
         else:

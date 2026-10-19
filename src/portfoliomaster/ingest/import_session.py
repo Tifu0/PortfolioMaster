@@ -104,6 +104,12 @@ def import_spreadsheet(
                 if _is_blank(row.get("analysis_reference_price"))
                 else row.get("analysis_reference_price")
             ),
+            start_of_year_date=_cell_date(row.get("start_of_year_date")),
+            start_of_year_price=_to_decimal(
+                None
+                if _is_blank(row.get("start_of_year_price"))
+                else row.get("start_of_year_price")
+            ),
             target_price=_to_decimal(
                 None if _is_blank(row.get("target_price")) else row.get("target_price")
             ),

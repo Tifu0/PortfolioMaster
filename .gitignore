@@ -58,3 +58,6 @@ Thumbs.db
 .playwright-cli/
 test-results/
 playwright-report/
+
+# Automatic database backups
+backups/

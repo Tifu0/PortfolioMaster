@@ -18,11 +18,13 @@ from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from typing import Optional
+import io
 
 import pandas as pd
 import yfinance as yf
 from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response, StreamingResponse
 from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
@@ -72,6 +74,18 @@ from portfoliomaster.ingest.import_session import import_spreadsheet  # noqa: E4
 from portfoliomaster.ingest.normalizer import normalize  # noqa: E402
 from portfoliomaster.providers.yahoo_adapter import YahooAdapter  # noqa: E402
 from portfoliomaster.refresh.batch_runner import BatchRunner  # noqa: E402
+from portfoliomaster.backup import (  # noqa: E402
+    create_automatic_safety_backup,
+    create_sqlite_backup,
+    export_to_csv,
+    export_to_excel,
+    export_to_json,
+    list_automatic_backups,
+    restore_automatic_backup,
+    restore_from_json,
+    restore_sqlite_backup,
+    validate_sqlite_backup,
+)
 
 # ========================================================================== #
 # Logging & Runtime State
@@ -1185,7 +1199,11 @@ async def import_preview(file: UploadFile = File(...)):
     try:
         instruments, errors, unresolved, warnings = import_spreadsheet(tmp_path, file.filename)
     finally:
-        os.remove(tmp_path)
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
     return {
         "instruments": [_instrument_to_dict(inst) for inst in instruments],
@@ -1201,6 +1219,12 @@ def import_confirm(data: ImportConfirmRequest):
     """Commit previously previewed instruments to the database."""
     committed = 0
     commit_errors: list[str] = []
+
+    # Automatic safety backup before committing imported data
+    try:
+        create_automatic_safety_backup(reason="pre_import")
+    except Exception as e:
+        logger.warning(f"Could not create safety backup before import: {e}")
 
     for inst_dict in data.instruments:
         try:
@@ -1255,10 +1279,157 @@ def import_confirm(data: ImportConfirmRequest):
     return {"status": "ok", "committed": committed, "errors": commit_errors}
 
 
-# ---- Database management ------------------------------------------------- #
+# ---- Database management & Backup / Export -------------------------------- #
 
 @app.delete("/api/database")
 def wipe_db():
     """Wipe all data from the database (instruments + quotes)."""
+    try:
+        create_automatic_safety_backup(reason="pre_wipe")
+    except Exception as e:
+        logger.warning(f"Could not create safety backup before wipe: {e}")
     wipe_database()
     return {"status": "ok", "detail": "Database wiped"}
+
+
+@app.get("/api/export/csv")
+def export_csv():
+    """Export the complete watchlist to CSV format."""
+    csv_content = export_to_csv()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"portfoliomaster_export_{today_str}.csv"
+    return Response(
+        content=csv_content,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/export/excel")
+def export_excel():
+    """Export the complete watchlist to Excel (.xlsx) format."""
+    excel_bytes = export_to_excel()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"portfoliomaster_export_{today_str}.xlsx"
+    return StreamingResponse(
+        io.BytesIO(excel_bytes),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/export/json")
+def export_json():
+    """Export the complete watchlist to versioned JSON schema dump."""
+    json_str = export_to_json()
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"portfoliomaster_backup_{today_str}.json"
+    return Response(
+        content=json_str,
+        media_type="application/json; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.get("/api/backup/download")
+def download_backup():
+    """Download an atomic, thread-safe SQLite .db file snapshot."""
+    today_str = datetime.now().strftime("%Y-%m-%d")
+    filename = f"portfoliomaster_backup_{today_str}.db"
+
+    with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+        tmp_path = tmp.name
+
+    try:
+        create_sqlite_backup(target_path=tmp_path)
+        with open(tmp_path, "rb") as f:
+            data = f.read()
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    return Response(
+        content=data,
+        media_type="application/x-sqlite3",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@app.post("/api/backup/restore")
+async def restore_backup(file: UploadFile = File(...)):
+    """
+    Accept an uploaded .db or .json backup file, validate it,
+    create an automatic safety backup of current DB, restore data,
+    and return a summary of restored instruments.
+    """
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No se ha proporcionado ningún archivo")
+
+    contents = await file.read()
+    if len(contents) == 0:
+        raise HTTPException(status_code=400, detail="El archivo subido está vacío")
+
+    lower_name = file.filename.lower()
+
+    if lower_name.endswith(".json"):
+        try:
+            text = contents.decode("utf-8")
+            result = restore_from_json(text)
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error restaurando archivo JSON: {e}")
+
+    elif lower_name.endswith((".db", ".sqlite", ".sqlite3")):
+        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+            tmp.write(contents)
+            tmp_path = tmp.name
+
+        try:
+            is_valid, err = validate_sqlite_backup(tmp_path)
+            if not is_valid:
+                raise HTTPException(status_code=400, detail=err or "Archivo SQLite corrupto o inválido")
+            result = restore_sqlite_backup(tmp_path)
+            return result
+        except HTTPException:
+            raise
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=f"Error al restaurar la base de datos: {e}")
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except OSError:
+                    pass
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Formato de archivo no soportado. Debe ser un archivo .db (SQLite) o .json.",
+        )
+
+
+@app.get("/api/backup/list")
+def list_backups():
+    """List available local automatic backups in backups/."""
+    backups = list_automatic_backups()
+    return {"status": "ok", "backups": backups, "count": len(backups)}
+
+
+@app.post("/api/backup/restore/{filename}")
+def restore_local_backup_endpoint(filename: str):
+    """Restore database from a local automatic backup file in backups/."""
+    try:
+        result = restore_automatic_backup(filename)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error al restaurar la copia de seguridad: {e}")

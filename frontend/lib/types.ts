@@ -248,3 +248,27 @@ export interface AppConfig {
   last_refresh_result?: RefreshBatchResponse | null;
 }
 
+export interface BackupItem {
+  filename: string;
+  size_bytes: number;
+  created_at: string;
+  type: string;
+}
+
+export interface BackupListResponse {
+  status: string;
+  backups: BackupItem[];
+  count: number;
+}
+
+export interface RestoreResponse {
+  status: string;
+  restored_instruments?: number;
+  active_instruments?: number;
+  sample_tickers?: string[];
+  type?: string;
+  filename?: string;
+  backup_filename?: string;
+  detail?: string;
+}
+

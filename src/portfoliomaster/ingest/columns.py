@@ -24,6 +24,21 @@ COLUMN_MAPPING = {
         "COTIZACIÓN FECHA ANALISIS",
         "COTIZACION  FECHA ANALISIS",
     ],
+    "start_of_year_date": [
+        "Start of Year Date",
+        "Fecha Inicio Año",
+        "Fecha Inicio Ano",
+        "Fecha YTD",
+        "Fecha Inicio de Año",
+    ],
+    "start_of_year_price": [
+        "Start of Year Price",
+        "Precio Inicio Año",
+        "Precio Inicio Ano",
+        "Precio YTD",
+        "Cotización Inicio Año",
+        "Cotizacion Inicio Ano",
+    ],
     "target_price": [
         "Target Price",
         "Precio Objetivo",

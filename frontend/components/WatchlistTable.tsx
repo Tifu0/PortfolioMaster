@@ -36,7 +36,9 @@ import {
   PlusCircle,
   Calendar,
   FileText,
+  Download,
 } from 'lucide-react';
+import { BackupExportModal } from '@/components/BackupExportModal';
 import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse, AppConfig } from '@/lib/types';
 import {
   getPositions,
@@ -441,6 +443,9 @@ export function WatchlistTable({
   const [wipeModalOpen, setWipeModalOpen] = useState(false);
   const [wipingDb, setWipingDb] = useState(false);
 
+  // Backup & Export modal
+  const [backupModalOpen, setBackupModalOpen] = useState(false);
+
   // Toasts
   const [toasts, setToasts] = useState<ToastData[]>([]);
   const toastIdRef = React.useRef(0);
@@ -537,6 +542,18 @@ export function WatchlistTable({
       onDataChange?.(newPositions, newMetrics);
     } catch {
       // Silently handle — the toast from the caller is sufficient
+    }
+  }, [onDataChange]);
+
+  const handleDataRestored = useCallback(async () => {
+    try {
+      const [posRes, metRes] = await Promise.allSettled([getPositions(), getMetrics()]);
+      const newPos = posRes.status === 'fulfilled' ? posRes.value.positions || [] : [];
+      const newMet = metRes.status === 'fulfilled' ? metRes.value : null;
+      setData(newPos);
+      onDataChange?.(newPos, newMet);
+    } catch (err) {
+      console.error('Error refreshing data after restore:', err);
     }
   }, [onDataChange]);
 
@@ -1146,6 +1163,15 @@ export function WatchlistTable({
         loading={wipingDb}
       />
 
+      {/* Backup & Export Modal */}
+      <BackupExportModal
+        isOpen={backupModalOpen}
+        onClose={() => setBackupModalOpen(false)}
+        onSuccess={(msg) => addToast('success', msg)}
+        onError={(msg) => addToast('error', msg)}
+        onDataRestored={handleDataRestored}
+      />
+
       {/* Search, Filters & Action Buttons Bar */}
       <div className="flex flex-col 2xl:flex-row items-stretch 2xl:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-2.5 sm:p-3 rounded-xl">
         {/* Left side: Search & Filter Controls */}
@@ -1219,6 +1245,18 @@ export function WatchlistTable({
               <span className="hidden sm:inline">Añadir Valor</span>
             </button>
           )}
+
+          {/* Export / Backup Button */}
+          <button
+            onClick={() => setBackupModalOpen(true)}
+            className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
+              bg-zinc-800/90 text-zinc-200 border border-zinc-700
+              hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
+            title="Exportar datos a Excel, CSV, JSON o gestionar copias de seguridad"
+          >
+            <Download className="w-4 h-4 text-blue-400" />
+            <span className="hidden sm:inline">Exportar / Copia</span>
+          </button>
 
           {/* Batch Refresh (Cotizaciones + Precios de Análisis) */}
           <button

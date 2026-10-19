@@ -17,6 +17,8 @@ import type {
   RefreshBatchResponse,
   RefreshSingleResponse,
   AppConfig,
+  BackupListResponse,
+  RestoreResponse,
 } from './types';
 
 const API_BASE_URL =
@@ -301,6 +303,119 @@ export async function checkYahooTicker(ticker: string, currency?: string): Promi
 export async function getConfig(): Promise<AppConfig> {
   const res = await fetch(`${API_BASE_URL}/api/config`);
   return handleResponse<AppConfig>(res);
+}
+
+/**
+ * Helper to trigger a browser file download from a Blob.
+ */
+function triggerFileDownload(blob: Blob, defaultFilename: string, contentDisposition?: string | null): void {
+  let filename = defaultFilename;
+  if (contentDisposition) {
+    const filenameMatch = contentDisposition.match(/filename=["']?([^"';]+)["']?/i);
+    if (filenameMatch && filenameMatch[1]) {
+      filename = filenameMatch[1].trim();
+    }
+  }
+
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.style.display = 'none';
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(() => {
+    document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+  }, 200);
+}
+
+/**
+ * 17. GET /api/export/{format}
+ * Downloads watchlist data in CSV, Excel (.xlsx), or JSON format.
+ */
+export async function exportWatchlist(format: 'csv' | 'excel' | 'json'): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/export/${format}`);
+  if (!res.ok) {
+    let errorDetail = `Export failed (${res.status})`;
+    try {
+      const err = await res.json();
+      if (err && err.detail) errorDetail = String(err.detail);
+    } catch {
+      // not json
+    }
+    throw new ApiError(errorDetail, res.status);
+  }
+
+  const blob = await res.blob();
+  const ext = format === 'excel' ? 'xlsx' : format;
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultFilename = `portfoliomaster_export_${today}.${ext}`;
+  const disposition = res.headers.get('Content-Disposition');
+
+  triggerFileDownload(blob, defaultFilename, disposition);
+}
+
+/**
+ * 18. GET /api/backup/download
+ * Downloads atomic raw SQLite database snapshot (.db).
+ */
+export async function downloadDatabaseBackup(): Promise<void> {
+  const res = await fetch(`${API_BASE_URL}/api/backup/download`);
+  if (!res.ok) {
+    let errorDetail = `Backup download failed (${res.status})`;
+    try {
+      const err = await res.json();
+      if (err && err.detail) errorDetail = String(err.detail);
+    } catch {
+      // not json
+    }
+    throw new ApiError(errorDetail, res.status);
+  }
+
+  const blob = await res.blob();
+  const today = new Date().toISOString().slice(0, 10);
+  const defaultFilename = `portfoliomaster_backup_${today}.db`;
+  const disposition = res.headers.get('Content-Disposition');
+
+  triggerFileDownload(blob, defaultFilename, disposition);
+}
+
+/**
+ * 19. GET /api/backup/list
+ * Lists available local automatic snapshots in backups/.
+ */
+export async function getBackupList(): Promise<BackupListResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/backup/list`, {
+    cache: 'no-store',
+  });
+  return handleResponse<BackupListResponse>(res);
+}
+
+/**
+ * 20. POST /api/backup/restore
+ * Restores database from an uploaded .db or .json file.
+ */
+export async function restoreBackupFile(file: File): Promise<RestoreResponse> {
+  const formData = new FormData();
+  formData.append('file', file, file.name);
+
+  const res = await fetch(`${API_BASE_URL}/api/backup/restore`, {
+    method: 'POST',
+    body: formData,
+  });
+  return handleResponse<RestoreResponse>(res);
+}
+
+/**
+ * 21. POST /api/backup/restore/{filename}
+ * Restores database from a local automatic snapshot in backups/.
+ */
+export async function restoreLocalBackup(filename: string): Promise<RestoreResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/backup/restore/${encodeURIComponent(filename)}`, {
+    method: 'POST',
+  });
+  return handleResponse<RestoreResponse>(res);
 }
 
 

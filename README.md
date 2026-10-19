@@ -36,6 +36,13 @@ Built on a decoupled modern architecture:
   - Two-step import workflow: dry-run validation with preview table, anomaly detection, and explicit database commit.
   - Automatic column mapping and ticker normalization (e.g. `BME:MAP`, `EPA:MC`, `US` prefixes).
 
+- **💾 Backup, Export & Safe Restoration System**:
+  - **Multi-Format Watchlist Export**: Quick download of the complete watchlist into **Excel (`.xlsx`)**, **CSV (`.csv`)**, or structured **JSON (`.json`)** with live quotes, calculated returns, and research notes.
+  - **100% Round-Trip Ingest Compatibility**: Column headers and numeric formats in exported `.xlsx` and `.csv` files are 100% compatible with the import pipeline—enabling seamless re-import without data loss (preserving target prices, analysis benchmarks, start-of-year YTD prices, and notes).
+  - **Atomic SQLite Snapshots (`.db`)**: Safe snapshot creation using Python's native `sqlite3.Connection.backup()` API, avoiding file locks and corruption during concurrent quote refreshes.
+  - **Automatic Local Safety Backups**: Automated snapshots saved to `backups/` prior to any destructive operation (`DELETE /api/database`, `POST /api/import/confirm`, or database restorations), with automatic rotation maintaining the 10 most recent snapshots.
+  - **SQLite & JSON Restore Validator**: Upload or drag-and-drop restore with `PRAGMA integrity_check` verification, schema validation, and 1-click restore from local automatic snapshots with confirmation guards.
+
 - **➕ Manual Position Management**:
   - Modal form to quickly register new instruments or edit existing targets, analysis prices, start-of-year YTD prices, and custom research notes, with instant Yahoo Finance lookups.
   - Safe instrument deletion and one-click database reset with confirmation guards.
@@ -117,25 +124,28 @@ PortfolioMaster/
 │   ├── api/
 │   │   └── main.py             # FastAPI application and REST endpoints
 │   └── tests/
-│       └── test_api.py         # Backend API integration tests (28 tests)
+│       ├── test_api.py         # Backend API integration tests (28 tests)
+│       └── test_backup_api.py  # Backup & Export API integration tests (10 tests)
 │
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
-│   ├── components/             # React components (WatchlistTable, MetricCards, ImportView, ManualEntryModal)
+│   ├── components/             # React components (WatchlistTable, BackupExportModal, MetricCards, ImportView, ManualEntryModal)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
 │   └── scripts/                # Automated verification and test scripts
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
+│   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
 │   ├── core/                   # Financial formulas, calculations, models, and configuration
 │   ├── db/                     # SQLite persistence layer (connection and repository CRUD)
 │   ├── ingest/                 # Spreadsheet parser, normalizer, and validator
 │   ├── providers/              # Market data providers (Yahoo Finance adapter & mock)
 │   └── refresh/                # Batch quote runner with fault tolerance
 │
-├── tests/                      # Core test suite (calculations, database, ingest, providers)
+├── backups/                    # Local automatic safety snapshots (rotated, git-ignored)
+├── tests/                      # Core test suite (calculations, database, ingest, providers, backup/export)
 ├── portfolio.db                # Local SQLite database file
-├── requirements.txt            # Python dependencies (FastAPI, Pandas, yfinance, etc.)
+├── requirements.txt            # Python dependencies (FastAPI, Pandas, openpyxl, yfinance, etc.)
 ├── pyproject.toml              # Python package metadata
 ├── pytest.ini                  # Pytest configuration
 └── run.bat                     # Windows 1-step launch script
@@ -164,8 +174,15 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 | `POST` | `/api/instruments/resolve-missing-ytd-prices` | Auto-resolve start-of-year (YTD) reference prices from Yahoo Finance |
 | `GET` | `/api/config` | Retrieve runtime configuration (refresh interval, batch size, last refresh status) |
 | `POST` | `/api/import/preview` | Dry-run validation of an uploaded CSV/Excel spreadsheet |
-| `POST` | `/api/import/confirm` | Commit validated spreadsheet instruments into the database |
-| `DELETE` | `/api/database` | Reset the SQLite database completely |
+| `POST` | `/api/import/confirm` | Commit validated spreadsheet instruments into the database (creates safety backup) |
+| `DELETE` | `/api/database` | Reset the SQLite database completely (creates safety backup) |
+| `GET` | `/api/export/csv` | Download active watchlist as an ingest-compatible `.csv` file |
+| `GET` | `/api/export/excel` | Download active watchlist as a styled, ingest-compatible `.xlsx` spreadsheet |
+| `GET` | `/api/export/json` | Download active watchlist as a structured, versioned `.json` dump |
+| `GET` | `/api/backup/download` | Download an atomic, thread-safe raw SQLite snapshot (`.db`) |
+| `POST` | `/api/backup/restore` | Restore database from an uploaded `.db` or `.json` file with pre-restore safety snapshot |
+| `GET` | `/api/backup/list` | List available automatic local snapshots in `backups/` |
+| `POST` | `/api/backup/restore/{filename}` | 1-click restore from a local snapshot file |
 
 ---
 
@@ -174,7 +191,7 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 Both backend and frontend contain automated test suites.
 
 ### Backend & Core Tests (Python)
-Run all 54 unit and integration tests with `pytest`:
+Run all 72 unit and integration tests with `pytest`:
 ```bash
 venv\Scripts\activate
 pytest

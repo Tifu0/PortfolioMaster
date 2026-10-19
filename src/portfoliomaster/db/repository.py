@@ -204,7 +204,15 @@ def get_quote_by_instrument_id(instrument_id: int) -> Quote | None:
 
     from ..core.models import QuoteStatus
     try:
-        status_enum = QuoteStatus[row["status"]] if row["status"] else QuoteStatus.UNAVAILABLE
+        raw_status = row["status"]
+        if raw_status is None:
+            status_enum = QuoteStatus.UNAVAILABLE
+        elif isinstance(raw_status, int) or (isinstance(raw_status, str) and raw_status.isdigit()):
+            status_enum = QuoteStatus(int(raw_status))
+        elif str(raw_status) in QuoteStatus.__members__:
+            status_enum = QuoteStatus[str(raw_status)]
+        else:
+            status_enum = QuoteStatus.UNAVAILABLE
     except (KeyError, ValueError):
         status_enum = QuoteStatus.UNAVAILABLE
 
