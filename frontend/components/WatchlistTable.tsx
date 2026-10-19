@@ -45,6 +45,7 @@ import { BackupExportModal } from '@/components/BackupExportModal';
 import { usePortfolio } from '@/context/PortfolioContext';
 import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse, AppConfig } from '@/lib/types';
 import {
+  fetchAnalysisPrice,
   getPositions,
   getMetrics,
   refreshAll,
@@ -262,6 +263,20 @@ function timeAgo(isoDate: string | null | undefined): string {
   } catch {
     return '';
   }
+}
+
+function formatStackedDate(isoDate: string | null | undefined): { dayMonth: string; year: string } | null {
+  if (!isoDate || typeof isoDate !== 'string') return null;
+  const parts = isoDate.split('-');
+  if (parts.length >= 3 && parts[0] && parts[1] && parts[2]) {
+    const year = parts[0].trim();
+    const month = parts[1].trim();
+    const day = parts[2].trim().slice(0, 2);
+    if (day && month && year) {
+      return { dayMonth: `${day}/${month}`, year };
+    }
+  }
+  return null;
 }
 
 // ========================================================================== //
@@ -634,6 +649,21 @@ export function WatchlistTable({
   const [commentDrafts, setCommentDrafts] = useState<Record<string, string>>({});
   const [savingCommentTicker, setSavingCommentTicker] = useState<string | null>(null);
 
+  // Inline Analysis Date editing states
+  const [editingDateTicker, setEditingDateTicker] = useState<string | null>(null);
+  const [editingDateValue, setEditingDateValue] = useState<string>('');
+  const [updatingDateTickers, setUpdatingDateTickers] = useState<Set<string>>(new Set());
+
+  const handleStartEditingDate = useCallback((ticker: string, currentDate: string | null) => {
+    setEditingDateTicker(ticker);
+    setEditingDateValue(currentDate || '');
+  }, []);
+
+  const handleCancelEditingDate = useCallback(() => {
+    setEditingDateTicker(null);
+    setEditingDateValue('');
+  }, []);
+
   const toggleDescription = useCallback((ticker: string) => {
     setExpandedDescriptionTickers((prev) => {
       const next = new Set(prev);
@@ -664,13 +694,13 @@ export function WatchlistTable({
 
     // Instant optimistic update with rollback support
     const rollback = portfolioContext?.optimisticUpdatePosition(ticker, { comment: newComment });
-    setData((prev) => {
-      const updated = prev.map((item) =>
-        item.user_ticker === ticker ? { ...item, comment: newComment } : item
-      );
+    const updated = data.map((item) =>
+      item.user_ticker === ticker ? { ...item, comment: newComment } : item
+    );
+    setData(updated);
+    if (!portfolioContext) {
       onDataChange?.(updated, activeMetrics);
-      return updated;
-    });
+    }
 
     try {
       await updateInstrument(ticker, { comment: newComment });
@@ -680,6 +710,10 @@ export function WatchlistTable({
       }
     } catch (err) {
       rollback?.();
+      if (!portfolioContext) {
+        setData(data);
+        onDataChange?.(data, activeMetrics);
+      }
       const msg = err instanceof Error ? err.message : String(err);
       addToast('error', `Error al guardar la descripción de ${ticker}: ${msg}`);
     } finally {
@@ -732,6 +766,80 @@ export function WatchlistTable({
       console.error('Error refreshing data after restore:', err);
     }
   }, [portfolioContext, onDataChange]);
+
+  // ── Inline Analysis Date Save & Yahoo Price Recalculation ──────────── //
+
+  const handleSaveDate = useCallback(
+    async (ticker: string, newDate: string, originalDate: string | null) => {
+      const cleanNewDate = newDate.trim() || null;
+      const cleanOriginalDate = originalDate?.trim() || null;
+
+      // Close editor immediately for snappy interaction
+      setEditingDateTicker(null);
+      setEditingDateValue('');
+
+      if (cleanNewDate === cleanOriginalDate) {
+        return;
+      }
+
+      setUpdatingDateTickers((prev) => new Set(prev).add(ticker));
+
+      // Instant optimistic UI update with rollback support
+      const rollback = portfolioContext?.optimisticUpdatePosition(ticker, {
+        analysis_date: cleanNewDate,
+      });
+      const updated = data.map((item) =>
+        item.user_ticker === ticker ? { ...item, analysis_date: cleanNewDate } : item
+      );
+      setData(updated);
+      if (!portfolioContext) {
+        onDataChange?.(updated, activeMetrics);
+      }
+
+      try {
+        await updateInstrument(ticker, { analysis_date: cleanNewDate });
+
+        if (cleanNewDate) {
+          try {
+            const histRes = await fetchAnalysisPrice(ticker, cleanNewDate);
+            addToast(
+              'success',
+              `${ticker}: fecha de análisis actualizada (${cleanNewDate}) y precio histórico obtenido (${formatCurrency(histRes.analysis_reference_price, 'EUR')})`
+            );
+          } catch (priceErr) {
+            const priceMsg = priceErr instanceof Error ? priceErr.message : String(priceErr);
+            addToast(
+              'info',
+              `${ticker}: fecha guardada (${cleanNewDate}), pero no se pudo obtener precio histórico en Yahoo Finance: ${priceMsg}`
+            );
+          }
+        } else {
+          addToast('success', `${ticker}: fecha de análisis eliminada`);
+        }
+
+        if (portfolioContext) {
+          await portfolioContext.refreshPortfolioData({ silent: true });
+        } else {
+          await reloadData();
+        }
+      } catch (err) {
+        rollback?.();
+        if (!portfolioContext) {
+          setData(data);
+          onDataChange?.(data, activeMetrics);
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        addToast('error', `Error al actualizar la fecha de ${ticker}: ${msg}`);
+      } finally {
+        setUpdatingDateTickers((prev) => {
+          const next = new Set(prev);
+          next.delete(ticker);
+          return next;
+        });
+      }
+    },
+    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData]
+  );
 
   // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
 
@@ -888,6 +996,125 @@ export function WatchlistTable({
 
   const columns = useMemo<ColumnDef<Position>[]>(
     () => [
+      {
+        accessorKey: 'analysis_date',
+        size: 85,
+        minSize: 70,
+        maxSize: 160,
+        sortingFn: (rowA, rowB, columnId) => {
+          const a = rowA.getValue<string | null>(columnId);
+          const b = rowB.getValue<string | null>(columnId);
+          if (!a && !b) return 0;
+          if (!a) return 1;
+          if (!b) return -1;
+          return a.localeCompare(b);
+        },
+        header: ({ column }) => (
+          <button
+            onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+            className="flex items-center justify-center gap-1 mx-auto hover:text-white transition-colors uppercase tracking-wider select-none text-center group/th-date"
+            title="Ordenar por fecha de análisis"
+          >
+            <div className="flex flex-col items-center text-[10px] leading-tight font-semibold">
+              <span>Fecha</span>
+              <span className="text-[9px] text-zinc-400 font-medium">Análisis</span>
+            </div>
+            {column.getIsSorted() === 'asc' ? (
+              <ArrowUp className="w-3 h-3 text-emerald-400 shrink-0" />
+            ) : column.getIsSorted() === 'desc' ? (
+              <ArrowDown className="w-3 h-3 text-emerald-400 shrink-0" />
+            ) : (
+              <ArrowUpDown className="w-3 h-3 opacity-40 shrink-0 group-hover/th-date:opacity-80" />
+            )}
+          </button>
+        ),
+        cell: ({ row }) => {
+          const pos = row.original;
+          const ticker = pos.user_ticker;
+          const isEditing = editingDateTicker === ticker;
+          const isUpdating = updatingDateTickers.has(ticker);
+
+          if (isEditing) {
+            return (
+              <div className="flex items-center justify-center w-full" onClick={(e) => e.stopPropagation()}>
+                <input
+                  ref={(el) => {
+                    if (el && !el.dataset.pickerOpened) {
+                      el.dataset.pickerOpened = 'true';
+                      try {
+                        el.showPicker?.();
+                      } catch {
+                        // Safe fallback if browser security restricts showPicker
+                      }
+                    }
+                  }}
+                  type="date"
+                  value={editingDateValue}
+                  autoFocus
+                  onChange={(e) => setEditingDateValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      handleSaveDate(ticker, editingDateValue, pos.analysis_date);
+                    } else if (e.key === 'Escape') {
+                      e.preventDefault();
+                      handleCancelEditingDate();
+                    }
+                  }}
+                  onBlur={() => {
+                    if (editingDateValue !== (pos.analysis_date || '')) {
+                      handleSaveDate(ticker, editingDateValue, pos.analysis_date);
+                    } else {
+                      handleCancelEditingDate();
+                    }
+                  }}
+                  className="w-full max-w-[90px] bg-zinc-950 border border-emerald-500/80 rounded px-1 py-0.5 text-[11px] text-zinc-100 font-mono tabular-nums focus:outline-none focus:ring-1 focus:ring-emerald-500 shadow-sm transition-all text-center"
+                />
+              </div>
+            );
+          }
+
+          const parsed = formatStackedDate(pos.analysis_date);
+
+          if (parsed) {
+            return (
+              <div
+                onClick={() => handleStartEditingDate(ticker, pos.analysis_date)}
+                className="flex flex-col items-center justify-center py-1 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
+                title={`Fecha de análisis: ${pos.analysis_date} (Haz clic para editar)`}
+              >
+                <div className="flex items-center gap-1">
+                  <span className="text-xs font-semibold text-zinc-200 group-hover/date:text-emerald-400 font-mono tabular-nums leading-tight transition-colors">
+                    {parsed.dayMonth}
+                  </span>
+                  {isUpdating && (
+                    <Loader2 className="w-3 h-3 animate-spin text-emerald-400 shrink-0" />
+                  )}
+                </div>
+                <span className="text-[10px] text-zinc-500 font-mono tabular-nums leading-none mt-0.5">
+                  {parsed.year}
+                </span>
+              </div>
+            );
+          }
+
+          return (
+            <div
+              onClick={() => handleStartEditingDate(ticker, pos.analysis_date)}
+              className="flex items-center justify-center py-1 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto min-h-[30px]"
+              title="Haz clic para asignar fecha de análisis"
+            >
+              {isUpdating ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+              ) : (
+                <span className="text-zinc-500 group-hover/date:text-zinc-300 font-mono text-xs tabular-nums transition-colors">
+                  —
+                </span>
+              )}
+            </div>
+          );
+        },
+      },
       {
         accessorKey: 'user_ticker',
         size: 130,
@@ -1101,24 +1328,13 @@ export function WatchlistTable({
           </button>
         ),
         cell: ({ row }) => {
-          const pos = row.original;
           const { text, colorClass } = formatPercent(
-            pos.ytd_variation,
-            pos.ytd_variation_valid
+            row.original.ytd_variation,
+            row.original.ytd_variation_valid
           );
           return (
-            <div className="flex flex-col items-end">
+            <div className="flex items-center justify-end">
               <span className={colorClass}>{text}</span>
-              {pos.start_of_year_price !== null && pos.start_of_year_price !== undefined ? (
-                <span className="text-[10px] text-zinc-500 font-mono">
-                  {formatCurrency(pos.start_of_year_price, pos.currency)}
-                  {pos.start_of_year_date ? ` (${pos.start_of_year_date})` : ''}
-                </span>
-              ) : (
-                <span className="text-[10px] text-zinc-600 font-mono">
-                  sin ref YTD
-                </span>
-              )}
             </div>
           );
         },
@@ -1144,29 +1360,13 @@ export function WatchlistTable({
           </button>
         ),
         cell: ({ row }) => {
-          const pos = row.original;
           const { text, colorClass } = formatPercent(
-            pos.variation_since_analysis,
-            pos.variation_since_analysis_valid
+            row.original.variation_since_analysis,
+            row.original.variation_since_analysis_valid
           );
           return (
-            <div className="flex flex-col items-end">
+            <div className="flex items-center justify-end">
               <span className={colorClass}>{text}</span>
-              {pos.analysis_reference_price !== null && pos.analysis_reference_price !== undefined ? (
-                <span className="text-[10px] text-zinc-500 font-mono">
-                  {formatCurrency(pos.analysis_reference_price, pos.currency)}
-                  {pos.analysis_date ? ` (${pos.analysis_date})` : ''}
-                </span>
-              ) : pos.analysis_date ? (
-                <button
-                  type="button"
-                  onClick={() => onEditTicker?.(pos.user_ticker)}
-                  className="text-[10px] text-amber-500/80 hover:text-amber-400 font-mono underline decoration-dotted transition-colors"
-                  title={`Fecha: ${pos.analysis_date}. Haz clic para asignar precio o consultar Yahoo.`}
-                >
-                  {pos.analysis_date} (sin ref)
-                </button>
-              ) : null}
             </div>
           );
         },
@@ -1299,6 +1499,12 @@ export function WatchlistTable({
       },
     ],
     [
+      editingDateTicker,
+      editingDateValue,
+      updatingDateTickers,
+      handleStartEditingDate,
+      handleCancelEditingDate,
+      handleSaveDate,
       refreshingTickers,
       batchRefreshing,
       handleSingleRefresh,

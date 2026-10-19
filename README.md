@@ -15,8 +15,7 @@ Built on a decoupled modern architecture:
 ## ✨ Features
 
 - **📊 Interactive Watchlist Table**:
-  - Pre-computed financial metrics: Daily Variation (`±%`), **Year-To-Date (YTD) Variation (`±%`)** relative to start-of-year price, Return vs. Analysis Price (`±%`), and Required Decline to Target Price (`±%`).
-  - **📅 Start-of-Year (YTD) & Analysis Benchmarks**: Contextual sub-labels showing the exact reference price and date beneath percentage variations (e.g., `5,50 € (2026-01-02)`).
+  - **📅 Inline Analysis Date Column**: Dedicated column for displaying the analysis date with single-click inline editing, keyboard shortcuts (`Enter` to save, `Escape` to cancel, blur to commit), and automatic price recalculation via Yahoo Finance.
   - **📝 Inline Research Notes & Descriptions**: Clickable document icon (`FileText`) on each ticker to view and edit company analysis notes, investment thesis, and comments directly inline with SQLite persistence.
   - **↔️ Interactive Column Resizing**: Google Sheets-style column width adjustment with drag handles, double-click to auto-reset individual columns, automatic `localStorage` persistence, and a **`Restore Columns`** button in the toolbar.
   - Multi-column sorting powered by TanStack Table.

@@ -207,8 +207,10 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
   const handleDataChange = useCallback(
     (newPositions: Position[], newMetrics: PortfolioMetrics | null) => {
       if (portfolioContext) {
-        portfolioContext.setPositions(newPositions);
-        portfolioContext.setMetrics(newMetrics);
+        queueMicrotask(() => {
+          portfolioContext.setPositions(newPositions);
+          portfolioContext.setMetrics(newMetrics);
+        });
       } else {
         setLocalPositions(newPositions);
         setLocalMetrics(newMetrics);
