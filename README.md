@@ -37,11 +37,18 @@ Built on a decoupled modern architecture:
   - Automatic column mapping and ticker normalization (e.g. `BME:MAP`, `EPA:MC`, `US` prefixes).
 
 - **💾 Backup, Export & Safe Restoration System**:
+  - **Dedicated "Backup & Export" View & Tab**: Accessible directly from the main navigation bar (`/backup`), offering full-page access to watchlist exports (`.xlsx`, `.csv`, `.json`), SQLite snapshots (`.db`), and backup restorations without relying solely on modals.
   - **Multi-Format Watchlist Export**: Quick download of the complete watchlist into **Excel (`.xlsx`)**, **CSV (`.csv`)**, or structured **JSON (`.json`)** with live quotes, calculated returns, and research notes.
   - **100% Round-Trip Ingest Compatibility**: Column headers and numeric formats in exported `.xlsx` and `.csv` files are 100% compatible with the import pipeline—enabling seamless re-import without data loss (preserving target prices, analysis benchmarks, start-of-year YTD prices, and notes).
   - **Atomic SQLite Snapshots (`.db`)**: Safe snapshot creation using Python's native `sqlite3.Connection.backup()` API, avoiding file locks and corruption during concurrent quote refreshes.
   - **Automatic Local Safety Backups**: Automated snapshots saved to `backups/` prior to any destructive operation (`DELETE /api/database`, `POST /api/import/confirm`, or database restorations), with automatic rotation maintaining the 10 most recent snapshots.
   - **SQLite & JSON Restore Validator**: Upload or drag-and-drop restore with `PRAGMA integrity_check` verification, schema validation, and 1-click restore from local automatic snapshots with confirmation guards.
+
+- **⚙️ Customizable Action Toolbar with Persistence**:
+  - **Toolbar Customization Popover**: Positioned at the far right of the action toolbar, allowing users to toggle the visibility of individual action buttons (Update Quotes, Add Instrument, Restore Columns, Export / Copy, Import Values, and Clear DB).
+  - **Safe Database Reset Protection**: The destructive `Clear DB` button is hidden by default and protected by both toolbar visibility toggle and confirmation modal guard.
+  - **Client-Side Persistence & Hydration Safety**: Button visibility preferences are remembered across page reloads via `localStorage` (`portfoliomaster_toolbar_config`) with hydration mismatch protection in Next.js 16.
+  - **Reset to Defaults**: 1-click restore to recommended default toolbar layout.
 
 - **➕ Manual Position Management**:
   - Modal form to quickly register new instruments or edit existing targets, analysis prices, start-of-year YTD prices, and custom research notes, with instant Yahoo Finance lookups.
@@ -129,7 +136,7 @@ PortfolioMaster/
 │
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
-│   ├── components/             # React components (WatchlistTable, BackupExportModal, MetricCards, ImportView, ManualEntryModal)
+│   ├── components/             # React components (WatchlistTable, BackupExportView, BackupExportModal, MetricCards, ImportView, ManualEntryModal)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
 │   └── scripts/                # Automated verification and test scripts

@@ -5,7 +5,8 @@
 // modal all require interactive React state (useState, useMemo, useCallback)
 // and TanStack Table client-side hooks.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   ColumnDef,
   ColumnSizingState,
@@ -37,6 +38,8 @@ import {
   Calendar,
   FileText,
   Download,
+  Upload,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { BackupExportModal } from '@/components/BackupExportModal';
 import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse, AppConfig } from '@/lib/types';
@@ -50,6 +53,74 @@ import {
   updateInstrument,
   wipeDatabase,
 } from '@/lib/api';
+
+// ========================================================================== //
+// Toolbar Configuration Types & Defaults
+// ========================================================================== //
+
+export interface ToolbarConfig {
+  updateQuotes: boolean;
+  addInstrument: boolean;
+  restoreColumns: boolean;
+  exportBackup: boolean;
+  importValues: boolean;
+  wipeDatabase: boolean;
+}
+
+export const DEFAULT_TOOLBAR_CONFIG: ToolbarConfig = {
+  updateQuotes: true,
+  addInstrument: true,
+  restoreColumns: true,
+  exportBackup: true,
+  importValues: false,
+  wipeDatabase: false,
+};
+
+export const TOOLBAR_STORAGE_KEY = 'portfoliomaster_toolbar_config';
+
+const TOOLBAR_ITEMS: Array<{
+  key: keyof ToolbarConfig;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  iconColor: string;
+}> = [
+  {
+    key: 'updateQuotes',
+    label: 'Actualizar Cotizaciones',
+    icon: RefreshCw,
+    iconColor: 'text-emerald-400',
+  },
+  {
+    key: 'addInstrument',
+    label: 'Añadir Instrumento',
+    icon: PlusCircle,
+    iconColor: 'text-emerald-400',
+  },
+  {
+    key: 'restoreColumns',
+    label: 'Restablecer Columnas',
+    icon: RotateCcw,
+    iconColor: 'text-zinc-400',
+  },
+  {
+    key: 'exportBackup',
+    label: 'Exportar / Copia',
+    icon: Download,
+    iconColor: 'text-blue-400',
+  },
+  {
+    key: 'importValues',
+    label: 'Importar Valores',
+    icon: Upload,
+    iconColor: 'text-emerald-400',
+  },
+  {
+    key: 'wipeDatabase',
+    label: 'Borrar Base de Datos',
+    icon: Trash2,
+    iconColor: 'text-rose-400',
+  },
+];
 
 // ========================================================================== //
 // Props
@@ -446,9 +517,43 @@ export function WatchlistTable({
   // Backup & Export modal
   const [backupModalOpen, setBackupModalOpen] = useState(false);
 
+  const router = useRouter();
+
+  // Toolbar customization & persistence
+  const [toolbarConfig, setToolbarConfig] = useState<ToolbarConfig>(DEFAULT_TOOLBAR_CONFIG);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const settingsRef = useRef<HTMLDivElement>(null);
+
+  // Load toolbar configuration from localStorage safely after hydration
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(TOOLBAR_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && typeof parsed === 'object') {
+          setToolbarConfig((prev) => ({ ...prev, ...parsed }));
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleToggleToolbarAction = useCallback((key: keyof ToolbarConfig) => {
+    setToolbarConfig((prev) => {
+      const next = { ...prev, [key]: !prev[key] };
+      try {
+        localStorage.setItem(TOOLBAR_STORAGE_KEY, JSON.stringify(next));
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  }, []);
+
   // Toasts
   const [toasts, setToasts] = useState<ToastData[]>([]);
-  const toastIdRef = React.useRef(0);
+  const toastIdRef = useRef(0);
 
   const addToast = useCallback((type: ToastData['type'], message: string) => {
     const id = ++toastIdRef.current;
@@ -458,6 +563,41 @@ export function WatchlistTable({
   const dismissToast = useCallback((id: number) => {
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
+
+  const handleResetToolbarConfig = useCallback(() => {
+    setToolbarConfig(DEFAULT_TOOLBAR_CONFIG);
+    try {
+      localStorage.removeItem(TOOLBAR_STORAGE_KEY);
+    } catch {
+      // ignore
+    }
+    addToast('info', 'Barra de herramientas restablecida a los valores por defecto');
+  }, [addToast]);
+
+  // Click outside and escape key handling for settings popover
+  useEffect(() => {
+    if (!settingsOpen) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (settingsRef.current && !settingsRef.current.contains(e.target as Node)) {
+        setSettingsOpen(false);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setSettingsOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [settingsOpen]);
 
   const handleResetColumnWidths = useCallback(() => {
     setColumnSizing({});
@@ -1173,7 +1313,7 @@ export function WatchlistTable({
       />
 
       {/* Search, Filters & Action Buttons Bar */}
-      <div className="flex flex-col 2xl:flex-row items-stretch 2xl:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-2.5 sm:p-3 rounded-xl">
+      <div className="relative z-30 flex flex-col 2xl:flex-row items-stretch 2xl:items-center justify-between gap-3 bg-zinc-900/80 backdrop-blur border border-zinc-800 p-2.5 sm:p-3 rounded-xl">
         {/* Left side: Search & Filter Controls */}
         <div className="flex flex-wrap items-center gap-2 flex-1 min-w-0">
           {/* Search Input */}
@@ -1233,7 +1373,7 @@ export function WatchlistTable({
         {/* Right side: Action Buttons */}
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
           {/* Add Instrument Button */}
-          {onAddInstrument && (
+          {toolbarConfig.addInstrument && onAddInstrument && (
             <button
               onClick={onAddInstrument}
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
@@ -1246,73 +1386,182 @@ export function WatchlistTable({
             </button>
           )}
 
+          {/* Quick Import Values Button */}
+          {toolbarConfig.importValues && (
+            <button
+              onClick={() => router.push('/import')}
+              className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
+                bg-zinc-800/90 text-zinc-200 border border-zinc-700
+                hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
+              title="Importar valores desde hojas de cálculo CSV o Excel"
+            >
+              <Upload className="w-4 h-4 text-emerald-400" />
+              <span className="hidden sm:inline">Importar</span>
+            </button>
+          )}
+
           {/* Export / Backup Button */}
-          <button
-            onClick={() => setBackupModalOpen(true)}
-            className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
-              bg-zinc-800/90 text-zinc-200 border border-zinc-700
-              hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-            title="Exportar datos a Excel, CSV, JSON o gestionar copias de seguridad"
-          >
-            <Download className="w-4 h-4 text-blue-400" />
-            <span className="hidden sm:inline">Exportar / Copia</span>
-          </button>
+          {toolbarConfig.exportBackup && (
+            <button
+              onClick={() => setBackupModalOpen(true)}
+              className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
+                bg-zinc-800/90 text-zinc-200 border border-zinc-700
+                hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
+              title="Exportar datos a Excel, CSV, JSON o gestionar copias de seguridad"
+            >
+              <Download className="w-4 h-4 text-blue-400" />
+              <span className="hidden sm:inline">Exportar / Copia</span>
+            </button>
+          )}
 
           {/* Batch Refresh (Cotizaciones + Precios de Análisis) */}
-          <button
-            onClick={handleBatchRefresh}
-            disabled={batchRefreshing || data.length === 0}
-            className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
-              bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
-              hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
-              disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-            title="Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance"
-          >
-            {batchRefreshing ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span className="hidden sm:inline">Actualizando...</span>
-              </>
-            ) : (
-              <>
-                <RefreshCw className="w-4 h-4" />
-                <span className="hidden sm:inline">Actualizar Cotizaciones</span>
-              </>
-            )}
-          </button>
+          {toolbarConfig.updateQuotes && (
+            <button
+              onClick={handleBatchRefresh}
+              disabled={batchRefreshing || data.length === 0}
+              className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
+                bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
+                hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
+                disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+              title="Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance"
+            >
+              {batchRefreshing ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  <span className="hidden sm:inline">Actualizando...</span>
+                </>
+              ) : (
+                <>
+                  <RefreshCw className="w-4 h-4" />
+                  <span className="hidden sm:inline">Actualizar Cotizaciones</span>
+                </>
+              )}
+            </button>
+          )}
 
           {/* Reset Column Widths Button */}
-          <button
-            onClick={handleResetColumnWidths}
-            disabled={!hasCustomColumnSizing}
-            className={`h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all shrink-0 border ${
-              hasCustomColumnSizing
-                ? 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm cursor-pointer'
-                : 'bg-zinc-900/40 text-zinc-600 border-zinc-800/60 cursor-not-allowed opacity-50'
-            }`}
-            title={
-              hasCustomColumnSizing
-                ? 'Restablecer el ancho de las columnas a los valores por defecto'
-                : 'Las columnas ya tienen su ancho por defecto'
-            }
-          >
-            <RotateCcw className="w-3.5 h-3.5" />
-            <span className="hidden xl:inline">Restablecer Columnas</span>
-          </button>
+          {toolbarConfig.restoreColumns && (
+            <button
+              onClick={handleResetColumnWidths}
+              disabled={!hasCustomColumnSizing}
+              className={`h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all shrink-0 border ${
+                hasCustomColumnSizing
+                  ? 'bg-zinc-800 text-zinc-200 border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm cursor-pointer'
+                  : 'bg-zinc-900/40 text-zinc-600 border-zinc-800/60 cursor-not-allowed opacity-50'
+              }`}
+              title={
+                hasCustomColumnSizing
+                  ? 'Restablecer el ancho de las columnas a los valores por defecto'
+                  : 'Las columnas ya tienen su ancho por defecto'
+              }
+            >
+              <RotateCcw className="w-3.5 h-3.5" />
+              <span className="hidden xl:inline">Restablecer Columnas</span>
+            </button>
+          )}
 
           {/* Wipe Database */}
-          <button
-            onClick={() => setWipeModalOpen(true)}
-            disabled={batchRefreshing || wipingDb}
-            className="h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all
-              bg-rose-500/5 text-zinc-500 border border-zinc-800
-              hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30
-              disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-            title="Borrar todos los datos de la base de datos"
-          >
-            <Trash2 className="w-4 h-4" />
-            <span className="hidden sm:inline">Borrar BD</span>
-          </button>
+          {toolbarConfig.wipeDatabase && (
+            <button
+              onClick={() => setWipeModalOpen(true)}
+              disabled={batchRefreshing || wipingDb}
+              className="h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all
+                bg-rose-500/5 text-zinc-500 border border-zinc-800
+                hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30
+                disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
+              title="Borrar todos los datos de la base de datos"
+            >
+              <Trash2 className="w-4 h-4" />
+              <span className="hidden sm:inline">Borrar BD</span>
+            </button>
+          )}
+
+          {/* Settings / Customize Toolbar Popover */}
+          <div className="relative" ref={settingsRef}>
+            <button
+              onClick={() => setSettingsOpen((prev) => !prev)}
+              aria-label="Personalizar barra de herramientas"
+              aria-expanded={settingsOpen}
+              className={`h-9 w-9 inline-flex items-center justify-center rounded-lg text-xs font-medium transition-all shrink-0 border cursor-pointer ${
+                settingsOpen
+                  ? 'bg-zinc-800 text-emerald-400 border-zinc-600 ring-1 ring-emerald-500/40'
+                  : 'bg-zinc-800/90 text-zinc-300 border border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm'
+              }`}
+              title="Personalizar botones de la barra de herramientas"
+            >
+              <SlidersHorizontal className="w-4 h-4" />
+            </button>
+
+            {settingsOpen && (
+              <div
+                className="absolute right-0 top-full mt-2 w-72 sm:w-80 rounded-xl bg-zinc-900 border border-zinc-800 shadow-2xl p-3.5 z-[100] animate-in fade-in zoom-in-95 duration-150"
+              >
+                <div className="flex items-center justify-between pb-2.5 border-b border-zinc-800/80">
+                  <div className="flex items-center gap-2">
+                    <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-semibold text-white tracking-tight">
+                      Personalizar Barra
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => setSettingsOpen(false)}
+                    className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors cursor-pointer"
+                    title="Cerrar"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+
+                <p className="text-[11px] text-zinc-400 mt-2 mb-2 leading-relaxed">
+                  Activa o desactiva las acciones visibles en la barra principal:
+                </p>
+
+                <div className="space-y-1">
+                  {TOOLBAR_ITEMS.map((item) => {
+                    const isEnabled = toolbarConfig[item.key];
+                    const Icon = item.icon;
+                    return (
+                      <div
+                        key={item.key}
+                        onClick={() => handleToggleToolbarAction(item.key)}
+                        className="flex items-center justify-between p-2 rounded-lg hover:bg-zinc-800/60 cursor-pointer select-none transition-colors group"
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0 pr-2">
+                          <Icon className={`w-3.5 h-3.5 shrink-0 ${item.iconColor}`} />
+                          <span className="text-xs text-zinc-300 group-hover:text-white font-medium truncate">
+                            {item.label}
+                          </span>
+                        </div>
+                        <div
+                          className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                            isEnabled ? 'bg-emerald-600' : 'bg-zinc-800 border border-zinc-700'
+                          }`}
+                        >
+                          <span
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                              isEnabled ? 'translate-x-4' : 'translate-x-0'
+                            }`}
+                          />
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="pt-2.5 mt-2 border-t border-zinc-800/80 flex items-center justify-between">
+                  <button
+                    onClick={handleResetToolbarConfig}
+                    className="text-[11px] text-zinc-400 hover:text-emerald-400 font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                    title="Restablecer visibilidad a los valores originales"
+                  >
+                    <RotateCcw className="w-3 h-3" />
+                    <span>Restablecer por defecto</span>
+                  </button>
+                  <span className="text-[10px] text-zinc-600 font-mono">localStorage</span>
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
 
