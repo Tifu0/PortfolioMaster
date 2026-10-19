@@ -22,6 +22,7 @@ const expectedDefaults: ToolbarConfig = {
   updateQuotes: true,
   addInstrument: true,
   restoreColumns: true,
+  rowHeight: false,
   exportBackup: true,
   importValues: false,
   wipeDatabase: false,

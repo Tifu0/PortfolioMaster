@@ -43,11 +43,11 @@ Built on a decoupled modern architecture:
   - **Automatic Local Safety Backups**: Automated snapshots saved to `backups/` prior to any destructive operation (`DELETE /api/database`, `POST /api/import/confirm`, or database restorations), with automatic rotation maintaining the 10 most recent snapshots.
   - **SQLite & JSON Restore Validator**: Upload or drag-and-drop restore with `PRAGMA integrity_check` verification, schema validation, and 1-click restore from local automatic snapshots with confirmation guards.
 
-- **⚙️ Customizable Action Toolbar with Persistence**:
-  - **Toolbar Customization Popover**: Positioned at the far right of the action toolbar, allowing users to toggle the visibility of individual action buttons (Update Quotes, Add Instrument, Restore Columns, Export / Copy, Import Values, and Clear DB).
+- **⚙️ Customizable Action Toolbar with Persistence & Row Height Controller**:
+  - **Toolbar Customization Popover**: Positioned at the far right of the action toolbar, allowing users to toggle the visibility of individual action buttons (Update Quotes, Add Instrument, Restore Columns, Row Height, Export / Copy, Import Values, and Clear DB).
   - **Safe Database Reset Protection**: The destructive `Clear DB` button is hidden by default and protected by both toolbar visibility toggle and confirmation modal guard.
-  - **Client-Side Persistence & Hydration Safety**: Button visibility preferences are remembered across page reloads via `localStorage` (`portfoliomaster_toolbar_config`) with hydration mismatch protection in Next.js 16.
-  - **Reset to Defaults**: 1-click restore to recommended default toolbar layout.
+  - **Client-Side Persistence & Hydration Safety**: Button visibility and density preferences are remembered across page reloads via `localStorage` (`portfoliomaster_toolbar_config` and `portfoliomaster_row_height`) with hydration mismatch protection in Next.js 16.
+  - **Reset to Defaults**: 1-click restore to recommended default toolbar layout and standard row height.
 
 ---
 
@@ -135,7 +135,7 @@ PortfolioMaster/
 │   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
-│   └── scripts/                # Automated verification and test scripts (11 test suites)
+│   └── scripts/                # Automated verification and test scripts (13 test suites)
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)

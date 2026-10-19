@@ -40,6 +40,7 @@ import {
   Download,
   Upload,
   SlidersHorizontal,
+  Rows3,
 } from 'lucide-react';
 import { BackupExportModal } from '@/components/BackupExportModal';
 import { usePortfolio } from '@/context/PortfolioContext';
@@ -57,6 +58,23 @@ import {
 } from '@/lib/api';
 
 // ========================================================================== //
+// Row Height (Density) Configuration & Empirical Bounds
+// ========================================================================== //
+
+/**
+ * Empirical row height bounds:
+ * - MIN_ROW_HEIGHT (32px): Calculated empirically so single-line ticker/price,
+ *   two-line stacked dates, return badges, and 26px action buttons remain fully legible
+ *   and vertically centered without any visual clipping.
+ * - DEFAULT_ROW_HEIGHT (48px): Clean standard table density with balanced breathing room.
+ * - MAX_ROW_HEIGHT (88px): Spacious comfortable density for large displays.
+ */
+export const MIN_ROW_HEIGHT = 32;
+export const DEFAULT_ROW_HEIGHT = 48;
+export const MAX_ROW_HEIGHT = 88;
+export const ROW_HEIGHT_STORAGE_KEY = 'portfoliomaster_row_height';
+
+// ========================================================================== //
 // Toolbar Configuration Types & Defaults
 // ========================================================================== //
 
@@ -64,6 +82,7 @@ export interface ToolbarConfig {
   updateQuotes: boolean;
   addInstrument: boolean;
   restoreColumns: boolean;
+  rowHeight: boolean;
   exportBackup: boolean;
   importValues: boolean;
   wipeDatabase: boolean;
@@ -73,6 +92,7 @@ export const DEFAULT_TOOLBAR_CONFIG: ToolbarConfig = {
   updateQuotes: true,
   addInstrument: true,
   restoreColumns: true,
+  rowHeight: false,
   exportBackup: true,
   importValues: false,
   wipeDatabase: false,
@@ -103,6 +123,12 @@ const TOOLBAR_ITEMS: Array<{
     label: 'Restablecer Columnas',
     icon: RotateCcw,
     iconColor: 'text-zinc-400',
+  },
+  {
+    key: 'rowHeight',
+    label: 'Altura de Filas',
+    icon: Rows3,
+    iconColor: 'text-indigo-400',
   },
   {
     key: 'exportBackup',
@@ -357,6 +383,27 @@ function QuoteStatusBadge({
 }
 
 // ========================================================================== //
+// Column Sort Indicator Helper
+// ========================================================================== //
+
+function ColumnSortIndicator({
+  column,
+}: {
+  column: { getIsSorted: () => false | 'asc' | 'desc' };
+}) {
+  const sorted = column.getIsSorted();
+  if (sorted === 'asc') {
+    return <ArrowUp className="w-3 h-3 text-emerald-400 shrink-0" />;
+  }
+  if (sorted === 'desc') {
+    return <ArrowDown className="w-3 h-3 text-emerald-400 shrink-0" />;
+  }
+  return (
+    <ArrowUpDown className="w-3 h-3 opacity-40 shrink-0 group-hover:opacity-80 transition-opacity" />
+  );
+}
+
+// ========================================================================== //
 // Toast Notification
 // ========================================================================== //
 
@@ -559,6 +606,11 @@ export function WatchlistTable({
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
 
+  // Row height (density) state & persistence
+  const [rowHeight, setRowHeight] = useState<number>(DEFAULT_ROW_HEIGHT);
+  const [rowHeightOpen, setRowHeightOpen] = useState(false);
+  const rowHeightRef = useRef<HTMLDivElement>(null);
+
   // Load toolbar configuration from localStorage safely after hydration
   useEffect(() => {
     try {
@@ -569,6 +621,32 @@ export function WatchlistTable({
           setToolbarConfig((prev) => ({ ...prev, ...parsed }));
         }
       }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  // Load row height from localStorage safely after hydration
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(ROW_HEIGHT_STORAGE_KEY);
+      if (saved) {
+        const parsed = parseInt(saved, 10);
+        if (!isNaN(parsed)) {
+          const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, parsed));
+          setRowHeight(clamped);
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
+
+  const handleRowHeightChange = useCallback((newHeight: number) => {
+    const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, newHeight));
+    setRowHeight(clamped);
+    try {
+      localStorage.setItem(ROW_HEIGHT_STORAGE_KEY, String(clamped));
     } catch {
       // ignore
     }
@@ -601,12 +679,14 @@ export function WatchlistTable({
 
   const handleResetToolbarConfig = useCallback(() => {
     setToolbarConfig(DEFAULT_TOOLBAR_CONFIG);
+    setRowHeight(DEFAULT_ROW_HEIGHT);
     try {
       localStorage.removeItem(TOOLBAR_STORAGE_KEY);
+      localStorage.removeItem(ROW_HEIGHT_STORAGE_KEY);
     } catch {
       // ignore
     }
-    addToast('info', 'Barra de herramientas restablecida a los valores por defecto');
+    addToast('info', 'Barra de herramientas y altura restablecidas a los valores por defecto');
   }, [addToast]);
 
   // Click outside and escape key handling for settings popover
@@ -633,6 +713,31 @@ export function WatchlistTable({
       document.removeEventListener('keydown', handleKeyDown);
     };
   }, [settingsOpen]);
+
+  // Click outside and escape key handling for row height popover
+  useEffect(() => {
+    if (!rowHeightOpen) return;
+
+    const handleClickOutside = (e: MouseEvent) => {
+      if (rowHeightRef.current && !rowHeightRef.current.contains(e.target as Node)) {
+        setRowHeightOpen(false);
+      }
+    };
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setRowHeightOpen(false);
+      }
+    };
+
+    document.addEventListener('mousedown', handleClickOutside);
+    document.addEventListener('keydown', handleKeyDown);
+
+    return () => {
+      document.removeEventListener('mousedown', handleClickOutside);
+      document.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [rowHeightOpen]);
 
   const handleResetColumnWidths = useCallback(() => {
     setColumnSizing({});
@@ -1012,20 +1117,14 @@ export function WatchlistTable({
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center justify-center gap-1 mx-auto hover:text-white transition-colors uppercase tracking-wider select-none text-center group/th-date"
+            className="flex items-center justify-center gap-1 mx-auto hover:text-white transition-colors uppercase tracking-wider select-none text-center group/th-date text-inherit cursor-pointer"
             title="Ordenar por fecha de análisis"
           >
-            <div className="flex flex-col items-center text-[10px] leading-tight font-semibold">
+            <div className="flex flex-col items-center leading-tight [word-break:keep-all] whitespace-normal">
               <span>Fecha</span>
-              <span className="text-[9px] text-zinc-400 font-medium">Análisis</span>
+              <span className="text-[0.9em] text-zinc-400 font-medium">Análisis</span>
             </div>
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3 h-3 text-emerald-400 shrink-0" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3 h-3 text-emerald-400 shrink-0" />
-            ) : (
-              <ArrowUpDown className="w-3 h-3 opacity-40 shrink-0 group-hover/th-date:opacity-80" />
-            )}
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
@@ -1080,7 +1179,7 @@ export function WatchlistTable({
             return (
               <div
                 onClick={() => handleStartEditingDate(ticker, pos.analysis_date)}
-                className="flex flex-col items-center justify-center py-1 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
+                className="flex flex-col items-center justify-center py-0.5 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
                 title={`Fecha de análisis: ${pos.analysis_date} (Haz clic para editar)`}
               >
                 <div className="flex items-center gap-1">
@@ -1101,7 +1200,7 @@ export function WatchlistTable({
           return (
             <div
               onClick={() => handleStartEditingDate(ticker, pos.analysis_date)}
-              className="flex items-center justify-center py-1 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto min-h-[30px]"
+              className="flex items-center justify-center py-0.5 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
               title="Haz clic para asignar fecha de análisis"
             >
               {isUpdating ? (
@@ -1118,21 +1217,15 @@ export function WatchlistTable({
       {
         accessorKey: 'user_ticker',
         size: 130,
-        minSize: 85,
+        minSize: 70,
         maxSize: 350,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Ticker
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal">Ticker</span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
@@ -1147,7 +1240,7 @@ export function WatchlistTable({
           if (isTargetReached) {
             return (
               <div
-                className="inline-flex flex-col px-2.5 py-1.5 rounded-lg bg-emerald-500/20 border border-emerald-400/50 shadow-[0_0_12px_rgba(16,185,129,0.35)] transition-all"
+                className="inline-flex flex-col px-2 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/50 shadow-[0_0_12px_rgba(16,185,129,0.35)] transition-all"
                 title={`¡Precio objetivo alcanzado! Cotización (${pos.latest_price} ${pos.currency}) ≤ Objetivo (${pos.target_price} ${pos.currency})`}
               >
                 <div className="flex items-center gap-1.5">
@@ -1160,7 +1253,7 @@ export function WatchlistTable({
                   </span>
                 </div>
                 {pos.provider_symbol && pos.provider_symbol !== pos.user_ticker && (
-                  <span className="text-[10px] text-emerald-400/80 font-mono pl-3.5">
+                  <span className="text-[10px] text-emerald-400/80 font-mono pl-3.5 leading-none">
                     {pos.provider_symbol}
                   </span>
                 )}
@@ -1170,11 +1263,11 @@ export function WatchlistTable({
 
           return (
             <div className="flex flex-col">
-              <span className="font-semibold text-white tracking-wide font-mono">
+              <span className="font-semibold text-white tracking-wide font-mono leading-tight">
                 {pos.user_ticker}
               </span>
               {pos.provider_symbol && pos.provider_symbol !== pos.user_ticker && (
-                <span className="text-[11px] text-zinc-500 font-mono">
+                <span className="text-[11px] text-zinc-500 font-mono leading-none mt-0.5">
                   {pos.provider_symbol}
                 </span>
               )}
@@ -1185,21 +1278,15 @@ export function WatchlistTable({
       {
         accessorKey: 'company_name',
         size: 240,
-        minSize: 130,
+        minSize: 85,
         maxSize: 600,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Empresa
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal">Empresa</span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => (
@@ -1211,11 +1298,15 @@ export function WatchlistTable({
       {
         accessorKey: 'exchange',
         size: 105,
-        minSize: 80,
+        minSize: 65,
         maxSize: 220,
-        header: 'Mercado',
+        header: () => (
+          <span className="uppercase tracking-wider text-inherit [word-break:keep-all] whitespace-normal">
+            Mercado
+          </span>
+        ),
         cell: ({ row }) => (
-          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono bg-zinc-800 text-zinc-300 border border-zinc-700/60">
+          <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono bg-zinc-800 text-zinc-300 border border-zinc-700/60 leading-none">
             {row.original.exchange || 'AUTO'}
           </span>
         ),
@@ -1223,9 +1314,13 @@ export function WatchlistTable({
       {
         accessorKey: 'currency',
         size: 85,
-        minSize: 65,
+        minSize: 52,
         maxSize: 160,
-        header: 'Divisa',
+        header: () => (
+          <span className="uppercase tracking-wider text-inherit [word-break:keep-all] whitespace-normal">
+            Divisa
+          </span>
+        ),
         cell: ({ row }) => (
           <span className="text-xs font-mono text-zinc-400">
             {row.original.currency || '—'}
@@ -1235,28 +1330,24 @@ export function WatchlistTable({
       {
         accessorKey: 'latest_price',
         size: 160,
-        minSize: 110,
+        minSize: 76,
         maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Último Precio
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal text-right">
+              Último Precio
+            </span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
           const pos = row.original;
           return (
-            <div className="flex flex-col items-end gap-1">
-              <span className="font-mono font-medium text-white">
+            <div className="flex flex-col items-end gap-0.5">
+              <span className="font-mono font-medium text-white leading-tight">
                 {formatCurrency(pos.latest_price, pos.currency)}
               </span>
               <QuoteStatusBadge
@@ -1271,21 +1362,17 @@ export function WatchlistTable({
       {
         accessorKey: 'daily_variation',
         size: 130,
-        minSize: 95,
+        minSize: 70,
         maxSize: 260,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Var. Diaria
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal text-right">
+              Var. Diaria
+            </span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
@@ -1310,21 +1397,17 @@ export function WatchlistTable({
       {
         accessorKey: 'ytd_variation',
         size: 145,
-        minSize: 110,
+        minSize: 64,
         maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Var. YTD
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal text-right">
+              Var. YTD
+            </span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
@@ -1342,21 +1425,17 @@ export function WatchlistTable({
       {
         accessorKey: 'variation_since_analysis',
         size: 150,
-        minSize: 110,
+        minSize: 80,
         maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Var. vs Análisis
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal text-right">
+              Var. vs Análisis
+            </span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
@@ -1378,21 +1457,17 @@ export function WatchlistTable({
             : -100,
         id: 'decline_to_target',
         size: 165,
-        minSize: 135,
+        minSize: 82,
         maxSize: 320,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            Caída a Objetivo
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal text-right">
+              Caída a Objetivo
+            </span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => {
@@ -1410,21 +1485,17 @@ export function WatchlistTable({
       {
         accessorKey: 'target_price',
         size: 140,
-        minSize: 115,
+        minSize: 76,
         maxSize: 260,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
-            className="flex items-center gap-1.5 justify-end w-full hover:text-white transition-colors uppercase text-xs tracking-wider"
+            className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            P. Objetivo
-            {column.getIsSorted() === 'asc' ? (
-              <ArrowUp className="w-3.5 h-3.5 text-emerald-400" />
-            ) : column.getIsSorted() === 'desc' ? (
-              <ArrowDown className="w-3.5 h-3.5 text-emerald-400" />
-            ) : (
-              <ArrowUpDown className="w-3.5 h-3.5 opacity-40" />
-            )}
+            <span className="[word-break:keep-all] whitespace-normal text-right">
+              P. Objetivo
+            </span>
+            <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => (
@@ -1436,9 +1507,9 @@ export function WatchlistTable({
       // Actions column — per-row description, edit & refresh
       {
         id: 'actions',
-        size: 115,
-        minSize: 115,
-        maxSize: 115,
+        size: 105,
+        minSize: 105,
+        maxSize: 105,
         enableResizing: false,
         header: '',
         cell: ({ row }) => {
@@ -1531,6 +1602,12 @@ export function WatchlistTable({
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
   });
+
+  const cellPaddingClass = useMemo(() => {
+    if (rowHeight <= 34) return 'py-1 px-2.5';
+    if (rowHeight <= 42) return 'py-1.5 px-3';
+    return 'py-3 px-4';
+  }, [rowHeight]);
 
   return (
     <div className="flex flex-col gap-4 relative">
@@ -1708,6 +1785,241 @@ export function WatchlistTable({
             </button>
           )}
 
+          {/* Row Height Controller Button & Popover */}
+          {toolbarConfig.rowHeight && (
+            <div className="relative" ref={rowHeightRef}>
+              <button
+                onClick={() => setRowHeightOpen((prev) => !prev)}
+                aria-label="Ajustar altura de filas"
+                aria-expanded={rowHeightOpen}
+                className={`h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all shrink-0 border cursor-pointer ${
+                  rowHeightOpen
+                    ? 'bg-zinc-800 text-indigo-400 border-zinc-600 ring-1 ring-indigo-500/40 shadow-sm'
+                    : 'bg-zinc-800/90 text-zinc-200 border border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm'
+                }`}
+                title="Ajustar altura y densidad vertical de las filas"
+              >
+                <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
+                <span>Altura · {rowHeight}px</span>
+              </button>
+
+              {rowHeightOpen && (
+                <div
+                  className="absolute right-0 top-full mt-2 w-84 sm:w-96 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl p-4 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-3.5"
+                >
+                  {/* Popover Header */}
+                  <div className="flex items-center justify-between pb-2.5 border-b border-zinc-800/80">
+                    <div className="flex items-center gap-2">
+                      <div className="w-6 h-6 rounded-md bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center">
+                        <Rows3 className="w-3.5 h-3.5" />
+                      </div>
+                      <div>
+                        <span className="text-xs font-semibold text-white tracking-tight">
+                          Altura de Filas
+                        </span>
+                        <span className="text-[10px] text-zinc-400 font-mono ml-2">
+                          {rowHeight <= 36 ? 'Compacta' : rowHeight <= 54 ? 'Estándar' : 'Espaciosa'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleRowHeightChange(DEFAULT_ROW_HEIGHT)}
+                        className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Restablecer a 48px"
+                      >
+                        <RotateCcw className="w-3 h-3" />
+                        <span>48px</span>
+                      </button>
+                      <button
+                        onClick={() => setRowHeightOpen(false)}
+                        className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors cursor-pointer"
+                        title="Cerrar"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Slider & Numeric Input */}
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs">
+                      <span className="text-zinc-400 font-medium">Densidad vertical:</span>
+                      <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1 focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500">
+                        <input
+                          type="number"
+                          min={MIN_ROW_HEIGHT}
+                          max={MAX_ROW_HEIGHT}
+                          value={rowHeight}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            if (!isNaN(val)) {
+                              handleRowHeightChange(val);
+                            }
+                          }}
+                          className="w-12 bg-transparent text-right font-mono text-xs text-white focus:outline-none"
+                        />
+                        <span className="text-zinc-500 font-mono text-[11px]">px</span>
+                      </div>
+                    </div>
+
+                    <input
+                      type="range"
+                      min={MIN_ROW_HEIGHT}
+                      max={MAX_ROW_HEIGHT}
+                      step={1}
+                      value={rowHeight}
+                      onChange={(e) => handleRowHeightChange(parseInt(e.target.value, 10))}
+                      className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-indigo-500 hover:accent-indigo-400 transition-all"
+                    />
+
+                    <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
+                      <span>{MIN_ROW_HEIGHT}px (Mín)</span>
+                      <span>{DEFAULT_ROW_HEIGHT}px (Defecto)</span>
+                      <span>{MAX_ROW_HEIGHT}px (Máx)</span>
+                    </div>
+                  </div>
+
+                  {/* Preset Buttons */}
+                  <div className="flex items-center gap-1.5">
+                    {[
+                      { label: 'Compacto', val: 34 },
+                      { label: 'Estándar', val: 48 },
+                      { label: 'Espacioso', val: 64 },
+                    ].map((preset) => (
+                      <button
+                        key={preset.val}
+                        onClick={() => handleRowHeightChange(preset.val)}
+                        className={`flex-1 py-1 rounded-md text-[11px] font-medium border transition-colors cursor-pointer ${
+                          rowHeight === preset.val
+                            ? 'bg-indigo-500/20 text-indigo-300 border-indigo-500/40 shadow-sm'
+                            : 'bg-zinc-800/60 text-zinc-400 border-zinc-700/60 hover:bg-zinc-800 hover:text-zinc-200'
+                        }`}
+                      >
+                        {preset.label} · {preset.val}px
+                      </button>
+                    ))}
+                  </div>
+
+                  {/* Minimum Warning Notice */}
+                  {rowHeight <= MIN_ROW_HEIGHT && (
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs animate-in fade-in duration-150">
+                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                      <div className="leading-relaxed">
+                        <span className="font-semibold text-amber-200">
+                          Altura mínima alcanzada ({MIN_ROW_HEIGHT}px).
+                        </span>{' '}
+                        Valores menores están deshabilitados para evitar el solapamiento o recorte de controles interactivos, fechas y distintivos.
+                      </div>
+                    </div>
+                  )}
+
+                  {/* 2-Row Sample Live Preview */}
+                  <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
+                        Vista previa en directo (2 filas)
+                      </span>
+                      <span className="text-[10px] text-zinc-500 font-mono">
+                        {rowHeight}px
+                      </span>
+                    </div>
+
+                    <div className="rounded-lg border border-zinc-800/90 bg-zinc-950/70 overflow-hidden shadow-inner">
+                      <table className="w-full text-left text-xs text-zinc-300 table-fixed">
+                        <thead className="bg-zinc-900/90 text-[10px] text-zinc-400 border-b border-zinc-800 uppercase tracking-wider">
+                          <tr>
+                            <th className="py-1 px-2.5 w-[34%]">Ticker</th>
+                            <th className="py-1 px-2 text-right w-[24%]">Precio</th>
+                            <th className="py-1 px-2 text-right w-[24%]">Var.</th>
+                            <th className="py-1 px-2 text-center w-[18%]">Acciones</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-zinc-800/60 font-sans">
+                          {/* Sample Row 1: AAPL */}
+                          <tr
+                            style={{ height: `${rowHeight}px` }}
+                            className="hover:bg-zinc-850/40 transition-colors"
+                          >
+                            <td className={`${cellPaddingClass} align-middle overflow-hidden`}>
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-semibold text-white font-mono text-xs leading-none">
+                                  AAPL
+                                </span>
+                                {rowHeight > 42 && (
+                                  <span className="text-[10px] text-zinc-500 truncate leading-tight mt-0.5">
+                                    Apple Inc.
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className={`${cellPaddingClass} text-right align-middle overflow-hidden font-mono text-xs text-white`}>
+                              $232.50
+                            </td>
+                            <td className={`${cellPaddingClass} text-right align-middle overflow-hidden`}>
+                              <span className="inline-flex items-center gap-0.5 text-emerald-400 font-semibold font-mono text-xs">
+                                <TrendingUp className="w-3 h-3 shrink-0" />
+                                +1.45%
+                              </span>
+                            </td>
+                            <td className={`${cellPaddingClass} text-center align-middle overflow-hidden`}>
+                              <div className="inline-flex items-center justify-center gap-1 text-zinc-400">
+                                <span className="p-1 rounded text-blue-400 bg-blue-500/10">
+                                  <FileText className="w-3 h-3" />
+                                </span>
+                                <span className="p-1 rounded text-zinc-500">
+                                  <Edit3 className="w-3 h-3" />
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+
+                          {/* Sample Row 2: BME:MAP */}
+                          <tr
+                            style={{ height: `${rowHeight}px` }}
+                            className="hover:bg-zinc-850/40 transition-colors"
+                          >
+                            <td className={`${cellPaddingClass} align-middle overflow-hidden`}>
+                              <div className="flex flex-col min-w-0">
+                                <span className="font-semibold text-white font-mono text-xs leading-none">
+                                  BME:MAP
+                                </span>
+                                {rowHeight > 42 && (
+                                  <span className="text-[10px] text-zinc-500 truncate leading-tight mt-0.5">
+                                    Mapfre S.A.
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className={`${cellPaddingClass} text-right align-middle overflow-hidden font-mono text-xs text-white`}>
+                              2.38 €
+                            </td>
+                            <td className={`${cellPaddingClass} text-right align-middle overflow-hidden`}>
+                              <span className="inline-flex items-center gap-0.5 text-rose-400 font-semibold font-mono text-xs">
+                                <TrendingDown className="w-3 h-3 shrink-0" />
+                                -0.62%
+                              </span>
+                            </td>
+                            <td className={`${cellPaddingClass} text-center align-middle overflow-hidden`}>
+                              <div className="inline-flex items-center justify-center gap-1 text-zinc-400">
+                                <span className="p-1 rounded text-zinc-500">
+                                  <FileText className="w-3 h-3" />
+                                </span>
+                                <span className="p-1 rounded text-zinc-500">
+                                  <Edit3 className="w-3 h-3" />
+                                </span>
+                              </div>
+                            </td>
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Wipe Database */}
           {toolbarConfig.wipeDatabase && (
             <button
@@ -1817,52 +2129,75 @@ export function WatchlistTable({
       <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur shadow-2xl">
         <table
           className="w-full text-left text-sm text-zinc-300 divide-y divide-zinc-800/80 table-fixed"
-          style={{ width: `${table.getTotalSize()}px`, minWidth: '100%' }}
+          style={
+            {
+              width: `${table.getTotalSize()}px`,
+              minWidth: '100%',
+              '--watchlist-row-height': `${rowHeight}px`,
+            } as React.CSSProperties
+          }
         >
-          <thead className="bg-zinc-950/70 text-xs text-zinc-400">
+          <thead className="bg-zinc-950/70 text-zinc-400">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
-                {headerGroup.headers.map((header) => (
-                  <th
-                    key={header.id}
-                    scope="col"
-                    style={{ width: `${header.getSize()}px` }}
-                    className="py-3.5 px-4 font-semibold text-zinc-400 relative select-none group/th"
-                  >
-                    <div className="truncate">
-                      {header.isPlaceholder
-                        ? null
-                        : flexRender(
-                            header.column.columnDef.header,
-                            header.getContext()
-                          )}
-                    </div>
+                {headerGroup.headers.map((header) => {
+                  const headerSize = header.getSize();
+                  const headerPaddingClass =
+                    headerSize < 75
+                      ? 'py-2 px-1.5 pr-2'
+                      : headerSize < 100
+                      ? 'py-2.5 px-2.5 pr-2.5'
+                      : 'py-3 px-3.5 pr-3';
 
-                    {/* Column Resizer Handle */}
-                    {header.column.getCanResize() && (
-                      <div
-                        onMouseDown={header.getResizeHandler()}
-                        onTouchStart={header.getResizeHandler()}
-                        onDoubleClick={() => header.column.resetSize()}
-                        onClick={(e) => e.stopPropagation()}
-                        className={`absolute right-0 top-0 h-full w-2.5 cursor-col-resize select-none touch-none flex items-center justify-center transition-all group-hover/th:opacity-100 z-20 ${
-                          header.column.getIsResizing()
-                            ? 'opacity-100'
-                            : 'opacity-0'
-                        }`}
-                        title="Arrastra para redimensionar (doble clic para valor por defecto)"
-                      >
-                        <div
-                          className={`w-[2px] transition-all rounded-full ${
-                            header.column.getIsResizing()
-                              ? 'bg-emerald-400 h-full shadow-[0_0_8px_rgba(52,211,153,0.9)]'
-                              : 'bg-zinc-600 hover:bg-emerald-400 h-4'
-                          }`}
-                        />
+                  const headerFontClass =
+                    headerSize < 80
+                      ? 'text-[9.5px] leading-[1.08]'
+                      : headerSize < 110
+                      ? 'text-[11px] leading-tight'
+                      : 'text-xs leading-normal';
+
+                  return (
+                    <th
+                      key={header.id}
+                      scope="col"
+                      style={{ width: `${headerSize}px` }}
+                      className={`${headerPaddingClass} ${headerFontClass} font-semibold text-zinc-400 relative select-none group/th align-middle`}
+                    >
+                      <div className="w-full [word-break:keep-all] whitespace-normal [overflow-wrap:normal]">
+                        {header.isPlaceholder
+                          ? null
+                          : flexRender(
+                              header.column.columnDef.header,
+                              header.getContext()
+                            )}
                       </div>
-                    )}
-                  </th>
-                ))}
+
+                      {/* Column Resizer Handle */}
+                      {header.column.getCanResize() && (
+                        <div
+                          onMouseDown={header.getResizeHandler()}
+                          onTouchStart={header.getResizeHandler()}
+                          onDoubleClick={() => header.column.resetSize()}
+                          onClick={(e) => e.stopPropagation()}
+                          className={`absolute right-0 top-0 h-full w-2.5 cursor-col-resize select-none touch-none flex items-center justify-center transition-all group-hover/th:opacity-100 z-20 ${
+                            header.column.getIsResizing()
+                              ? 'opacity-100'
+                              : 'opacity-0'
+                          }`}
+                          title="Arrastra para redimensionar (doble clic para valor por defecto)"
+                        >
+                          <div
+                            className={`w-[2px] transition-all rounded-full ${
+                              header.column.getIsResizing()
+                                ? 'bg-emerald-400 h-full shadow-[0_0_8px_rgba(52,211,153,0.9)]'
+                                : 'bg-zinc-600 hover:bg-emerald-400 h-4'
+                            }`}
+                          />
+                        </div>
+                      )}
+                    </th>
+                  );
+                })}
               </tr>
             ))}
           </thead>
@@ -1885,12 +2220,16 @@ export function WatchlistTable({
                       className={`hover:bg-zinc-800/30 transition-colors group ${
                         isRefreshingRow ? 'opacity-60' : ''
                       } ${isExpanded ? 'bg-zinc-850/60' : ''}`}
+                      style={{ height: `${rowHeight}px` }}
                     >
                       {row.getVisibleCells().map((cell) => (
                         <td
                           key={cell.id}
-                          style={{ width: `${cell.column.getSize()}px` }}
-                          className="py-3.5 px-4 align-middle overflow-hidden"
+                          style={{
+                            width: `${cell.column.getSize()}px`,
+                            height: `${rowHeight}px`,
+                          }}
+                          className={`${cellPaddingClass} align-middle overflow-hidden`}
                         >
                           {flexRender(
                             cell.column.columnDef.cell,
