@@ -112,6 +112,8 @@ export function ManualEntryModal({
   const [originalTickerToEdit, setOriginalTickerToEdit] = useState<string>('');
   const [editTicker, setEditTicker] = useState<string>('');
   const [editCompanyName, setEditCompanyName] = useState('');
+  const [editExchange, setEditExchange] = useState('AUTO');
+  const [editCurrency, setEditCurrency] = useState('AUTO');
   const [editTargetPrice, setEditTargetPrice] = useState('');
   const [editAnalysisPrice, setEditAnalysisPrice] = useState('');
   const [editAnalysisDate, setEditAnalysisDate] = useState('');
@@ -123,6 +125,7 @@ export function ManualEntryModal({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [fetchingHistorical, setFetchingHistorical] = useState(false);
   const [checkingYahoo, setCheckingYahoo] = useState(false);
+  const [syncingTickerData, setSyncingTickerData] = useState(false);
   const [yahooCheckResult, setYahooCheckResult] = useState<CheckYahooResponse | null>(null);
 
   // Load available instruments
@@ -178,6 +181,8 @@ export function ManualEntryModal({
 
         setEditTicker(inst.user_ticker ? String(inst.user_ticker) : originalTickerToEdit);
         setEditCompanyName(inst.company_name ? String(inst.company_name) : '');
+        setEditExchange(inst.exchange ? String(inst.exchange) : 'AUTO');
+        setEditCurrency(inst.currency ? String(inst.currency) : 'AUTO');
         setEditTargetPrice(
           inst.target_price !== null && inst.target_price !== undefined
             ? String(inst.target_price)
@@ -345,6 +350,76 @@ export function ManualEntryModal({
     }
   };
 
+  // ── Explicit Confirm Ticker Change & Sync Metadata ───────────────────── //
+  const handleConfirmTickerChange = async () => {
+    const newTicker = editTicker.trim().toUpperCase();
+    if (!newTicker) return;
+
+    setSyncingTickerData(true);
+    try {
+      let checkData = yahooCheckResult;
+      if (!checkData || !checkData.available || checkData.ticker?.toUpperCase() !== newTicker) {
+        checkData = await checkYahooTicker(newTicker);
+        setYahooCheckResult(checkData);
+      }
+
+      if (!checkData.available) {
+        onError?.(checkData.message || `No se pudo obtener información para ${newTicker}`);
+        return;
+      }
+
+      // 1. Overwrite company name, exchange, currency, live prices
+      if (checkData.company_name) {
+        setEditCompanyName(checkData.company_name);
+      } else {
+        setEditCompanyName(newTicker);
+      }
+      if (checkData.currency) {
+        setEditCurrency(checkData.currency);
+      }
+      if (checkData.exchange) {
+        setEditExchange(checkData.exchange);
+      }
+      if (checkData.price !== undefined && checkData.price !== null) {
+        setEditLatestPrice(String(checkData.price));
+      }
+      if (checkData.previous_close !== undefined && checkData.previous_close !== null) {
+        setEditPrevClose(String(checkData.previous_close));
+      }
+
+      // 2. Clear stale reference prices and fetch fresh ones for the new ticker
+      setEditAnalysisPrice('');
+      setEditStartOfYearPrice('');
+
+      const targetDate = editAnalysisDate || new Date().toISOString().split('T')[0];
+      const [analysisRes, ytdRes] = await Promise.allSettled([
+        fetchAnalysisPrice(newTicker, targetDate),
+        fetchYtdPrice(newTicker),
+      ]);
+
+      if (analysisRes.status === 'fulfilled' && analysisRes.value.status === 'ok') {
+        setEditAnalysisPrice(String(analysisRes.value.analysis_reference_price));
+        if (analysisRes.value.analysis_date) {
+          setEditAnalysisDate(analysisRes.value.analysis_date);
+        }
+      }
+
+      if (ytdRes.status === 'fulfilled' && ytdRes.value.status === 'ok') {
+        setEditStartOfYearPrice(String(ytdRes.value.start_of_year_price));
+        if (ytdRes.value.start_of_year_date) {
+          setEditStartOfYearDate(ytdRes.value.start_of_year_date);
+        }
+      }
+
+      onSuccess?.(`Datos y precios de ${newTicker} sincronizados correctamente.`);
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      onError?.(`Error al sincronizar datos del ticker: ${msg}`);
+    } finally {
+      setSyncingTickerData(false);
+    }
+  };
+
   // ── Submit Edit Instrument ───────────────────────────────────────────── //
   const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -361,6 +436,8 @@ export function ManualEntryModal({
     try {
       const payload: Parameters<typeof updateInstrument>[1] = {
         company_name: editCompanyName.trim() || null,
+        exchange: editExchange !== 'AUTO' ? editExchange : null,
+        currency: editCurrency !== 'AUTO' ? editCurrency : null,
         target_price: editTargetPrice ? parseFloat(editTargetPrice) : null,
         analysis_reference_price: editAnalysisPrice ? parseFloat(editAnalysisPrice) : null,
         analysis_date: editAnalysisDate || null,
@@ -429,25 +506,6 @@ export function ManualEntryModal({
     }
   };
 
-  const handleFetchHistoricalForAdd = async () => {
-    if (!addTicker.trim() || !addAnalysisDate) {
-      onError?.('Introduce primero el ticker y la fecha de análisis.');
-      return;
-    }
-    setFetchingHistorical(true);
-    try {
-      const res = await fetchAnalysisPrice(addTicker.trim(), addAnalysisDate);
-      if (res.status === 'ok') {
-        setAddAnalysisPrice(String(res.analysis_reference_price));
-        onSuccess?.(`Cotización en fecha de análisis obtenida de Yahoo: ${res.analysis_reference_price}`);
-      }
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      onError?.(`Error al consultar Yahoo Finance: ${msg}`);
-    } finally {
-      setFetchingHistorical(false);
-    }
-  };
 
   // ── Refresh Quote Now for Edited Instrument ─────────────────────────── //
   const handleSingleYahooRefresh = async () => {
@@ -675,7 +733,7 @@ export function ManualEntryModal({
               </div>
 
               {/* Price Targets */}
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 pt-2">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div>
                   <label className="block text-xs font-medium text-zinc-300 mb-1">
                     Precio Objetivo
@@ -691,19 +749,6 @@ export function ManualEntryModal({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Precio Ref. Análisis
-                  </label>
-                  <input
-                    type="number"
-                    step="0.01"
-                    placeholder="ej. 190.50"
-                    value={addAnalysisPrice}
-                    onChange={(e) => setAddAnalysisPrice(e.target.value)}
-                    className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/60 font-mono"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">
                     Fecha de Análisis
                   </label>
                   <input
@@ -712,6 +757,9 @@ export function ManualEntryModal({
                     onChange={(e) => setAddAnalysisDate(e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
                   />
+                  <span className="text-[10px] text-zinc-500 mt-1 block">
+                    La cotización de referencia en esta fecha se resolverá automáticamente de Yahoo Finance.
+                  </span>
                 </div>
               </div>
 
@@ -866,41 +914,66 @@ export function ManualEntryModal({
                     {/* Result banner from Yahoo check */}
                     {yahooCheckResult && (
                       <div
-                        className={`flex items-start gap-2 p-2.5 rounded-lg text-xs ${
+                        className={`flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 p-3 rounded-xl text-xs ${
                           yahooCheckResult.available
                             ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-300'
                             : 'bg-rose-500/10 border border-rose-500/20 text-rose-300'
                         }`}
                       >
-                        {yahooCheckResult.available ? (
-                          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-                        ) : (
-                          <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-                        )}
-                        <div className="flex-1">
+                        <div className="flex items-start gap-2.5">
                           {yahooCheckResult.available ? (
-                            <div>
-                              <p className="font-medium text-emerald-200">
-                                Ticker válido y disponible en Yahoo Finance
-                              </p>
-                              <p className="text-[11px] text-emerald-400/80 mt-0.5 font-mono">
-                                Símbolo: {yahooCheckResult.provider_symbol}
-                                {yahooCheckResult.price !== undefined && yahooCheckResult.price !== null
-                                  ? ` | Precio: ${yahooCheckResult.price} ${yahooCheckResult.currency || ''}`
-                                  : ''}
-                              </p>
-                            </div>
+                            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
                           ) : (
-                            <div>
-                              <p className="font-medium text-rose-200">
-                                No se pudo encontrar en Yahoo Finance
-                              </p>
-                              <p className="text-[11px] text-rose-400/80 mt-0.5">
-                                {yahooCheckResult.message || 'Verifica el símbolo o el sufijo de bolsa (.MC, .PA, etc.)'}
-                              </p>
-                            </div>
+                            <AlertCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
                           )}
+                          <div>
+                            {yahooCheckResult.available ? (
+                              <div>
+                                <p className="font-semibold text-emerald-200">
+                                  Ticker válido y disponible en Yahoo Finance
+                                </p>
+                                <p className="text-[11px] text-emerald-400/80 mt-0.5 font-mono">
+                                  Símbolo: {yahooCheckResult.provider_symbol}
+                                  {yahooCheckResult.company_name ? ` · ${yahooCheckResult.company_name}` : ''}
+                                  {yahooCheckResult.price !== undefined && yahooCheckResult.price !== null
+                                    ? ` · ${yahooCheckResult.price} ${yahooCheckResult.currency || ''}`
+                                    : ''}
+                                </p>
+                              </div>
+                            ) : (
+                              <div>
+                                <p className="font-medium text-rose-200">
+                                  No se pudo encontrar en Yahoo Finance
+                                </p>
+                                <p className="text-[11px] text-rose-400/80 mt-0.5">
+                                  {yahooCheckResult.message || 'Verifica el símbolo o el sufijo de bolsa (.MC, .PA, etc.)'}
+                                </p>
+                              </div>
+                            )}
+                          </div>
                         </div>
+
+                        {yahooCheckResult.available && editTicker.trim().toUpperCase() !== originalTickerToEdit.toUpperCase() && (
+                          <button
+                            type="button"
+                            onClick={handleConfirmTickerChange}
+                            disabled={syncingTickerData || loading}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap self-end sm:self-auto cursor-pointer"
+                            title="Sobrescribir los datos y precios del formulario con los del nuevo ticker"
+                          >
+                            {syncingTickerData ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                Actualizando...
+                              </>
+                            ) : (
+                              <>
+                                <RefreshCw className="w-3.5 h-3.5" />
+                                Confirmar cambio y actualizar datos
+                              </>
+                            )}
+                          </button>
+                        )}
                       </div>
                     )}
                   </div>

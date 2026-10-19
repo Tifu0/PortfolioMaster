@@ -485,6 +485,161 @@ class TestConfig:
 
 
 # ---------------------------------------------------------------------- #
+# Historical Price Resolution & Fallback Tests (Issue 4 & Issue 1)
+# ---------------------------------------------------------------------- #
+
+class TestHistoricalPriceResolution:
+    def test_fetch_historical_quote_fallback_to_fast_info(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from datetime import date
+        from backend.api.main import _fetch_historical_quote_and_date
+        import pandas as pd
+
+        # Mock yf.Ticker to simulate empty history() (e.g. today intraday or closed market)
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = pd.DataFrame()
+        mock_fast_info = MagicMock()
+        mock_fast_info.last_price = 215.75
+        mock_fast_info.previous_close = 214.50
+        mock_ticker.fast_info = mock_fast_info
+
+        monkeypatch.setattr("yfinance.Ticker", lambda symbol: mock_ticker)
+
+        today = date.today()
+        result = _fetch_historical_quote_and_date("AAPL", today)
+        assert result is not None
+        price, dt = result
+        assert price == 215.75
+        assert dt == today
+
+    def test_fetch_historical_quote_lookback_to_previous_trading_day(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from datetime import date
+        from backend.api.main import _fetch_historical_quote_and_date
+        import pandas as pd
+
+        # Simulate target date is Sunday 2026-10-18, and history returns Friday 2026-10-16
+        friday_dt = pd.Timestamp("2026-10-16")
+        hist_df = pd.DataFrame({"Close": [198.25]}, index=[friday_dt])
+
+        mock_ticker = MagicMock()
+        mock_ticker.history.return_value = hist_df
+
+        monkeypatch.setattr("yfinance.Ticker", lambda symbol: mock_ticker)
+
+        sunday = date(2026, 10, 18)
+        result = _fetch_historical_quote_and_date("AAPL", sunday)
+        assert result is not None
+        price, dt = result
+        assert price == 198.25
+        assert dt == date(2026, 10, 16)
+
+
+# ---------------------------------------------------------------------- #
+# Single Row Refresh Auto-Resolution Tests (Issue 1)
+# ---------------------------------------------------------------------- #
+
+class TestRefreshSingleResolution:
+    def test_refresh_single_resolves_analysis_and_ytd_price(self, monkeypatch):
+        from unittest.mock import MagicMock
+        from datetime import date
+        from decimal import Decimal
+        from portfoliomaster.core.models import Quote, QuoteStatus
+
+        # Mock YahooAdapter.fetch
+        mock_quote = Quote(
+            price=Decimal("155.0"),
+            previous_close=Decimal("150.0"),
+            status=QuoteStatus.FRESH,
+            provider="Yahoo",
+        )
+        monkeypatch.setattr(
+            "backend.api.main.YahooAdapter.fetch",
+            lambda self, symbols: {symbols[0]: mock_quote},
+        )
+        # Mock _fetch_historical_quote_for_date
+        monkeypatch.setattr(
+            "backend.api.main._fetch_historical_quote_for_date",
+            lambda symbol, dt: 140.0,
+        )
+        # Mock _fetch_start_of_year_quote
+        monkeypatch.setattr(
+            "backend.api.main._fetch_start_of_year_quote",
+            lambda symbol, yr: (130.0, date(yr, 1, 2)),
+        )
+
+        # Create instrument with analysis_date but NO analysis_reference_price
+        client.post("/api/instruments", json={
+            "user_ticker": "MSFT_TEST",
+            "currency": "USD",
+            "fetch_yahoo": False,
+            "analysis_date": date.today().isoformat(),
+        })
+
+        # Refresh single instrument
+        r = client.post("/api/instruments/MSFT_TEST/refresh")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["status"] == "ok"
+        assert body["price"] == 155.0
+        assert body.get("analysis_reference_price") == 140.0
+
+        # Verify in positions that analysis reference price is present and variation is computed
+        pos_res = client.get("/api/positions")
+        assert pos_res.status_code == 200
+        pos = next(p for p in pos_res.json()["positions"] if p["user_ticker"] == "MSFT_TEST")
+        assert pos["analysis_reference_price"] == 140.0
+        assert pos["variation_since_analysis_valid"] is True
+        assert pos["variation_since_analysis"] is not None
+
+
+# ---------------------------------------------------------------------- #
+# Ticker Renaming with Clean Metadata Tests (Issue 3)
+# ---------------------------------------------------------------------- #
+
+class TestTickerRenameMetadata:
+    def test_rename_updates_currency_exchange_and_cleans_quote(self, monkeypatch):
+        # Create initial instrument with EUR / SPAIN
+        client.post("/api/instruments", json={
+            "user_ticker": "OLD_TICKER",
+            "company_name": "Old Company SA",
+            "currency": "EUR",
+            "exchange": "SPAIN",
+            "fetch_yahoo": False,
+            "manual_price": 50.0,
+            "manual_previous_close": 49.0,
+        })
+
+        # Update and rename to NEW_TICKER with USD and US exchange and new company name
+        r = client.put("/api/instruments/OLD_TICKER", json={
+            "new_ticker": "NEW_TICKER",
+            "company_name": "New Company Inc",
+            "currency": "USD",
+            "exchange": "US",
+            "latest_price": 120.0,
+            "previous_close": 118.0,
+        })
+        assert r.status_code == 200
+        inst = r.json()["instrument"]
+        assert inst["user_ticker"] == "NEW_TICKER"
+        assert inst["company_name"] == "New Company Inc"
+        assert inst["currency"] == "USD"
+        assert inst["exchange"] == "US"
+
+        # Verify in /api/positions that old ticker is gone, new ticker exists with new prices and no stale data
+        pos_res = client.get("/api/positions")
+        tickers = [p["user_ticker"] for p in pos_res.json()["positions"]]
+        assert "OLD_TICKER" not in tickers
+        assert "NEW_TICKER" in tickers
+
+        pos = next(p for p in pos_res.json()["positions"] if p["user_ticker"] == "NEW_TICKER")
+        assert pos["company_name"] == "New Company Inc"
+        assert pos["currency"] == "USD"
+        assert pos["exchange"] == "US"
+        assert pos["latest_price"] == 120.0
+
+
+# ---------------------------------------------------------------------- #
 # Cleanup
 # ---------------------------------------------------------------------- #
 

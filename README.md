@@ -50,10 +50,6 @@ Built on a decoupled modern architecture:
   - **Client-Side Persistence & Hydration Safety**: Button visibility preferences are remembered across page reloads via `localStorage` (`portfoliomaster_toolbar_config`) with hydration mismatch protection in Next.js 16.
   - **Reset to Defaults**: 1-click restore to recommended default toolbar layout.
 
-- **➕ Manual Position Management**:
-  - Modal form to quickly register new instruments or edit existing targets, analysis prices, start-of-year YTD prices, and custom research notes, with instant Yahoo Finance lookups.
-  - Safe instrument deletion and one-click database reset with confirmation guards.
-
 ---
 
 ## 🚀 Quick Start
@@ -131,7 +127,7 @@ PortfolioMaster/
 │   ├── api/
 │   │   └── main.py             # FastAPI application and REST endpoints
 │   └── tests/
-│       ├── test_api.py         # Backend API integration tests (28 tests)
+│       ├── test_api.py         # Backend API integration tests (32 tests)
 │       └── test_backup_api.py  # Backup & Export API integration tests (10 tests)
 │
 ├── frontend/                   # Next.js web application (App Router)
@@ -140,7 +136,7 @@ PortfolioMaster/
 │   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
-│   └── scripts/                # Automated verification and test scripts (10 test suites)
+│   └── scripts/                # Automated verification and test scripts (11 test suites)
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
@@ -171,12 +167,12 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 | `GET` | `/api/metrics` | Portfolio summary metrics (total count, top gainer, top loser, average variation) |
 | `GET` | `/api/instruments` | Raw list of all registered instruments |
 | `GET` | `/api/instruments/{ticker}` | Retrieve details for a specific instrument |
-| `POST` | `/api/instruments` | Create or update an instrument manually |
-| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (targets, analysis price/date, YTD price/date, notes) |
+| `POST` | `/api/instruments` | Create a new instrument with automatic resolution of live quotes, historical analysis price, and YTD price |
+| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (supports ticker renaming, currency, exchange, targets, analysis price/date, YTD price/date, notes) |
 | `DELETE` | `/api/instruments/{ticker}` | Delete an instrument from the watchlist |
-| `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and auto-resolve analysis and YTD prices for a single instrument |
+| `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and auto-resolve missing analysis and YTD prices for a single instrument |
 | `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance and resolve missing analysis and YTD prices |
-| `POST` | `/api/instruments/{ticker}/fetch-analysis-price` | Fetch historical quote from Yahoo Finance for instrument's analysis date |
+| `POST` | `/api/instruments/{ticker}/fetch-analysis-price` | Fetch historical quote from Yahoo Finance for instrument's analysis date (with resilient lookback and same-day fallback) |
 | `POST` | `/api/instruments/{ticker}/fetch-ytd-price` | Fetch start-of-year quote from Yahoo Finance for instrument for current year |
 | `POST` | `/api/instruments/resolve-missing-analysis-prices` | Auto-resolve historical analysis reference prices from Yahoo Finance |
 | `POST` | `/api/instruments/resolve-missing-ytd-prices` | Auto-resolve start-of-year (YTD) reference prices from Yahoo Finance |
@@ -199,7 +195,7 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 Both backend and frontend contain automated test suites.
 
 ### Backend & Core Tests (Python)
-Run all 72 unit and integration tests with `pytest`:
+Run all 76 unit and integration tests with `pytest`:
 ```bash
 venv\Scripts\activate
 pytest

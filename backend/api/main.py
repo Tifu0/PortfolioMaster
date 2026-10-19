@@ -294,6 +294,8 @@ class InstrumentCreate(BaseModel):
 class InstrumentUpdate(BaseModel):
     new_ticker: Optional[str] = None
     company_name: Optional[str] = None
+    exchange: Optional[str] = None
+    currency: Optional[str] = None
     target_price: Optional[float] = None
     analysis_reference_price: Optional[float] = None
     analysis_date: Optional[str] = None
@@ -760,6 +762,7 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
 
+    ticker_changed = False
     if data.new_ticker and data.new_ticker.strip():
         new_t = data.new_ticker.strip()
         if new_t.upper() != ticker.upper():
@@ -767,17 +770,58 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
             if existing and existing.id != inst.id:
                 raise HTTPException(status_code=400, detail=f"El ticker '{new_t}' ya existe en el portfolio.")
             inst.user_ticker = new_t
-            norm_ticker, detected_exchange = normalize(new_t, inst.currency)
-            suffix = get_yahoo_suffix(new_t, detected_exchange, inst.currency)
-            if suffix and not norm_ticker.upper().endswith(suffix.upper()):
-                inst.provider_symbol = f"{norm_ticker}{suffix}"
-            else:
-                inst.provider_symbol = norm_ticker
-            if detected_exchange != Exchange.UNKNOWN:
+            ticker_changed = True
+
+    if data.currency is not None and data.currency.strip() and data.currency.strip().upper() != "AUTO":
+        inst.currency = data.currency.strip().upper()
+
+    if ticker_changed or (data.exchange is not None and data.exchange.strip()):
+        curr_for_norm = inst.currency or ""
+        norm_ticker, detected_exchange = normalize(inst.user_ticker, curr_for_norm)
+
+        if data.exchange is not None and data.exchange.strip() and data.exchange.strip().upper() != "AUTO":
+            try:
+                inst.exchange = Exchange(data.exchange.strip())
+            except ValueError:
                 inst.exchange = detected_exchange
+        elif detected_exchange != Exchange.UNKNOWN:
+            inst.exchange = detected_exchange
+
+        suffix = get_yahoo_suffix(inst.user_ticker, inst.exchange, curr_for_norm)
+        if suffix and not norm_ticker.upper().endswith(suffix.upper()):
+            inst.provider_symbol = f"{norm_ticker}{suffix}"
+        else:
+            inst.provider_symbol = norm_ticker
 
     if data.company_name is not None:
-        inst.company_name = data.company_name.strip() or inst.user_ticker
+        c_name = data.company_name.strip()
+        if c_name and c_name.upper() != "AUTO":
+            inst.company_name = c_name
+        elif ticker_changed:
+            resolved_name = None
+            if inst.provider_symbol:
+                try:
+                    yt = yf.Ticker(inst.provider_symbol)
+                    inf = getattr(yt, "info", None)
+                    if isinstance(inf, dict):
+                        resolved_name = inf.get("shortName") or inf.get("longName")
+                except Exception:
+                    pass
+            inst.company_name = resolved_name or inst.user_ticker
+        else:
+            inst.company_name = inst.user_ticker
+    elif ticker_changed:
+        resolved_name = None
+        if inst.provider_symbol:
+            try:
+                yt = yf.Ticker(inst.provider_symbol)
+                inf = getattr(yt, "info", None)
+                if isinstance(inf, dict):
+                    resolved_name = inf.get("shortName") or inf.get("longName")
+            except Exception:
+                pass
+        inst.company_name = resolved_name or inst.user_ticker
+
     if data.target_price is not None:
         inst.target_price = Decimal(str(data.target_price)) if data.target_price > 0 else None
     if data.analysis_reference_price is not None:
@@ -805,7 +849,7 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
 
     update_instrument_by_id(inst)
 
-    # Optionally update the quote (manual edit)
+    # Update quote
     if data.latest_price is not None and data.latest_price > 0 and inst.id:
         q = Quote(
             instrument_id=inst.id,
@@ -821,29 +865,40 @@ def update_instrument(ticker: str, data: InstrumentUpdate):
             status=QuoteStatus.FRESH,
         )
         upsert_quote(q)
+    elif ticker_changed and inst.id and inst.provider_symbol:
+        try:
+            adapter = YahooAdapter()
+            quotes = adapter.fetch([inst.provider_symbol])
+            if inst.provider_symbol in quotes and quotes[inst.provider_symbol].is_valid():
+                q = quotes[inst.provider_symbol]
+                q.instrument_id = inst.id
+                upsert_quote(q)
+        except Exception as e:
+            logger.debug(f"Could not fetch fresh quote on ticker rename for {inst.provider_symbol}: {e}")
 
     return {"status": "ok", "instrument": _instrument_to_dict(inst)}
 
 
-def _fetch_historical_quote_and_date(
-    provider_symbol: str, target_date: date, window_days: int = 7
+def _fetch_start_of_year_quote(
+    provider_symbol: str, year: Optional[int] = None
 ) -> Optional[tuple[float, date]]:
-    """Fetch closing price and trading date on or shortly after target_date from Yahoo Finance."""
-    if not provider_symbol or not target_date:
+    """Fetch closing price and trading date for the beginning of the given (or current) year."""
+    y = year or date.today().year
+    target_date = date(y, 1, 1)
+    if not provider_symbol:
         return None
     try:
         t = yf.Ticker(provider_symbol)
         start_str = target_date.isoformat()
-        end_str = (target_date + timedelta(days=window_days)).isoformat()
+        end_str = (target_date + timedelta(days=10)).isoformat()
         hist = t.history(start=start_str, end=end_str)
         if hist.empty or "Close" not in hist:
-            # Fallback for start of year if period="ytd" returns valid data
-            if target_date.month == 1 and target_date.day == 1:
-                hist = t.history(period="ytd")
+            hist = t.history(period="ytd")
         if not hist.empty and "Close" in hist:
-            price = hist["Close"].iloc[0]
-            if pd.notna(price) and float(price) > 0:
-                idx = hist.index[0]
+            close_series = hist["Close"].dropna()
+            if not close_series.empty:
+                price = close_series.iloc[0]
+                idx = close_series.index[0]
                 actual_dt = (
                     idx.date()
                     if hasattr(idx, "date")
@@ -853,25 +908,88 @@ def _fetch_historical_quote_and_date(
                         else target_date
                     )
                 )
-                return round(float(price), 4), actual_dt
+                if float(price) > 0:
+                    return round(float(price), 4), actual_dt
     except Exception:
         pass
     return None
 
 
-def _fetch_historical_quote_for_date(provider_symbol: str, target_date: date) -> Optional[float]:
-    """Fetch closing price on or shortly after target_date from Yahoo Finance."""
-    res = _fetch_historical_quote_and_date(provider_symbol, target_date, window_days=7)
-    return res[0] if res else None
-
-
-def _fetch_start_of_year_quote(
-    provider_symbol: str, year: Optional[int] = None
+def _fetch_historical_quote_and_date(
+    provider_symbol: str, target_date: date, window_days: int = 10
 ) -> Optional[tuple[float, date]]:
-    """Fetch closing price and trading date for the beginning of the given (or current) year."""
-    y = year or date.today().year
-    target_date = date(y, 1, 1)
-    return _fetch_historical_quote_and_date(provider_symbol, target_date, window_days=10)
+    """Fetch closing price and trading date on or before target_date with resilient lookback and fallback."""
+    if not provider_symbol or not target_date:
+        return None
+    try:
+        # Special case: Start of Year (Jan 1) looks forward to the first trading day of January
+        if target_date.month == 1 and target_date.day == 1:
+            return _fetch_start_of_year_quote(provider_symbol, target_date.year)
+
+        t = yf.Ticker(provider_symbol)
+
+        # 1. Historical lookback window: window_days before target_date up to target_date + 1 day
+        start_str = (target_date - timedelta(days=window_days)).isoformat()
+        end_str = (target_date + timedelta(days=1)).isoformat()
+        hist = t.history(start=start_str, end=end_str)
+
+        if not hist.empty and "Close" in hist:
+            valid_rows = []
+            for idx, row in hist.iterrows():
+                row_dt = idx.date() if hasattr(idx, "date") else idx.to_pydatetime().date()
+                val = row["Close"]
+                if row_dt <= target_date and pd.notna(val) and float(val) > 0:
+                    valid_rows.append((float(val), row_dt))
+
+            if valid_rows:
+                # Select the most recent available trading day's close on or before target_date
+                price, actual_dt = valid_rows[-1]
+                return round(price, 4), actual_dt
+
+        # 2. Resilient fallback for today / closed market / weekends / intraday
+        price = None
+        actual_dt = target_date
+
+        try:
+            fi = getattr(t, "fast_info", None)
+            if fi:
+                lp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
+                if lp is not None and not math.isnan(float(lp)) and float(lp) > 0:
+                    price = float(lp)
+                if price is None:
+                    pc = getattr(fi, "previous_close", None) or getattr(fi, "regularMarketPreviousClose", None)
+                    if pc is not None and not math.isnan(float(pc)) and float(pc) > 0:
+                        price = float(pc)
+        except Exception:
+            pass
+
+        if price is None:
+            try:
+                hist_recent = t.history(period="5d")
+                if not hist_recent.empty and "Close" in hist_recent:
+                    recent_series = hist_recent["Close"].dropna()
+                    if not recent_series.empty:
+                        last_val = recent_series.iloc[-1]
+                        if float(last_val) > 0:
+                            price = float(last_val)
+                            last_idx = recent_series.index[-1]
+                            actual_dt = last_idx.date() if hasattr(last_idx, "date") else target_date
+            except Exception:
+                pass
+
+        if price is not None and price > 0:
+            return round(price, 4), actual_dt
+
+    except Exception as e:
+        logger.debug(f"Error in _fetch_historical_quote_and_date for {provider_symbol}: {e}")
+
+    return None
+
+
+def _fetch_historical_quote_for_date(provider_symbol: str, target_date: date) -> Optional[float]:
+    """Fetch closing price on or shortly before target_date from Yahoo Finance."""
+    res = _fetch_historical_quote_and_date(provider_symbol, target_date, window_days=10)
+    return res[0] if res else None
 
 
 @app.post("/api/instruments/{ticker}/fetch-analysis-price")
@@ -1043,7 +1161,7 @@ def remove_instrument(ticker: str):
 
 @app.post("/api/instruments/{ticker}/refresh")
 def refresh_single(ticker: str):
-    """Refresh the quote for one instrument from Yahoo Finance."""
+    """Refresh the quote for one instrument from Yahoo Finance and auto-resolve missing reference prices."""
     inst = get_instrument_by_ticker(ticker)
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
@@ -1058,6 +1176,21 @@ def refresh_single(ticker: str):
             q.instrument_id = inst.id
             upsert_quote(q)
 
+            inst_modified = False
+
+            # Auto-resolve Analysis reference price if missing
+            if (
+                inst.analysis_reference_price is None
+                or inst.analysis_reference_price <= 0
+            ):
+                target_dt = inst.analysis_date or date.today()
+                hist_p = _fetch_historical_quote_for_date(inst.provider_symbol, target_dt)
+                if hist_p is not None and hist_p > 0:
+                    inst.analysis_reference_price = Decimal(str(hist_p))
+                    if not inst.analysis_date:
+                        inst.analysis_date = target_dt
+                    inst_modified = True
+
             # Auto-resolve YTD start of year price if missing or outdated
             current_year = date.today().year
             if (
@@ -1069,12 +1202,17 @@ def refresh_single(ticker: str):
                 if res_ytd is not None:
                     inst.start_of_year_price = Decimal(str(res_ytd[0]))
                     inst.start_of_year_date = res_ytd[1]
-                    upsert_instrument(inst)
+                    inst_modified = True
+
+            if inst_modified:
+                upsert_instrument(inst)
 
             return {
                 "status": "ok",
                 "price": _to_float(q.price),
                 "previous_close": _to_float(q.previous_close),
+                "analysis_reference_price": _to_float(inst.analysis_reference_price),
+                "start_of_year_price": _to_float(inst.start_of_year_price),
                 "provider": q.provider,
                 "quote_status": q.status.name,
             }

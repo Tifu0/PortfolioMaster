@@ -160,6 +160,8 @@ export interface InstrumentCreateRequest {
 export interface InstrumentUpdateRequest {
   new_ticker?: string | null;
   company_name?: string | null;
+  exchange?: string | null;
+  currency?: string | null;
   target_price?: number | null;
   analysis_reference_price?: number | null;
   analysis_date?: string | null;
@@ -195,6 +197,8 @@ export interface RefreshSingleResponse {
   status: string;
   price?: number | null;
   previous_close?: number | null;
+  analysis_reference_price?: number | null;
+  start_of_year_price?: number | null;
   provider?: string;
   quote_status?: string;
   detail?: string;
