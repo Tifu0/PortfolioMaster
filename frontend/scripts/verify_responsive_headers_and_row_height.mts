@@ -7,6 +7,7 @@ import {
   DEFAULT_ROW_HEIGHT,
   MAX_ROW_HEIGHT,
   ROW_HEIGHT_STORAGE_KEY,
+  SORTING_STORAGE_KEY,
 } from '../components/WatchlistTable';
 
 console.log('Testing Word-Stacked Responsive Headers & Global Row Height Controller...');
@@ -28,7 +29,11 @@ if (ROW_HEIGHT_STORAGE_KEY !== 'portfoliomaster_row_height') {
   console.error(`❌ ROW_HEIGHT_STORAGE_KEY expected "portfoliomaster_row_height", got ${ROW_HEIGHT_STORAGE_KEY}`);
   process.exit(1);
 }
-console.log('✅ Row height constants (32px min, 48px default, 88px max) and storage key verified');
+if (SORTING_STORAGE_KEY !== 'portfoliomaster_table_sorting') {
+  console.error(`❌ SORTING_STORAGE_KEY expected "portfoliomaster_table_sorting", got ${SORTING_STORAGE_KEY}`);
+  process.exit(1);
+}
+console.log('✅ Row height constants, row height storage key, and sorting storage key verified');
 
 // 2. Verify Toolbar Configuration Defaults & Hidden-by-Default Row Height
 if (DEFAULT_TOOLBAR_CONFIG.rowHeight !== false) {
@@ -137,6 +142,10 @@ if (!tableContent.includes('cellPaddingClass')) {
   console.error('❌ Dynamic cellPaddingClass calculation missing');
   process.exit(1);
 }
-console.log('✅ Row height popover verified: slider + numeric input, min-value warning, 2-row live preview (AAPL & BME:MAP), and CSS variable binding');
+if (!tableContent.includes('handleSortingChange') || !tableContent.includes('onSortingChange: handleSortingChange')) {
+  console.error('❌ Sorting persistence mechanism missing in WatchlistTable');
+  process.exit(1);
+}
+console.log('✅ Row height popover verified: slider + numeric input, min-value warning, 2-row live preview (AAPL & BME:MAP), CSS variable binding, and table sorting persistence');
 
 console.log('All Word-Stacked Responsive Headers & Row Height Controller tests passed successfully! 🚀');

@@ -18,7 +18,7 @@ Built on a decoupled modern architecture:
   - **📅 Inline Analysis Date Column**: Dedicated column for displaying the analysis date with single-click inline editing, keyboard shortcuts (`Enter` to save, `Escape` to cancel, blur to commit), and automatic price recalculation via Yahoo Finance.
   - **📝 Inline Research Notes & Descriptions**: Clickable document icon (`FileText`) on each ticker to view and edit company analysis notes, investment thesis, and comments directly inline with SQLite persistence.
   - **↔️ Interactive Column Resizing**: Google Sheets-style column width adjustment with drag handles, double-click to auto-reset individual columns, automatic `localStorage` persistence, and a **`Restore Columns`** button in the toolbar.
-  - Multi-column sorting powered by TanStack Table.
+  - Multi-column sorting powered by TanStack Table, retaining column sort choices (e.g. Daily Change ascending) across page reloads.
   - Real-time instant search by ticker or company name.
   - Dynamic filters by market exchange and currency with single-row responsive layout.
 
@@ -101,20 +101,12 @@ npm run dev
 
 ### ⚙️ Environment Configuration (`.env`)
 
-You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example)):
+> [!NOTE]
+> Having a `.env` file is **completely optional**. PortfolioMaster works out-of-the-box without `.env` using robust built-in defaults (`PORTFOLIOMASTER_DB_PATH="portfolio.db"`, `REFRESH_INTERVAL_SECONDS=300`, `REFRESH_BATCH_SIZE=10`, and frontend `API_BASE_URL="http://localhost:8000"`).
 
-```ini
-# Path to SQLite database file (default: portfolio.db)
-PORTFOLIOMASTER_DB_PATH=portfolio.db
+You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example))
 
-# Auto-refresh interval in seconds (default: 300, set to 0 to disable background auto-refresh)
-REFRESH_INTERVAL_SECONDS=60
-
-# Number of ticker symbols sent per batch to Yahoo Finance (default: 10)
-REFRESH_BATCH_SIZE=25
-```
-
-These variables are dynamically exposed to the frontend via `/api/config` and displayed in the real-time status badge at the top-right of the dashboard.
+Refresh interval and batch size are dynamically exposed to the frontend via `/api/config` and displayed in the real-time status badge at the top-right of the dashboard.
 
 ---
 

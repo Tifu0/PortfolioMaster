@@ -73,6 +73,7 @@ export const MIN_ROW_HEIGHT = 32;
 export const DEFAULT_ROW_HEIGHT = 48;
 export const MAX_ROW_HEIGHT = 88;
 export const ROW_HEIGHT_STORAGE_KEY = 'portfoliomaster_row_height';
+export const SORTING_STORAGE_KEY = 'portfoliomaster_table_sorting';
 
 // ========================================================================== //
 // Toolbar Configuration Types & Defaults
@@ -546,6 +547,36 @@ export function WatchlistTable({
   }, [activePositions]);
 
   const [sorting, setSorting] = useState<SortingState>([]);
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem(SORTING_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed)) {
+          setSorting(parsed);
+        }
+      }
+    } catch {
+      // ignore storage access errors
+    }
+  }, []);
+
+  const handleSortingChange = useCallback(
+    (updater: React.SetStateAction<SortingState>) => {
+      setSorting((prev) => {
+        const next = typeof updater === 'function' ? updater(prev) : updater;
+        try {
+          localStorage.setItem(SORTING_STORAGE_KEY, JSON.stringify(next));
+        } catch {
+          // ignore
+        }
+        return next;
+      });
+    },
+    []
+  );
+
   const [globalFilter, setGlobalFilter] = useState('');
   const [selectedExchange, setSelectedExchange] = useState<string>('ALL');
   const [selectedCurrency, setSelectedCurrency] = useState<string>('ALL');
@@ -1594,7 +1625,7 @@ export function WatchlistTable({
       sorting,
       columnSizing,
     },
-    onSortingChange: setSorting,
+    onSortingChange: handleSortingChange,
     onColumnSizingChange: handleColumnSizingChange,
     columnResizeMode: 'onChange',
     enableColumnResizing: true,
