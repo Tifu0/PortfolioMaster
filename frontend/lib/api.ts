@@ -60,6 +60,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
 export async function getPositions(cache: RequestCache = 'no-store'): Promise<PositionsResponse> {
   const res = await fetch(`${API_BASE_URL}/api/positions`, {
     cache,
+    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<PositionsResponse>(res);
 }
@@ -71,6 +72,7 @@ export async function getPositions(cache: RequestCache = 'no-store'): Promise<Po
 export async function getInstruments(cache: RequestCache = 'no-store'): Promise<InstrumentsResponse> {
   const res = await fetch(`${API_BASE_URL}/api/instruments`, {
     cache,
+    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<InstrumentsResponse>(res);
 }
@@ -198,6 +200,7 @@ export async function wipeDatabase(): Promise<GenericStatusResponse> {
 export async function getMetrics(cache: RequestCache = 'no-store'): Promise<PortfolioMetrics> {
   const res = await fetch(`${API_BASE_URL}/api/metrics`, {
     cache,
+    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<PortfolioMetrics>(res);
 }
@@ -292,7 +295,10 @@ export async function checkYahooTicker(ticker: string, currency?: string): Promi
   const url = new URL(`${API_BASE_URL}/api/instruments/check-yahoo`);
   url.searchParams.set('ticker', ticker);
   if (currency) url.searchParams.set('currency', currency);
-  const res = await fetch(url.toString());
+  const res = await fetch(url.toString(), {
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache, no-store' },
+  });
   return handleResponse<CheckYahooResponse>(res);
 }
 
@@ -301,7 +307,10 @@ export async function checkYahooTicker(ticker: string, currency?: string): Promi
  * Retrieves backend runtime configuration (refresh interval, batch size, last refresh status).
  */
 export async function getConfig(): Promise<AppConfig> {
-  const res = await fetch(`${API_BASE_URL}/api/config`);
+  const res = await fetch(`${API_BASE_URL}/api/config`, {
+    cache: 'no-store',
+    headers: { 'Cache-Control': 'no-cache, no-store' },
+  });
   return handleResponse<AppConfig>(res);
 }
 

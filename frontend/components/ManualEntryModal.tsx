@@ -34,6 +34,7 @@ import {
   fetchYtdPrice,
   checkYahooTicker,
 } from '@/lib/api';
+import { usePortfolio } from '@/context/PortfolioContext';
 
 const POPULAR_EXCHANGES: { label: string; value: string }[] = [
   { label: 'AUTO (Detección automática)', value: 'AUTO' },
@@ -77,6 +78,14 @@ export function ManualEntryModal({
   onSuccess,
   onError,
 }: ManualEntryModalProps) {
+  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    portfolioContext = usePortfolio();
+  } catch {
+    // Standalone fallback
+  }
+
   const isEditMode = Boolean(initialTickerToEdit);
   const [loading, setLoading] = useState(false);
   const [instrumentsList, setInstrumentsList] = useState<Instrument[]>([]);
@@ -128,6 +137,7 @@ export function ManualEntryModal({
 
   useEffect(() => {
     if (isOpen) {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       loadInstruments();
       if (initialTickerToEdit) {
         setOriginalTickerToEdit(initialTickerToEdit);
@@ -163,11 +173,11 @@ export function ManualEntryModal({
       try {
         const detail = await getInstrument(originalTickerToEdit);
         if (!isMounted) return;
-        const inst = (detail as any).instrument || detail;
-        const quote = (detail as any).quote || detail.quote;
+        const inst = detail.instrument || (detail as unknown as Partial<Instrument>);
+        const quote = detail.quote;
 
-        setEditTicker(inst.user_ticker || originalTickerToEdit);
-        setEditCompanyName(inst.company_name || '');
+        setEditTicker(inst.user_ticker ? String(inst.user_ticker) : originalTickerToEdit);
+        setEditCompanyName(inst.company_name ? String(inst.company_name) : '');
         setEditTargetPrice(
           inst.target_price !== null && inst.target_price !== undefined
             ? String(inst.target_price)
@@ -179,15 +189,15 @@ export function ManualEntryModal({
             ? String(inst.analysis_reference_price)
             : ''
         );
-        setEditAnalysisDate(inst.analysis_date || '');
+        setEditAnalysisDate(inst.analysis_date ? String(inst.analysis_date) : '');
         setEditStartOfYearPrice(
           inst.start_of_year_price !== null &&
           inst.start_of_year_price !== undefined
             ? String(inst.start_of_year_price)
             : ''
         );
-        setEditStartOfYearDate(inst.start_of_year_date || '');
-        setEditComment(inst.comment || '');
+        setEditStartOfYearDate(inst.start_of_year_date ? String(inst.start_of_year_date) : '');
+        setEditComment(inst.comment ? String(inst.comment) : '');
         setEditLatestPrice(
           quote?.price !== null && quote?.price !== undefined
             ? String(quote.price)
@@ -276,13 +286,16 @@ export function ManualEntryModal({
       });
 
       onSuccess?.(`Instrumento ${addTicker.trim()} añadido con éxito.`);
+      if (portfolioContext) {
+        portfolioContext.refreshPortfolioData({ silent: true });
+      }
       // Reset form
       setAddTicker('');
       setAddCompanyName('');
       setAddExchange('AUTO');
       setAddCurrency('AUTO');
-      addTargetPrice && setAddTargetPrice('');
-      addAnalysisPrice && setAddAnalysisPrice('');
+      if (addTargetPrice) setAddTargetPrice('');
+      if (addAnalysisPrice) setAddAnalysisPrice('');
       setAddComment('');
       setAddManualPrice('');
       setAddManualPrevClose('');
@@ -365,6 +378,9 @@ export function ManualEntryModal({
       await updateInstrument(targetTicker, payload);
 
       onSuccess?.(`Instrumento ${trimmedNewTicker} actualizado correctamente.`);
+      if (portfolioContext) {
+        portfolioContext.refreshPortfolioData({ silent: true });
+      }
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -448,6 +464,9 @@ export function ManualEntryModal({
         if (res.previous_close !== undefined && res.previous_close !== null) {
           setEditPrevClose(String(res.previous_close));
         }
+        if (portfolioContext) {
+          portfolioContext.refreshPortfolioData({ silent: true });
+        }
       } else {
         onError?.(`${targetTicker}: ${res.detail || 'sin datos disponibles'}`);
       }
@@ -459,16 +478,25 @@ export function ManualEntryModal({
     }
   };
 
-  // ── Delete Instrument ────────────────────────────────────────────────── //
+  // ── Delete Instrument (Optimistic UI with Rollback) ─────────────────── //
   const handleDeleteInstrument = async () => {
     const targetTicker = originalTickerToEdit || editTicker.trim();
     if (!targetTicker) return;
     setLoading(true);
+
+    // Instant optimistic deletion from UI
+    const rollback = portfolioContext?.optimisticDelete(targetTicker);
+
     try {
       await deleteInstrument(targetTicker);
       onSuccess?.(`Instrumento ${targetTicker} eliminado de la base de datos.`);
+      if (portfolioContext) {
+        portfolioContext.refreshPortfolioData({ silent: true });
+      }
       onClose();
     } catch (err: unknown) {
+      // Rollback to previous positions if delete failed
+      rollback?.();
       const msg = err instanceof Error ? err.message : String(err);
       onError?.(`Error al eliminar instrumento: ${msg}`);
     } finally {

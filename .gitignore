@@ -59,5 +59,6 @@ Thumbs.db
 test-results/
 playwright-report/
 
-# Automatic database backups
+# Automatic database backups & generated docs
 backups/
+docs/

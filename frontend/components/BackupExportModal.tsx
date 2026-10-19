@@ -24,6 +24,7 @@ import {
   restoreBackupFile,
   restoreLocalBackup,
 } from '@/lib/api';
+import { usePortfolio } from '@/context/PortfolioContext';
 import type { BackupItem } from '@/lib/types';
 
 interface BackupExportModalProps {
@@ -41,6 +42,14 @@ export function BackupExportModal({
   onError,
   onDataRestored,
 }: BackupExportModalProps) {
+  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    portfolioContext = usePortfolio();
+  } catch {
+    // Standalone fallback
+  }
+
   const [activeTab, setActiveTab] = useState<'export' | 'backup'>('export');
 
   // Export loading states
@@ -76,6 +85,7 @@ export function BackupExportModal({
 
   useEffect(() => {
     if (isOpen && activeTab === 'backup') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchBackups();
     }
   }, [isOpen, activeTab, fetchBackups]);
@@ -134,6 +144,9 @@ export function BackupExportModal({
       setSelectedFile(null);
       setConfirmFileRestore(false);
       await fetchBackups();
+      if (portfolioContext) {
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      }
       onDataRestored();
       handleClose();
     } catch (err: unknown) {
@@ -155,6 +168,9 @@ export function BackupExportModal({
       );
       setBackupToRestore(null);
       await fetchBackups();
+      if (portfolioContext) {
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      }
       onDataRestored();
       handleClose();
     } catch (err: unknown) {

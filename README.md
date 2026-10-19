@@ -29,7 +29,7 @@ Built on a decoupled modern architecture:
 
 - **🔄 Unified Market Data & Analysis Refresh Engine**:
   - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices and start-of-year (YTD) reference prices in one unified operation.
-  - Configurable background auto-refresh loop and batch processing with timeout protection and retry strategies.
+  - Configurable background auto-refresh loop driven by `REFRESH_INTERVAL_SECONDS` that runs silently without interrupting open dialogs or inline typing.
 
 - **📥 CSV & Excel Spreadsheet Import**:
   - Drag-and-drop file upload supporting `.csv` and `.xlsx` files.
@@ -137,9 +137,10 @@ PortfolioMaster/
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
 │   ├── components/             # React components (WatchlistTable, BackupExportView, BackupExportModal, MetricCards, ImportView, ManualEntryModal)
+│   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
-│   └── scripts/                # Automated verification and test scripts
+│   └── scripts/                # Automated verification and test scripts (10 test suites)
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)

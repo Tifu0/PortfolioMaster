@@ -6,6 +6,7 @@
 
 import React, { useState, useRef } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -21,9 +22,19 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { previewImport, confirmImport } from '@/lib/api';
+import { usePortfolio } from '@/context/PortfolioContext';
 import type { ImportPreviewResponse, Instrument } from '@/lib/types';
 
 export function ImportView() {
+  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    portfolioContext = usePortfolio();
+  } catch {
+    // Standalone fallback
+  }
+  const router = useRouter();
+
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
@@ -114,6 +125,16 @@ export function ImportView() {
       setSuccessCount(res.committed);
       setPreview(null);
       setFile(null);
+
+      // Invalidate and refresh portfolio state across routes ("Zero-F5" Architecture)
+      if (portfolioContext) {
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      }
+      try {
+        router.refresh();
+      } catch {
+        // Safe fallback in test environments
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       setErrorMessage(`Error al confirmar la importación: ${msg}`);

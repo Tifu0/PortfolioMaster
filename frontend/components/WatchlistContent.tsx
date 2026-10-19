@@ -11,6 +11,7 @@ import { MetricCards } from '@/components/MetricCards';
 import { WatchlistTable } from '@/components/WatchlistTable';
 import { ManualEntryModal } from '@/components/ManualEntryModal';
 import { getPositions, getMetrics, getConfig } from '@/lib/api';
+import { usePortfolio } from '@/context/PortfolioContext';
 import { Check, AlertTriangle, Info, X } from 'lucide-react';
 
 interface WatchlistContentProps {
@@ -64,9 +65,28 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
  * ManualEntryModal, and reactive state updates.
  */
 export function WatchlistContent({ initialPositions, initialMetrics, initialConfig }: WatchlistContentProps) {
-  const [positions, setPositions] = useState<Position[]>(initialPositions);
-  const [metrics, setMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
-  const [appConfig, setAppConfig] = useState<AppConfig | null>(initialConfig || null);
+  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    portfolioContext = usePortfolio();
+  } catch {
+    // Fallback if rendered outside provider
+  }
+
+  // Seed initial server-fetched data into portfolio provider
+  useEffect(() => {
+    if (portfolioContext) {
+      portfolioContext.seedInitialData(initialPositions, initialMetrics, initialConfig);
+    }
+  }, [portfolioContext, initialPositions, initialMetrics, initialConfig]);
+
+  const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
+  const [localMetrics, setLocalMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
+  const [localConfig, setLocalConfig] = useState<AppConfig | null>(initialConfig || null);
+
+  const positions = portfolioContext ? portfolioContext.positions : (localPositions.length > 0 ? localPositions : initialPositions);
+  const metrics = portfolioContext ? portfolioContext.metrics : (localMetrics || initialMetrics);
+  const appConfig = portfolioContext ? portfolioContext.config : (localConfig || initialConfig);
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -88,24 +108,30 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
     setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
-  // Fetch backend runtime configuration (refresh interval & batch size)
+  // Fetch backend runtime configuration if not present
   useEffect(() => {
     let isCancelled = false;
     async function loadConfig() {
       try {
         const cfg = await getConfig();
         if (!isCancelled) {
-          setAppConfig(cfg);
+          if (portfolioContext) {
+            portfolioContext.setConfig(cfg);
+          } else {
+            setLocalConfig(cfg);
+          }
         }
       } catch (err) {
         console.warn('Could not fetch app configuration from backend:', err);
       }
     }
-    loadConfig();
+    if (!appConfig) {
+      loadConfig();
+    }
     return () => {
       isCancelled = true;
     };
-  }, []);
+  }, [appConfig, portfolioContext]);
 
   // Listen for ?add=1 or ?edit=TICKER in URL and custom header events
   useEffect(() => {
@@ -141,6 +167,10 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
 
   // Reload data from API
   const reloadData = useCallback(async () => {
+    if (portfolioContext) {
+      await portfolioContext.refreshPortfolioData({ silent: true });
+      return;
+    }
     try {
       const [posRes, metRes] = await Promise.allSettled([getPositions(), getMetrics()]);
       let newPos: Position[] = [];
@@ -153,12 +183,12 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
         newMet = metRes.value;
       }
 
-      setPositions(newPos);
-      setMetrics(newMet);
+      setLocalPositions(newPos);
+      setLocalMetrics(newMet);
     } catch (err: unknown) {
       console.error('Error reloading portfolio data:', err);
     }
-  }, []);
+  }, [portfolioContext]);
 
   // Auto-refresh timer: synchronizes client table state with backend quotes updates
   useEffect(() => {
@@ -176,10 +206,15 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
 
   const handleDataChange = useCallback(
     (newPositions: Position[], newMetrics: PortfolioMetrics | null) => {
-      setPositions(newPositions);
-      setMetrics(newMetrics);
+      if (portfolioContext) {
+        portfolioContext.setPositions(newPositions);
+        portfolioContext.setMetrics(newMetrics);
+      } else {
+        setLocalPositions(newPositions);
+        setLocalMetrics(newMetrics);
+      }
     },
-    []
+    [portfolioContext]
   );
 
   const handleOpenAdd = useCallback(() => {

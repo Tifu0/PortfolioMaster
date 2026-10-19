@@ -26,6 +26,8 @@ import {
   restoreBackupFile,
   restoreLocalBackup,
 } from '@/lib/api';
+import { useRouter } from 'next/navigation';
+import { usePortfolio } from '@/context/PortfolioContext';
 import type { BackupItem } from '@/lib/types';
 
 interface ToastData {
@@ -79,6 +81,15 @@ export function BackupExportView({
   onError: propOnError,
   onDataRestored: propOnDataRestored,
 }: BackupExportViewProps = {}) {
+  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    portfolioContext = usePortfolio();
+  } catch {
+    // Standalone fallback
+  }
+  const router = useRouter();
+
   const [activeTab, setActiveTab] = useState<'export' | 'backup'>('export');
 
   // Export loading states
@@ -132,6 +143,7 @@ export function BackupExportView({
 
   useEffect(() => {
     if (activeTab === 'backup') {
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       fetchBackups();
     }
   }, [activeTab, fetchBackups]);
@@ -183,6 +195,14 @@ export function BackupExportView({
       setSelectedFile(null);
       setConfirmFileRestore(false);
       await fetchBackups();
+      if (portfolioContext) {
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      }
+      try {
+        router.refresh();
+      } catch {
+        // Safe fallback in test environments
+      }
       propOnDataRestored?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -204,6 +224,14 @@ export function BackupExportView({
       );
       setBackupToRestore(null);
       await fetchBackups();
+      if (portfolioContext) {
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      }
+      try {
+        router.refresh();
+      } catch {
+        // Safe fallback in test environments
+      }
       propOnDataRestored?.();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);

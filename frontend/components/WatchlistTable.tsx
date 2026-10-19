@@ -42,6 +42,7 @@ import {
   SlidersHorizontal,
 } from 'lucide-react';
 import { BackupExportModal } from '@/components/BackupExportModal';
+import { usePortfolio } from '@/context/PortfolioContext';
 import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse, AppConfig } from '@/lib/types';
 import {
   getPositions,
@@ -462,7 +463,26 @@ export function WatchlistTable({
   onEditTicker,
   onAddInstrument,
 }: WatchlistTableProps) {
-  const [data, setData] = useState<Position[]>(initialPositions);
+  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    portfolioContext = usePortfolio();
+  } catch {
+    // Fallback if rendered outside provider
+  }
+
+  const activePositions = portfolioContext ? portfolioContext.positions : initialPositions;
+  const activeMetrics =
+    portfolioContext && portfolioContext.metrics
+      ? portfolioContext.metrics
+      : (_initialMetrics ?? null);
+
+  const [data, setData] = useState<Position[]>(activePositions);
+
+  useEffect(() => {
+    setData(activePositions);
+  }, [activePositions]);
+
   const [sorting, setSorting] = useState<SortingState>([]);
   const [globalFilter, setGlobalFilter] = useState('');
   const [selectedExchange, setSelectedExchange] = useState<string>('ALL');
@@ -641,27 +661,39 @@ export function WatchlistTable({
     const ticker = pos.user_ticker;
     const newComment = commentDrafts[ticker] !== undefined ? commentDrafts[ticker] : (pos.comment || '');
     setSavingCommentTicker(ticker);
+
+    // Instant optimistic update with rollback support
+    const rollback = portfolioContext?.optimisticUpdatePosition(ticker, { comment: newComment });
+    setData((prev) => {
+      const updated = prev.map((item) =>
+        item.user_ticker === ticker ? { ...item, comment: newComment } : item
+      );
+      onDataChange?.(updated, activeMetrics);
+      return updated;
+    });
+
     try {
       await updateInstrument(ticker, { comment: newComment });
-      setData((prev) => {
-        const updated = prev.map((item) =>
-          item.user_ticker === ticker ? { ...item, comment: newComment } : item
-        );
-        onDataChange?.(updated, _initialMetrics ?? null);
-        return updated;
-      });
       addToast('success', `Descripción de ${ticker} guardada correctamente`);
+      if (portfolioContext) {
+        portfolioContext.refreshPortfolioData({ silent: true });
+      }
     } catch (err) {
+      rollback?.();
       const msg = err instanceof Error ? err.message : String(err);
       addToast('error', `Error al guardar la descripción de ${ticker}: ${msg}`);
     } finally {
       setSavingCommentTicker(null);
     }
-  }, [commentDrafts, addToast, onDataChange, _initialMetrics]);
+  }, [commentDrafts, addToast, onDataChange, activeMetrics, portfolioContext]);
 
   // ── Reload data from API ────────────────────────────────────────────── //
 
   const reloadData = useCallback(async () => {
+    if (portfolioContext) {
+      await portfolioContext.refreshPortfolioData({ silent: true });
+      return;
+    }
     try {
       const [posResult, metricsResult] = await Promise.allSettled([
         getPositions(),
@@ -683,9 +715,13 @@ export function WatchlistTable({
     } catch {
       // Silently handle — the toast from the caller is sufficient
     }
-  }, [onDataChange]);
+  }, [portfolioContext, onDataChange]);
 
   const handleDataRestored = useCallback(async () => {
+    if (portfolioContext) {
+      await portfolioContext.refreshPortfolioData({ silent: true });
+      return;
+    }
     try {
       const [posRes, metRes] = await Promise.allSettled([getPositions(), getMetrics()]);
       const newPos = posRes.status === 'fulfilled' ? posRes.value.positions || [] : [];
@@ -695,7 +731,7 @@ export function WatchlistTable({
     } catch (err) {
       console.error('Error refreshing data after restore:', err);
     }
-  }, [onDataChange]);
+  }, [portfolioContext, onDataChange]);
 
   // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
 
@@ -780,6 +816,11 @@ export function WatchlistTable({
       await wipeDatabase();
       addToast('success', 'Base de datos borrada correctamente.');
       setData([]);
+      if (portfolioContext) {
+        portfolioContext.setPositions([]);
+        portfolioContext.setMetrics(null);
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      }
       onDataChange?.([], null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -788,7 +829,7 @@ export function WatchlistTable({
       setWipingDb(false);
       setWipeModalOpen(false);
     }
-  }, [addToast, onDataChange]);
+  }, [addToast, onDataChange, portfolioContext]);
 
   // ── Resolve Missing Analysis Prices ────────────────────────────────── //
 
@@ -1271,6 +1312,7 @@ export function WatchlistTable({
   const table = useReactTable({
     data: filteredData,
     columns,
+    getRowId: (row) => row.user_ticker,
     state: {
       sorting,
       columnSizing,
