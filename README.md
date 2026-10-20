@@ -186,11 +186,26 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 Both backend and frontend contain automated test suites.
 
 ### Backend & Core Tests (Python)
-Run all 76 unit and integration tests with `pytest`:
-```bash
-venv\Scripts\activate
-pytest
-```
+
+Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
+
+1. **Standard Execution (Offline / Fast - Default):**
+   Runs all unit and integration tests using mocks (75 tests):
+   ```bash
+   venv\Scripts\python -u -m pytest
+   ```
+
+2. **Network Integration Tests (Live Yahoo Finance):**
+   Runs only the tests that connect to external APIs (Yahoo Finance):
+   ```bash
+   venv\Scripts\python -u -m pytest -m network
+   ```
+
+3. **Complete Suite (All Tests):**
+   Runs both offline and live network tests:
+   ```bash
+   venv\Scripts\python -u -m pytest -m ""
+   ```
 
 ### Frontend Tests (TypeScript)
 Run contract verification and component tests:

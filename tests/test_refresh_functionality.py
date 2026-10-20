@@ -76,6 +76,7 @@ def test_refresh_functionality_with_mock_data():
     assert Decimal(str(price)) == Decimal("150.00")
 
 
+@pytest.mark.network
 def test_refresh_with_yfinance_prints_quote():
     """Igual que el anterior pero usando yfinance y haciendo print de la info."""
     _reset_db()
