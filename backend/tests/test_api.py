@@ -256,6 +256,33 @@ class TestUpdateInstrument:
         assert inst["company_name"] == "Meta Platforms Inc."
         assert inst["target_price"] == 600.0
 
+    def test_update_save_and_update_analysis_date_single_put(self):
+        """Verify single-request save and update analysis date + synced reference price."""
+        from datetime import date
+        today_str = date.today().isoformat()
+
+        # Create test instrument with older analysis date
+        client.post("/api/instruments", json={
+            "user_ticker": "AAPL",
+            "currency": "USD",
+            "fetch_yahoo": False,
+            "manual_price": 225.50,
+        })
+
+        # Send single PUT overriding analysis_date to today and analysis_reference_price to quote price
+        r = client.put("/api/instruments/AAPL", json={
+            "analysis_date": today_str,
+            "analysis_reference_price": 225.50,
+            "target_price": 260.00,
+            "comment": "Updated thesis",
+        })
+        assert r.status_code == 200
+        inst = r.json()["instrument"]
+        assert inst["analysis_date"] == today_str
+        assert inst["analysis_reference_price"] == 225.50
+        assert inst["target_price"] == 260.00
+        assert inst["comment"] == "Updated thesis"
+
     def test_update_rename_ticker(self):
         client.post("/api/instruments", json={
             "user_ticker": "AMZN_OLD",

@@ -43,6 +43,7 @@ Built on a decoupled modern architecture:
   - **Automatic Local Safety Backups**: Automated snapshots saved to `backups/` prior to any destructive operation (`DELETE /api/database`, `POST /api/import/confirm`, or database restorations), with automatic rotation maintaining the 10 most recent snapshots.
   - **SQLite & JSON Restore Validator**: Upload or drag-and-drop restore with `PRAGMA integrity_check` verification, schema validation, and 1-click restore from local automatic snapshots with confirmation guards.
 
+
 - **⚙️ Customizable Action Toolbar with Persistence & Row Height Controller**:
   - **Toolbar Customization Popover**: Positioned at the far right of the action toolbar, allowing users to toggle the visibility of individual action buttons (Update Quotes, Add Instrument, Restore Columns, Row Height, Export / Copy, Import Values, and Clear DB).
   - **Safe Database Reset Protection**: The destructive `Clear DB` button is hidden by default and protected by both toolbar visibility toggle and confirmation modal guard.
@@ -118,7 +119,7 @@ PortfolioMaster/
 │   ├── api/
 │   │   └── main.py             # FastAPI application and REST endpoints
 │   └── tests/
-│       ├── test_api.py         # Backend API integration tests (32 tests)
+│       ├── test_api.py         # Backend API integration tests (34 tests)
 │       └── test_backup_api.py  # Backup & Export API integration tests (10 tests)
 │
 ├── frontend/                   # Next.js web application (App Router)
@@ -127,7 +128,7 @@ PortfolioMaster/
 │   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
-│   └── scripts/                # Automated verification and test scripts (13 test suites)
+│   └── scripts/                # Automated verification and test scripts (14 test suites)
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
@@ -190,7 +191,7 @@ Both backend and frontend contain automated test suites.
 Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
 
 1. **Standard Execution (Offline / Fast - Default):**
-   Runs all unit and integration tests using mocks (75 tests):
+   Runs all unit and integration tests using mocks (76 tests):
    ```bash
    venv\Scripts\python -u -m pytest
    ```

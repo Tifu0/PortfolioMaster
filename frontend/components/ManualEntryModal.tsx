@@ -12,6 +12,7 @@ import {
   RefreshCw,
   Loader2,
   Check,
+  CalendarCheck,
   AlertTriangle,
   Building,
   DollarSign,
@@ -127,6 +128,19 @@ export function ManualEntryModal({
   const [checkingYahoo, setCheckingYahoo] = useState(false);
   const [syncingTickerData, setSyncingTickerData] = useState(false);
   const [yahooCheckResult, setYahooCheckResult] = useState<CheckYahooResponse | null>(null);
+  const [isAnalysisPriceManuallyEdited, setIsAnalysisPriceManuallyEdited] = useState(false);
+  const [savingAction, setSavingAction] = useState<'standard' | 'with_date' | null>(null);
+
+  // Helper to obtain today's date in local YYYY-MM-DD format
+  const getTodayLocalDateString = (): string => {
+    const now = new Date();
+    const year = now.getFullYear();
+    const month = String(now.getMonth() + 1).padStart(2, '0');
+    const day = String(now.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+  };
+
+  const isSubmitting = loading || fetchingHistorical || checkingYahoo || syncingTickerData;
 
   // Load available instruments
   const loadInstruments = useCallback(async () => {
@@ -137,24 +151,6 @@ export function ManualEntryModal({
       // Backend might be offline
     }
   }, []);
-
-  useEffect(() => {
-    if (isOpen) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect
-      loadInstruments();
-      if (initialTickerToEdit) {
-        setOriginalTickerToEdit(initialTickerToEdit);
-        setEditTicker(initialTickerToEdit);
-        setYahooCheckResult(null);
-        setConfirmDelete(false);
-      } else {
-        setOriginalTickerToEdit('');
-        setEditTicker('');
-        setConfirmDelete(false);
-        setYahooCheckResult(null);
-      }
-    }
-  }, [isOpen, initialTickerToEdit, loadInstruments]);
 
   // Handle Escape key to close modal
   useEffect(() => {
@@ -168,18 +164,57 @@ export function ManualEntryModal({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, onClose]);
 
-  // When originalTickerToEdit changes, fetch details
+  // Synchronize modal state and fetch instrument details whenever modal opens or ticker changes
   useEffect(() => {
-    if (!originalTickerToEdit) return;
+    if (!isOpen) {
+      // Clean up modal state on close to guarantee zero stale cache on reopen
+      setOriginalTickerToEdit('');
+      setEditTicker('');
+      setEditCompanyName('');
+      setEditExchange('AUTO');
+      setEditCurrency('AUTO');
+      setEditTargetPrice('');
+      setEditAnalysisPrice('');
+      setEditAnalysisDate('');
+      setEditStartOfYearPrice('');
+      setEditStartOfYearDate('');
+      setEditComment('');
+      setEditLatestPrice('');
+      setEditPrevClose('');
+      setConfirmDelete(false);
+      setYahooCheckResult(null);
+      setIsAnalysisPriceManuallyEdited(false);
+      setSavingAction(null);
+      return;
+    }
+
+    loadInstruments();
+    setIsAnalysisPriceManuallyEdited(false);
+    setSavingAction(null);
+
+    const targetTicker = initialTickerToEdit;
+    if (!targetTicker) {
+      setOriginalTickerToEdit('');
+      setEditTicker('');
+      setConfirmDelete(false);
+      setYahooCheckResult(null);
+      return;
+    }
+
+    setOriginalTickerToEdit(targetTicker);
+    setEditTicker(targetTicker);
+    setYahooCheckResult(null);
+    setConfirmDelete(false);
+
     let isMounted = true;
     (async () => {
       try {
-        const detail = await getInstrument(originalTickerToEdit);
+        const detail = await getInstrument(targetTicker);
         if (!isMounted) return;
         const inst = detail.instrument || (detail as unknown as Partial<Instrument>);
         const quote = detail.quote;
 
-        setEditTicker(inst.user_ticker ? String(inst.user_ticker) : originalTickerToEdit);
+        setEditTicker(inst.user_ticker ? String(inst.user_ticker) : targetTicker);
         setEditCompanyName(inst.company_name ? String(inst.company_name) : '');
         setEditExchange(inst.exchange ? String(inst.exchange) : 'AUTO');
         setEditCurrency(inst.currency ? String(inst.currency) : 'AUTO');
@@ -213,6 +248,7 @@ export function ManualEntryModal({
             ? String(quote.previous_close)
             : ''
         );
+        setIsAnalysisPriceManuallyEdited(false);
         setConfirmDelete(false);
         setYahooCheckResult(null);
       } catch (err: unknown) {
@@ -222,7 +258,7 @@ export function ManualEntryModal({
     return () => {
       isMounted = false;
     };
-  }, [originalTickerToEdit]);
+  }, [isOpen, initialTickerToEdit, loadInstruments]);
 
   if (!isOpen) return null;
 
@@ -411,6 +447,7 @@ export function ManualEntryModal({
         }
       }
 
+      setIsAnalysisPriceManuallyEdited(false);
       onSuccess?.(`Datos y precios de ${newTicker} sincronizados correctamente.`);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -420,9 +457,8 @@ export function ManualEntryModal({
     }
   };
 
-  // ── Submit Edit Instrument ───────────────────────────────────────────── //
-  const handleEditSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  // ── Unified Save Handler for Edit Mode (DRY & Zero Network Overhead) ──── //
+  const handleSave = async (updateDateToToday: boolean = false) => {
     const targetTicker = originalTickerToEdit || editTicker.trim();
     if (!targetTicker) return;
 
@@ -433,14 +469,32 @@ export function ManualEntryModal({
     }
 
     setLoading(true);
+    setSavingAction(updateDateToToday ? 'with_date' : 'standard');
     try {
+      let resolvedAnalysisDate = editAnalysisDate || null;
+      let resolvedAnalysisPrice =
+        editAnalysisPrice.trim() !== '' ? parseFloat(editAnalysisPrice) : null;
+
+      if (updateDateToToday) {
+        resolvedAnalysisDate = getTodayLocalDateString();
+        if (isAnalysisPriceManuallyEdited) {
+          resolvedAnalysisPrice =
+            editAnalysisPrice.trim() !== '' ? parseFloat(editAnalysisPrice) : null;
+        } else if (
+          editLatestPrice.trim() !== '' &&
+          !isNaN(parseFloat(editLatestPrice))
+        ) {
+          resolvedAnalysisPrice = parseFloat(editLatestPrice);
+        }
+      }
+
       const payload: Parameters<typeof updateInstrument>[1] = {
         company_name: editCompanyName.trim() || null,
         exchange: editExchange !== 'AUTO' ? editExchange : null,
         currency: editCurrency !== 'AUTO' ? editCurrency : null,
         target_price: editTargetPrice ? parseFloat(editTargetPrice) : null,
-        analysis_reference_price: editAnalysisPrice ? parseFloat(editAnalysisPrice) : null,
-        analysis_date: editAnalysisDate || null,
+        analysis_reference_price: resolvedAnalysisPrice,
+        analysis_date: resolvedAnalysisDate,
         start_of_year_price: editStartOfYearPrice ? parseFloat(editStartOfYearPrice) : null,
         start_of_year_date: editStartOfYearDate || null,
         comment: editComment.trim() || null,
@@ -454,17 +508,34 @@ export function ManualEntryModal({
 
       await updateInstrument(targetTicker, payload);
 
-      onSuccess?.(`Instrumento ${trimmedNewTicker} actualizado correctamente.`);
       if (portfolioContext) {
-        portfolioContext.refreshPortfolioData({ silent: true });
+        portfolioContext.optimisticUpdatePosition(targetTicker, {
+          analysis_date: resolvedAnalysisDate,
+          analysis_reference_price: resolvedAnalysisPrice,
+          target_price: payload.target_price,
+          comment: payload.comment || '',
+        });
+        await portfolioContext.refreshPortfolioData({ silent: true });
       }
+
+      onSuccess?.(
+        updateDateToToday
+          ? `Instrumento ${trimmedNewTicker} actualizado con fecha de hoy.`
+          : `Instrumento ${trimmedNewTicker} actualizado correctamente.`
+      );
       onClose();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       onError?.(`Error al actualizar instrumento: ${msg}`);
     } finally {
       setLoading(false);
+      setSavingAction(null);
     }
+  };
+
+  const handleEditSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    await handleSave(false);
   };
 
   // ── Fetch historical quote for analysis date ───────────────────────── //
@@ -477,6 +548,7 @@ export function ManualEntryModal({
       if (res.status === 'ok') {
         setEditAnalysisPrice(String(res.analysis_reference_price));
         if (res.analysis_date) setEditAnalysisDate(res.analysis_date);
+        setIsAnalysisPriceManuallyEdited(false);
         onSuccess?.(`Cotización en fecha de análisis obtenida de Yahoo: ${res.analysis_reference_price}`);
       }
     } catch (err: unknown) {
@@ -1025,7 +1097,10 @@ export function ManualEntryModal({
                           type="number"
                           step="0.01"
                           value={editAnalysisPrice}
-                          onChange={(e) => setEditAnalysisPrice(e.target.value)}
+                          onChange={(e) => {
+                            setIsAnalysisPriceManuallyEdited(true);
+                            setEditAnalysisPrice(e.target.value);
+                          }}
                           className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
                         />
                       </div>
@@ -1116,32 +1191,35 @@ export function ManualEntryModal({
                       />
                     </div>
 
-                    <div className="pt-2 flex flex-wrap items-center justify-between gap-3 border-t border-zinc-800">
+                    <div className="pt-3 border-t border-zinc-800 flex items-center justify-between gap-2">
                       {/* Yahoo quick fetch */}
                       <button
                         type="button"
                         onClick={handleSingleYahooRefresh}
-                        disabled={loading}
-                        className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors"
+                        disabled={isSubmitting}
+                        className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0 whitespace-nowrap"
+                        title="Consultar cotización en Yahoo Finance ahora"
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
-                        Consultar Yahoo Finance ahora
+                        <span className="hidden sm:inline">Consultar </span>Yahoo
                       </button>
 
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center justify-end gap-2 ml-auto shrink-0">
                         <button
                           type="button"
                           onClick={onClose}
-                          className="px-4 py-2 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
+                          disabled={isSubmitting}
+                          className="px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap"
                         >
                           Cancelar
                         </button>
                         <button
                           type="submit"
-                          disabled={loading}
-                          className="inline-flex items-center gap-2 px-5 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors disabled:opacity-50"
+                          disabled={isSubmitting}
+                          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 hover:border-emerald-500/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                          title="Guardar todos los cambios sin modificar la fecha de análisis"
                         >
-                          {loading ? (
+                          {savingAction === 'standard' ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                               Guardando...
@@ -1150,6 +1228,25 @@ export function ManualEntryModal({
                             <>
                               <Check className="w-3.5 h-3.5" />
                               Guardar Cambios
+                            </>
+                          )}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleSave(true)}
+                          disabled={isSubmitting}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 shadow-sm shadow-emerald-950/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
+                          title="Guardar cambios y actualizar la fecha de análisis a la fecha de hoy"
+                        >
+                          {savingAction === 'with_date' ? (
+                            <>
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                              Actualizando...
+                            </>
+                          ) : (
+                            <>
+                              <CalendarCheck className="w-3.5 h-3.5" />
+                              Guardar + Actualizar Fecha
                             </>
                           )}
                         </button>
