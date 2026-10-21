@@ -4,7 +4,7 @@
 // reactive state between MetricCards, WatchlistTable, and ManualEntryModal.
 // It also reads query parameters (?add=1 or ?edit=TICKER) to control modal visibility.
 
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { MetricCards } from '@/components/MetricCards';
@@ -84,9 +84,29 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
   const [localMetrics, setLocalMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
   const [localConfig, setLocalConfig] = useState<AppConfig | null>(initialConfig || null);
 
-  const positions = portfolioContext ? portfolioContext.positions : (localPositions.length > 0 ? localPositions : initialPositions);
-  const metrics = portfolioContext ? portfolioContext.metrics : (localMetrics || initialMetrics);
-  const appConfig = portfolioContext ? portfolioContext.config : (localConfig || initialConfig);
+  const positions = useMemo(() => {
+    if (portfolioContext && portfolioContext.isInitialized) {
+      return portfolioContext.positions;
+    }
+    if (initialPositions && initialPositions.length > 0) {
+      return initialPositions;
+    }
+    return portfolioContext ? portfolioContext.positions : localPositions;
+  }, [portfolioContext?.isInitialized, portfolioContext?.positions, initialPositions, localPositions]);
+
+  const metrics = useMemo(() => {
+    if (portfolioContext && portfolioContext.isInitialized && portfolioContext.metrics) {
+      return portfolioContext.metrics;
+    }
+    return initialMetrics || portfolioContext?.metrics || localMetrics;
+  }, [portfolioContext?.isInitialized, portfolioContext?.metrics, initialMetrics, localMetrics]);
+
+  const appConfig = useMemo(() => {
+    if (portfolioContext && portfolioContext.config) {
+      return portfolioContext.config;
+    }
+    return initialConfig || localConfig;
+  }, [portfolioContext?.config, initialConfig, localConfig]);
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);

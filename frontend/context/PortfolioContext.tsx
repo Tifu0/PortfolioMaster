@@ -8,9 +8,7 @@ import React, {
   useMemo,
   useRef,
   useState,
-  useTransition,
 } from 'react';
-import { useRouter } from 'next/navigation';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { getPositions, getMetrics, getConfig } from '@/lib/api';
 
@@ -19,6 +17,7 @@ export interface PortfolioContextType {
   metrics: PortfolioMetrics | null;
   config: AppConfig | null;
   isRefreshing: boolean;
+  isInitialized: boolean;
   lastRefreshedAt: Date | null;
   refreshPortfolioData: (options?: { silent?: boolean }) => Promise<void>;
   optimisticDelete: (ticker: string) => () => void;
@@ -53,10 +52,11 @@ export function PortfolioProvider({
   const [config, setConfig] = useState<AppConfig | null>(initialConfig);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
+  const [isInitialized, setIsInitialized] = useState(initialPositions.length > 0);
 
   const isInitialSeededRef = useRef(initialPositions.length > 0);
-  const router = useRouter();
-  const [, startTransition] = useTransition();
+  const positionsRef = useRef(positions);
+  positionsRef.current = positions;
 
   // Seed initial data passed from server components or initial render
   const seedInitialData = useCallback(
@@ -65,10 +65,11 @@ export function PortfolioProvider({
       newMetrics: PortfolioMetrics | null,
       newConfig?: AppConfig | null
     ) => {
-      if (!isInitialSeededRef.current) {
+      if (!isInitialSeededRef.current || positionsRef.current.length === 0) {
         setPositions(newPositions);
         if (newMetrics) setMetrics(newMetrics);
         if (newConfig) setConfig(newConfig);
+        setIsInitialized(true);
         isInitialSeededRef.current = true;
       }
     },
@@ -97,6 +98,7 @@ export function PortfolioProvider({
         if (posRes.status === 'fulfilled') {
           updatedPositions = posRes.value.positions || [];
           setPositions(updatedPositions);
+          setIsInitialized(true);
         }
 
         if (metRes.status === 'fulfilled') {
@@ -110,15 +112,6 @@ export function PortfolioProvider({
         }
 
         setLastRefreshedAt(new Date());
-
-        // Non-blocking Next.js server route refresh to sync RSC cache without UI interruption
-        startTransition(() => {
-          try {
-            router.refresh();
-          } catch {
-            // Safe fallback if router is not mounted in test environments
-          }
-        });
       } catch (err) {
         console.error('Error during portfolio data refresh:', err);
       } finally {
@@ -127,17 +120,25 @@ export function PortfolioProvider({
         }
       }
     },
-    [router]
+    []
   );
 
   // Optimistic UI: Immediately delete an instrument and return a rollback callback
   const optimisticDelete = useCallback(
     (ticker: string) => {
-      const previousPositions = [...positions];
-      const previousMetrics = metrics ? { ...metrics } : null;
+      let previousPositions: Position[] = [];
+      let previousMetrics: PortfolioMetrics | null = null;
 
       // 1. Immediately remove from local reactive state
-      setPositions((prev) => prev.filter((p) => p.user_ticker !== ticker));
+      setPositions((prev) => {
+        previousPositions = prev;
+        return prev.filter((p) => p.user_ticker !== ticker);
+      });
+
+      setMetrics((prev) => {
+        previousMetrics = prev;
+        return prev;
+      });
 
       // 2. Trigger a silent background recalculation of metrics
       getMetrics()
@@ -150,23 +151,24 @@ export function PortfolioProvider({
         if (previousMetrics) setMetrics(previousMetrics);
       };
     },
-    [positions, metrics]
+    []
   );
 
   // Optimistic UI: Immediately update position fields (e.g. comments, targets)
   const optimisticUpdatePosition = useCallback(
     (ticker: string, updates: Partial<Position>) => {
-      const previousPositions = [...positions];
+      let previousPositions: Position[] = [];
 
-      setPositions((prev) =>
-        prev.map((item) => (item.user_ticker === ticker ? { ...item, ...updates } : item))
-      );
+      setPositions((prev) => {
+        previousPositions = prev;
+        return prev.map((item) => (item.user_ticker === ticker ? { ...item, ...updates } : item));
+      });
 
       return () => {
         setPositions(previousPositions);
       };
     },
-    [positions]
+    []
   );
 
   const lastKnownRefreshAtRef = useRef<string | null | undefined>(undefined);
@@ -190,7 +192,7 @@ export function PortfolioProvider({
         const prevCounter = lastKnownCounterRef.current;
         const wasRefreshing = wasRefreshingRef.current;
 
-        // Initialize baselines on initial mount
+        // Initialize baselines on initial mount without redundant state churn
         if (prevRefreshAt === undefined && prevCounter === undefined) {
           lastKnownRefreshAtRef.current = cfg.last_refresh_at ?? null;
           lastKnownCounterRef.current = cfg.refresh_counter ?? 0;
@@ -210,12 +212,17 @@ export function PortfolioProvider({
           cfg.last_refresh_at !== prevRefreshAt;
 
         const finishedRefreshing = wasRefreshing && !cfg.is_refreshing;
+        const isRefreshingChanged = wasRefreshing !== Boolean(cfg.is_refreshing);
 
         // Update tracking state
         lastKnownRefreshAtRef.current = cfg.last_refresh_at ?? null;
         lastKnownCounterRef.current = cfg.refresh_counter ?? 0;
         wasRefreshingRef.current = Boolean(cfg.is_refreshing);
-        setConfig(cfg);
+
+        // Only update config state if it actually changed to prevent re-render churn!
+        if (counterChanged || refreshAtChanged || finishedRefreshing || isRefreshingChanged) {
+          setConfig(cfg);
+        }
 
         // If a batch finished in the backend, trigger silent portfolio reload immediately!
         if (counterChanged || refreshAtChanged || finishedRefreshing) {
@@ -259,6 +266,7 @@ export function PortfolioProvider({
       metrics,
       config,
       isRefreshing,
+      isInitialized,
       lastRefreshedAt,
       refreshPortfolioData,
       optimisticDelete,
@@ -273,6 +281,7 @@ export function PortfolioProvider({
       metrics,
       config,
       isRefreshing,
+      isInitialized,
       lastRefreshedAt,
       refreshPortfolioData,
       optimisticDelete,

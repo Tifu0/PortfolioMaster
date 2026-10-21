@@ -404,6 +404,27 @@ function ColumnSortIndicator({
   );
 }
 
+// Helper: robust numeric sorting with nulls and NaNs placed deterministically at the end
+function numericSortWithNulls<T>(
+  rowA: { getValue: (id: string) => unknown },
+  rowB: { getValue: (id: string) => unknown },
+  columnId: string
+): number {
+  const valA = rowA.getValue(columnId);
+  const valB = rowB.getValue(columnId);
+  if (valA == null && valB == null) return 0;
+  if (valA == null) return 1;
+  if (valB == null) return -1;
+  const numA = typeof valA === 'number' ? valA : Number(valA);
+  const numB = typeof valB === 'number' ? valB : Number(valB);
+  const isNaNA = Number.isNaN(numA);
+  const isNaNB = Number.isNaN(numB);
+  if (isNaNA && isNaNB) return 0;
+  if (isNaNA) return 1;
+  if (isNaNB) return -1;
+  return numA > numB ? 1 : numA < numB ? -1 : 0;
+}
+
 // ========================================================================== //
 // Toast Notification
 // ========================================================================== //
@@ -534,31 +555,80 @@ export function WatchlistTable({
     // Fallback if rendered outside provider
   }
 
-  const activePositions = portfolioContext ? portfolioContext.positions : initialPositions;
-  const activeMetrics =
-    portfolioContext && portfolioContext.metrics
-      ? portfolioContext.metrics
-      : (_initialMetrics ?? null);
+  // Fallback data state used only if rendered outside PortfolioProvider
+  const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
 
-  const [data, setData] = useState<Position[]>(activePositions);
+  const activePositions = useMemo(() => {
+    if (portfolioContext && portfolioContext.isInitialized) {
+      return portfolioContext.positions;
+    }
+    if (initialPositions && initialPositions.length > 0) {
+      return initialPositions;
+    }
+    return portfolioContext ? portfolioContext.positions : localPositions;
+  }, [portfolioContext?.isInitialized, portfolioContext?.positions, initialPositions, localPositions]);
 
-  useEffect(() => {
-    setData(activePositions);
-  }, [activePositions]);
+  const activeMetrics = useMemo(() => {
+    if (portfolioContext && portfolioContext.isInitialized && portfolioContext.metrics) {
+      return portfolioContext.metrics;
+    }
+    return _initialMetrics || portfolioContext?.metrics || null;
+  }, [portfolioContext?.isInitialized, portfolioContext?.metrics, _initialMetrics]);
 
+  const data = activePositions;
+  const setData = portfolioContext ? portfolioContext.setPositions : setLocalPositions;
+
+  // Track whether the client has mounted to prevent SSR hydration mismatches
+  const [isMounted, setIsMounted] = useState<boolean>(false);
+
+  // Sorting state & persistence
   const [sorting, setSorting] = useState<SortingState>([]);
 
+  // Column sizing states & persistence
+  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
+
+  // Toolbar customization & persistence
+  const [toolbarConfig, setToolbarConfig] = useState<ToolbarConfig>(DEFAULT_TOOLBAR_CONFIG);
+
+  // Row height (density) state & persistence
+  const [rowHeight, setRowHeight] = useState<number>(DEFAULT_ROW_HEIGHT);
+
+  // Load saved preferences safely on client mount
   useEffect(() => {
     try {
-      const saved = localStorage.getItem(SORTING_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed)) {
+      const savedSorting = localStorage.getItem(SORTING_STORAGE_KEY);
+      if (savedSorting) {
+        const parsed = JSON.parse(savedSorting);
+        if (Array.isArray(parsed) && parsed.length > 0) {
           setSorting(parsed);
+        }
+      }
+      const savedSizing = localStorage.getItem('portfoliomaster_column_sizing');
+      if (savedSizing) {
+        const parsed = JSON.parse(savedSizing);
+        if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+          setColumnSizing(parsed);
+        }
+      }
+      const savedToolbar = localStorage.getItem(TOOLBAR_STORAGE_KEY);
+      if (savedToolbar) {
+        const parsed = JSON.parse(savedToolbar);
+        if (parsed && typeof parsed === 'object') {
+          setToolbarConfig((prev) => ({ ...prev, ...parsed }));
+        }
+      }
+      const savedHeight = localStorage.getItem(ROW_HEIGHT_STORAGE_KEY);
+      if (savedHeight) {
+        const parsed = parseInt(savedHeight, 10);
+        if (!isNaN(parsed)) {
+          const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, parsed));
+          setRowHeight(clamped);
         }
       }
     } catch {
       // ignore storage access errors
+    } finally {
+      setIsMounted(true);
     }
   }, []);
 
@@ -581,29 +651,14 @@ export function WatchlistTable({
   const [selectedExchange, setSelectedExchange] = useState<string>('ALL');
   const [selectedCurrency, setSelectedCurrency] = useState<string>('ALL');
 
-  // Column sizing states
-  const [columnSizing, setColumnSizing] = useState<ColumnSizingState>({});
-
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem('portfoliomaster_column_sizing');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') {
-          setColumnSizing(parsed);
-        }
-      }
-    } catch {
-      // ignore storage access errors
-    }
-  }, []);
-
   const handleColumnSizingChange = useCallback(
     (updater: React.SetStateAction<ColumnSizingState>) => {
       setColumnSizing((prev) => {
         const next = typeof updater === 'function' ? updater(prev) : updater;
         try {
-          localStorage.setItem('portfoliomaster_column_sizing', JSON.stringify(next));
+          if (next && typeof next === 'object' && Object.keys(next).length > 0) {
+            localStorage.setItem('portfoliomaster_column_sizing', JSON.stringify(next));
+          }
         } catch {
           // ignore
         }
@@ -632,46 +687,10 @@ export function WatchlistTable({
 
   const router = useRouter();
 
-  // Toolbar customization & persistence
-  const [toolbarConfig, setToolbarConfig] = useState<ToolbarConfig>(DEFAULT_TOOLBAR_CONFIG);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const settingsRef = useRef<HTMLDivElement>(null);
-
-  // Row height (density) state & persistence
-  const [rowHeight, setRowHeight] = useState<number>(DEFAULT_ROW_HEIGHT);
   const [rowHeightOpen, setRowHeightOpen] = useState(false);
   const rowHeightRef = useRef<HTMLDivElement>(null);
-
-  // Load toolbar configuration from localStorage safely after hydration
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(TOOLBAR_STORAGE_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed && typeof parsed === 'object') {
-          setToolbarConfig((prev) => ({ ...prev, ...parsed }));
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // Load row height from localStorage safely after hydration
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(ROW_HEIGHT_STORAGE_KEY);
-      if (saved) {
-        const parsed = parseInt(saved, 10);
-        if (!isNaN(parsed)) {
-          const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, parsed));
-          setRowHeight(clamped);
-        }
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
 
   const handleRowHeightChange = useCallback((newHeight: number) => {
     const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, newHeight));
@@ -859,9 +878,11 @@ export function WatchlistTable({
 
   // ── Reload data from API ────────────────────────────────────────────── //
 
+  const refreshPortfolioData = portfolioContext?.refreshPortfolioData;
+
   const reloadData = useCallback(async () => {
-    if (portfolioContext) {
-      await portfolioContext.refreshPortfolioData({ silent: true });
+    if (refreshPortfolioData) {
+      await refreshPortfolioData({ silent: true });
       return;
     }
     try {
@@ -885,11 +906,11 @@ export function WatchlistTable({
     } catch {
       // Silently handle — the toast from the caller is sufficient
     }
-  }, [portfolioContext, onDataChange]);
+  }, [refreshPortfolioData, setData, onDataChange]);
 
   const handleDataRestored = useCallback(async () => {
-    if (portfolioContext) {
-      await portfolioContext.refreshPortfolioData({ silent: true });
+    if (refreshPortfolioData) {
+      await refreshPortfolioData({ silent: true });
       return;
     }
     try {
@@ -901,7 +922,7 @@ export function WatchlistTable({
     } catch (err) {
       console.error('Error refreshing data after restore:', err);
     }
-  }, [portfolioContext, onDataChange]);
+  }, [refreshPortfolioData, setData, onDataChange]);
 
   // ── Inline Analysis Date Save & Yahoo Price Recalculation ──────────── //
 
@@ -1143,7 +1164,7 @@ export function WatchlistTable({
           if (!a && !b) return 0;
           if (!a) return 1;
           if (!b) return -1;
-          return a.localeCompare(b);
+          return String(a).localeCompare(String(b));
         },
         header: ({ column }) => (
           <button
@@ -1363,6 +1384,7 @@ export function WatchlistTable({
         size: 160,
         minSize: 76,
         maxSize: 320,
+        sortingFn: numericSortWithNulls,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -1395,6 +1417,7 @@ export function WatchlistTable({
         size: 130,
         minSize: 70,
         maxSize: 260,
+        sortingFn: numericSortWithNulls,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -1430,6 +1453,7 @@ export function WatchlistTable({
         size: 145,
         minSize: 64,
         maxSize: 320,
+        sortingFn: numericSortWithNulls,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -1458,6 +1482,7 @@ export function WatchlistTable({
         size: 150,
         minSize: 80,
         maxSize: 320,
+        sortingFn: numericSortWithNulls,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -1485,11 +1510,12 @@ export function WatchlistTable({
         accessorFn: (row) =>
           row.decline_to_target_valid && row.decline_to_target !== null
             ? row.decline_to_target
-            : -100,
+            : null,
         id: 'decline_to_target',
         size: 165,
         minSize: 82,
         maxSize: 320,
+        sortingFn: numericSortWithNulls,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -1518,6 +1544,7 @@ export function WatchlistTable({
         size: 140,
         minSize: 76,
         maxSize: 260,
+        sortingFn: numericSortWithNulls,
         header: ({ column }) => (
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
@@ -1639,6 +1666,33 @@ export function WatchlistTable({
     if (rowHeight <= 42) return 'py-1.5 px-3';
     return 'py-3 px-4';
   }, [rowHeight]);
+
+  if (!isMounted) {
+    return (
+      <div className="flex flex-col gap-4">
+        {/* Table Toolbar Skeleton */}
+        <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 shadow-lg animate-pulse">
+          <div className="flex items-center gap-3">
+            <div className="w-56 h-9 rounded-lg bg-zinc-800/80" />
+            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
+            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
+            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
+          </div>
+        </div>
+
+        {/* Table Container Skeleton */}
+        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur shadow-2xl p-8 min-h-[440px] flex flex-col items-center justify-center gap-3 animate-pulse">
+          <div className="w-6 h-6 border-2 border-emerald-400/20 border-t-emerald-400 rounded-full animate-spin" />
+          <span className="text-xs text-zinc-500 font-medium tracking-wide">
+            Cargando cotizaciones y configuraciones...
+          </span>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex flex-col gap-4 relative">
