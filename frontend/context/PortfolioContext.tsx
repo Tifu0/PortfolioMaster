@@ -17,6 +17,7 @@ export interface PortfolioContextType {
   metrics: PortfolioMetrics | null;
   config: AppConfig | null;
   isRefreshing: boolean;
+  batchProgress: { currentBatch: number; totalBatches: number; processed: number; total: number } | null;
   isInitialized: boolean;
   lastRefreshedAt: Date | null;
   refreshPortfolioData: (options?: { silent?: boolean }) => Promise<void>;
@@ -25,6 +26,9 @@ export interface PortfolioContextType {
   setPositions: React.Dispatch<React.SetStateAction<Position[]>>;
   setMetrics: React.Dispatch<React.SetStateAction<PortfolioMetrics | null>>;
   setConfig: React.Dispatch<React.SetStateAction<AppConfig | null>>;
+  setBatchProgress: React.Dispatch<
+    React.SetStateAction<{ currentBatch: number; totalBatches: number; processed: number; total: number } | null>
+  >;
   seedInitialData: (
     positions: Position[],
     metrics: PortfolioMetrics | null,
@@ -51,6 +55,12 @@ export function PortfolioProvider({
   const [metrics, setMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
   const [config, setConfig] = useState<AppConfig | null>(initialConfig);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [batchProgress, setBatchProgress] = useState<{
+    currentBatch: number;
+    totalBatches: number;
+    processed: number;
+    total: number;
+  } | null>(null);
   const [lastRefreshedAt, setLastRefreshedAt] = useState<Date | null>(null);
   const [isInitialized, setIsInitialized] = useState(initialPositions.length > 0);
 
@@ -176,14 +186,17 @@ export function PortfolioProvider({
   const wasRefreshingRef = useRef<boolean>(false);
   const isSyncingRef = useRef<boolean>(false);
 
-  // Active sync heartbeat: polls /api/config every 3 seconds to detect when
-  // background batch updates complete in the backend, triggering zero-F5 silent updates.
+  // Active sync heartbeat: checks /api/config on mount and adaptively polls
+  // (fast 2s polling only when backend is actively refreshing; quiet 30s when idle)
+  // to detect when background batch updates complete in the backend, triggering zero-F5 silent updates.
   useEffect(() => {
     let isCancelled = false;
+    let timerId: NodeJS.Timeout | null = null;
 
     async function checkBackendSync() {
-      if (isSyncingRef.current) return;
+      if (isSyncingRef.current || isCancelled) return;
       isSyncingRef.current = true;
+      let nextIntervalMs = 30000; // Idle quiet interval: 30s instead of 3s spam
       try {
         const cfg = await getConfig();
         if (isCancelled) return;
@@ -198,6 +211,9 @@ export function PortfolioProvider({
           lastKnownCounterRef.current = cfg.refresh_counter ?? 0;
           wasRefreshingRef.current = Boolean(cfg.is_refreshing);
           setConfig(cfg);
+          if (cfg.is_refreshing) {
+            nextIntervalMs = 2000;
+          }
           return;
         }
 
@@ -219,6 +235,11 @@ export function PortfolioProvider({
         lastKnownCounterRef.current = cfg.refresh_counter ?? 0;
         wasRefreshingRef.current = Boolean(cfg.is_refreshing);
 
+        // Adaptive polling: only poll every 2s while refresh is actively in progress
+        if (cfg.is_refreshing) {
+          nextIntervalMs = 2000;
+        }
+
         // Only update config state if it actually changed to prevent re-render churn!
         if (counterChanged || refreshAtChanged || finishedRefreshing || isRefreshingChanged) {
           setConfig(cfg);
@@ -232,18 +253,99 @@ export function PortfolioProvider({
         // Silently ignore transient network blips
       } finally {
         isSyncingRef.current = false;
+        if (!isCancelled) {
+          timerId = setTimeout(checkBackendSync, nextIntervalMs);
+        }
       }
     }
 
     // Initial check immediately on mount
     checkBackendSync();
 
-    // 3-second heartbeat to detect backend batch finishes with near-zero latency
-    const intervalId = setInterval(checkBackendSync, 3000);
+    return () => {
+      isCancelled = true;
+      if (timerId) clearTimeout(timerId);
+    };
+  }, [refreshPortfolioData]);
+
+  // Real-Time Server-Sent Events (SSE) Listener:
+  // Subscribes to live batch updates (/api/refresh/stream?mode=listen) so both automatic scheduled refreshes
+  // and manual batch refreshes update positions and progress live batch-by-batch across the app.
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+
+    let eventSource: EventSource | null = null;
+    let isCancelled = false;
+    let reconnectTimer: NodeJS.Timeout | null = null;
+
+    function connectSSE() {
+      if (isCancelled) return;
+      try {
+        const streamUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/refresh/stream?mode=listen`;
+        eventSource = new EventSource(streamUrl);
+
+        eventSource.onmessage = (event) => {
+          if (isCancelled || !event.data) return;
+          try {
+            const data = JSON.parse(event.data);
+            if (data.type === 'start') {
+              setIsRefreshing(true);
+              if (data.total_batches) {
+                setBatchProgress({
+                  currentBatch: 0,
+                  totalBatches: data.total_batches,
+                  processed: 0,
+                  total: data.total_symbols ?? 0,
+                });
+              }
+            } else if (data.type === 'batch') {
+              setIsRefreshing(true);
+              if (data.batch_index && data.total_batches) {
+                setBatchProgress({
+                  currentBatch: data.batch_index,
+                  totalBatches: data.total_batches,
+                  processed: data.processed_symbols ?? 0,
+                  total: data.total_symbols ?? 0,
+                });
+              }
+              // Progressive live update: re-fetch positions & metrics in background per completed batch
+              refreshPortfolioData({ silent: true });
+            } else if (data.type === 'complete') {
+              setBatchProgress(null);
+              setIsRefreshing(false);
+              refreshPortfolioData({ silent: true });
+            } else if (data.type === 'error') {
+              setBatchProgress(null);
+              setIsRefreshing(false);
+            }
+          } catch {
+            // Ignore non-json or comments
+          }
+        };
+
+        eventSource.onerror = () => {
+          if (eventSource) {
+            eventSource.close();
+            eventSource = null;
+          }
+          if (!isCancelled && !reconnectTimer) {
+            reconnectTimer = setTimeout(() => {
+              reconnectTimer = null;
+              connectSSE();
+            }, 5000);
+          }
+        };
+      } catch {
+        // SSE connection failure handled silently, fallback to checkBackendSync
+      }
+    }
+
+    connectSSE();
 
     return () => {
       isCancelled = true;
-      clearInterval(intervalId);
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      if (eventSource) eventSource.close();
     };
   }, [refreshPortfolioData]);
 
@@ -266,6 +368,7 @@ export function PortfolioProvider({
       metrics,
       config,
       isRefreshing,
+      batchProgress,
       isInitialized,
       lastRefreshedAt,
       refreshPortfolioData,
@@ -274,6 +377,7 @@ export function PortfolioProvider({
       setPositions,
       setMetrics,
       setConfig,
+      setBatchProgress,
       seedInitialData,
     }),
     [
@@ -281,6 +385,7 @@ export function PortfolioProvider({
       metrics,
       config,
       isRefreshing,
+      batchProgress,
       isInitialized,
       lastRefreshedAt,
       refreshPortfolioData,

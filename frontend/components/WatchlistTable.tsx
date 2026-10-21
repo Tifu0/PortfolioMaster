@@ -50,6 +50,7 @@ import {
   getPositions,
   getMetrics,
   refreshAll,
+  streamRefresh,
   refreshInstrument,
   resolveMissingAnalysisPrices,
   resolveMissingYtdPrices,
@@ -1004,30 +1005,26 @@ export function WatchlistTable({
     if (batchRefreshing) return;
     setBatchRefreshing(true);
     try {
-      const [quotesRes, analysisRes, ytdRes] = await Promise.allSettled([
-        refreshAll(),
-        resolveMissingAnalysisPrices(),
-        resolveMissingYtdPrices(),
-      ]);
+      const quotesRes = await streamRefresh((event) => {
+        if (event.type === 'batch' && event.batch_index && event.total_batches) {
+          if (portfolioContext) {
+            portfolioContext.setBatchProgress({
+              currentBatch: event.batch_index,
+              totalBatches: event.total_batches,
+              processed: event.processed_symbols ?? 0,
+              total: event.total_symbols ?? 0,
+            });
+            // Progressive live update: re-fetch positions & metrics in background per completed batch
+            portfolioContext.refreshPortfolioData({ silent: true });
+          }
+        }
+      });
 
-      let updatedQuotes = 0;
-      let totalQuotes = 0;
-      let failedQuotes = 0;
-      if (quotesRes.status === 'fulfilled') {
-        updatedQuotes = quotesRes.value.updated;
-        totalQuotes = quotesRes.value.total;
-        failedQuotes = quotesRes.value.failed;
-      }
-
-      let updatedAnalysis = 0;
-      if (analysisRes.status === 'fulfilled') {
-        updatedAnalysis = analysisRes.value.updated;
-      }
-
-      let updatedYtd = 0;
-      if (ytdRes.status === 'fulfilled') {
-        updatedYtd = ytdRes.value.updated;
-      }
+      const updatedQuotes = quotesRes.updated ?? 0;
+      const totalQuotes = quotesRes.total ?? 0;
+      const failedQuotes = quotesRes.failed ?? 0;
+      const updatedAnalysis = quotesRes.analysis_prices_updated ?? 0;
+      const updatedYtd = quotesRes.ytd_prices_updated ?? 0;
 
       const failedMsg = failedQuotes > 0 ? ` (${failedQuotes} fallidas)` : '';
       const analysisMsg = updatedAnalysis > 0 ? ` · ${updatedAnalysis} precios de análisis resueltos` : '';
@@ -1036,14 +1033,22 @@ export function WatchlistTable({
         failedQuotes > 0 ? 'info' : 'success',
         `${updatedQuotes} de ${totalQuotes} cotizaciones actualizadas${failedMsg}${analysisMsg}${ytdMsg}`
       );
-      await reloadData();
+      if (portfolioContext) {
+        portfolioContext.setBatchProgress(null);
+        await portfolioContext.refreshPortfolioData({ silent: true });
+      } else {
+        await reloadData();
+      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       addToast('error', `Error al actualizar cotizaciones: ${msg}`);
+      if (portfolioContext) {
+        portfolioContext.setBatchProgress(null);
+      }
     } finally {
       setBatchRefreshing(false);
     }
-  }, [batchRefreshing, addToast, reloadData]);
+  }, [batchRefreshing, addToast, portfolioContext, reloadData]);
 
   // ── Single Row Refresh ──────────────────────────────────────────────── //
 
@@ -1825,29 +1830,46 @@ export function WatchlistTable({
           )}
 
           {/* Batch Refresh (Cotizaciones + Precios de Análisis) */}
-          {toolbarConfig.updateQuotes && (
-            <button
-              onClick={handleBatchRefresh}
-              disabled={batchRefreshing || data.length === 0}
-              className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
-                bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
-                hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
-                disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-              title="Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance"
-            >
-              {batchRefreshing ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span className="hidden sm:inline">Actualizando...</span>
-                </>
-              ) : (
-                <>
-                  <RefreshCw className="w-4 h-4" />
-                  <span className="hidden sm:inline">Actualizar Cotizaciones</span>
-                </>
-              )}
-            </button>
-          )}
+          {toolbarConfig.updateQuotes && (() => {
+            const isAnyRefreshing =
+              batchRefreshing ||
+              Boolean(portfolioContext?.isRefreshing) ||
+              Boolean(portfolioContext?.batchProgress) ||
+              Boolean(appConfig?.is_refreshing);
+
+            const currentBatch = portfolioContext?.batchProgress?.currentBatch ?? appConfig?.current_batch ?? 0;
+            const totalBatches = portfolioContext?.batchProgress?.totalBatches ?? appConfig?.total_batches ?? 0;
+            const processed = portfolioContext?.batchProgress?.processed ?? appConfig?.processed_symbols ?? 0;
+            const total = portfolioContext?.batchProgress?.total ?? appConfig?.total_symbols ?? 0;
+
+            return (
+              <button
+                onClick={handleBatchRefresh}
+                disabled={isAnyRefreshing || data.length === 0}
+                className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
+                  bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
+                  hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
+                  disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+                title="Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance"
+              >
+                {isAnyRefreshing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+                    <span className="hidden sm:inline text-amber-300">
+                      {currentBatch > 0 && totalBatches > 0
+                        ? `Actualizando ${currentBatch}/${totalBatches} (${processed}/${total})...`
+                        : 'Actualizando...'}
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <RefreshCw className="w-4 h-4" />
+                    <span className="hidden sm:inline">Actualizar Cotizaciones</span>
+                  </>
+                )}
+              </button>
+            );
+          })()}
 
           {/* Reset Column Widths Button */}
           {toolbarConfig.restoreColumns && (

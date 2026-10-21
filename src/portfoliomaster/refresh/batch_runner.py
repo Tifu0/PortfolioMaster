@@ -1,4 +1,4 @@
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 from ..providers.base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus
 from ..core.config import DEFAULT_BATCH_SIZE, get_batch_size
@@ -13,8 +13,12 @@ class BatchRunner:
         self.batch_size = batch_size if batch_size is not None else get_batch_size()
         self.logger = logging.getLogger(__name__)
 
-    def run(self, symbols: List[str]) -> Dict[str, Quote]:
-        """Run batch refresh with retries and error isolation."""
+    def run(
+        self,
+        symbols: List[str],
+        on_batch_complete: Optional[Callable[[int, int, Dict[str, Quote]], None]] = None,
+    ) -> Dict[str, Quote]:
+        """Run batch refresh with retries, progressive callbacks, and error isolation."""
         results = {}
         total_symbols = len(symbols)
         if total_symbols == 0:
@@ -27,12 +31,13 @@ class BatchRunner:
                 f"[BatchRunner] Batch {batch_idx}/{total_batches} ({len(chunk)} symbols): {chunk}"
             )
 
+            chunk_quotes: Dict[str, Quote] = {}
             # Simple retry logic
             success = False
             for attempt in range(2):
                 try:
-                    chunk_results = self.provider.fetch(chunk)
-                    results.update(chunk_results)
+                    chunk_quotes = self.provider.fetch(chunk)
+                    results.update(chunk_quotes)
                     success = True
                     break
                 except Exception as e:
@@ -41,7 +46,23 @@ class BatchRunner:
 
             if not success:
                 # Mark as error
+                chunk_quotes = {}
                 for symbol in chunk:
+                    err_quote = Quote(
+                        status=QuoteStatus.ERROR,
+                        error_message="Batch failed after retries",
+                    )
+                    chunk_quotes[symbol] = err_quote
                     if symbol not in results:
-                        results[symbol] = Quote(status=QuoteStatus.ERROR, error_message="Batch failed after retries")
+                        results[symbol] = err_quote
+
+            # Progressive callback per batch
+            if on_batch_complete:
+                try:
+                    on_batch_complete(batch_idx, total_batches, chunk_quotes)
+                except Exception as cb_err:
+                    self.logger.error(
+                        f"[BatchRunner] on_batch_complete callback error: {cb_err}"
+                    )
+
         return results

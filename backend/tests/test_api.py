@@ -534,6 +534,33 @@ class TestConfig:
         assert r_after["last_refresh_at"] is not None
         assert r_after["is_refreshing"] is False
 
+    def test_get_config_includes_batch_progress_fields(self):
+        r = client.get("/api/config")
+        assert r.status_code == 200
+        body = r.json()
+        assert "current_batch" in body
+        assert "total_batches" in body
+        assert "processed_symbols" in body
+        assert "total_symbols" in body
+
+    def test_refresh_stream_endpoint(self, monkeypatch):
+        from unittest.mock import MagicMock
+        mock_adapter = MagicMock()
+        mock_adapter.fetch.return_value = {}
+        monkeypatch.setattr("backend.api.main.YahooAdapter", lambda: mock_adapter)
+
+        with client.stream("GET", "/api/refresh/stream") as response:
+            assert response.status_code == 200
+            assert "text/event-stream" in response.headers.get("content-type", "")
+            lines = []
+            for line in response.iter_lines():
+                if line:
+                    lines.append(line)
+                if len(lines) >= 2:
+                    break
+            assert any("start" in l or "complete" in l for l in lines)
+
+
 
 
 # ---------------------------------------------------------------------- #

@@ -190,6 +190,8 @@ export interface RefreshBatchResponse {
   updated: number;
   failed: number;
   total: number;
+  analysis_prices_updated?: number;
+  ytd_prices_updated?: number;
   [key: string]: unknown;
 }
 
@@ -252,6 +254,27 @@ export interface AppConfig {
   last_refresh_at?: string | null;
   last_refresh_result?: RefreshBatchResponse | null;
   refresh_counter?: number;
+  current_batch?: number;
+  total_batches?: number;
+  processed_symbols?: number;
+  total_symbols?: number;
+}
+
+export interface RefreshProgressEvent {
+  type: 'start' | 'batch' | 'complete' | 'error';
+  batch_index?: number;
+  total_batches?: number;
+  processed_symbols?: number;
+  total_symbols?: number;
+  total?: number;
+  updated?: number;
+  failed?: number;
+  batch_updated?: number;
+  batch_failed?: number;
+  status?: string;
+  error?: string;
+  analysis_prices_updated?: number;
+  ytd_prices_updated?: number;
 }
 
 export interface BackupItem {

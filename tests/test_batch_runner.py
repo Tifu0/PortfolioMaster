@@ -53,3 +53,25 @@ def test_refresh_interval_env(monkeypatch):
     # Default is 300.0
     assert get_refresh_interval() == 300.0
 
+
+def test_batch_runner_on_batch_complete_callback():
+    mock_provider = MagicMock(spec=MarketDataProvider)
+    mock_provider.fetch.side_effect = [
+        {"A": Quote(price=Decimal("10")), "B": Quote(price=Decimal("20"))},
+        {"C": Quote(price=Decimal("30"))},
+    ]
+
+    runner = BatchRunner(mock_provider, batch_size=2)
+    completed_batches = []
+
+    def on_batch(batch_idx, total_batches, chunk_quotes):
+        completed_batches.append((batch_idx, total_batches, list(chunk_quotes.keys())))
+
+    results = runner.run(["A", "B", "C"], on_batch_complete=on_batch)
+
+    assert len(results) == 3
+    assert len(completed_batches) == 2
+    assert completed_batches[0] == (1, 2, ["A", "B"])
+    assert completed_batches[1] == (2, 2, ["C"])
+
+

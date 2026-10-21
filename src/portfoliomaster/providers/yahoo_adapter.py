@@ -210,16 +210,73 @@ class YahooAdapter(MarketDataProvider):
         if not symbols:
             return results
 
-        for symbol in symbols:
-            try:
-                yahoo_symbol = self._normalize_symbol_for_yahoo(symbol)
+        # Normalize symbols to Yahoo format
+        symbol_map: Dict[str, str] = {
+            s: self._normalize_symbol_for_yahoo(s) for s in symbols
+        }
+        unique_yahoo_symbols = list(set(symbol_map.values()))
 
-                self.logger.debug(
-                    f"Consultando Yahoo Finance: {symbol} -> {yahoo_symbol}"
+        batch_quotes_data: Dict[str, Dict[str, Any]] = {}
+
+        # Vectorized multi-threaded batch download when 2 or more symbols are requested
+        if len(unique_yahoo_symbols) > 1:
+            try:
+                df = yf.download(
+                    unique_yahoo_symbols,
+                    period="5d",
+                    group_by="ticker",
+                    threads=True,
+                    progress=False,
+                )
+                if df is not None and not df.empty and isinstance(df.columns, pd.MultiIndex):
+                    for y_sym in unique_yahoo_symbols:
+                        try:
+                            if y_sym in df.columns.get_level_values(0):
+                                sub = df[y_sym]
+                                if "Close" in sub:
+                                    close_s = sub["Close"].dropna()
+                                    if not close_s.empty:
+                                        last_p = close_s.iloc[-1]
+                                        if pd.notna(last_p) and float(last_p) > 0:
+                                            prev_p = (
+                                                close_s.iloc[-2]
+                                                if len(close_s) >= 2
+                                                else (
+                                                    sub["Open"].dropna().iloc[-1]
+                                                    if "Open" in sub
+                                                    and not sub["Open"].dropna().empty
+                                                    else None
+                                                )
+                                            )
+                                            last_idx = close_s.index[-1]
+                                            ts = (
+                                                last_idx.to_pydatetime()
+                                                if hasattr(last_idx, "to_pydatetime")
+                                                else None
+                                            )
+                                            batch_quotes_data[y_sym] = {
+                                                "price": self._to_decimal(last_p),
+                                                "previous_close": self._to_decimal(prev_p),
+                                                "quote_timestamp": ts,
+                                            }
+                        except Exception as parse_err:
+                            self.logger.debug(
+                                f"Error parsing batch quote for {y_sym}: {parse_err}"
+                            )
+            except Exception as dl_err:
+                self.logger.warning(
+                    f"Vectorized yf.download failed, falling back to individual fetching: {dl_err}"
                 )
 
-                ticker = yf.Ticker(yahoo_symbol)
-                data = self._extract_quote_data(ticker)
+        for symbol in symbols:
+            try:
+                yahoo_symbol = symbol_map[symbol]
+                data = batch_quotes_data.get(yahoo_symbol)
+
+                # Fallback to individual fast_info/history if not obtained from batch download
+                if not data or data.get("price") is None:
+                    ticker = yf.Ticker(yahoo_symbol)
+                    data = self._extract_quote_data(ticker)
 
                 if data["price"] is None:
                     self.logger.warning(

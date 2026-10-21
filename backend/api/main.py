@@ -8,16 +8,19 @@ the modules in ``src/portfoliomaster/``.
 from __future__ import annotations
 
 import asyncio
+import io
+import json
 import logging
 import math
 import os
+import queue
 import sys
 import tempfile
 import threading
 from contextlib import asynccontextmanager
 from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
-from typing import Optional
+from typing import Optional, Callable, Dict
 import io
 
 import pandas as pd
@@ -98,17 +101,45 @@ logging.basicConfig(
 )
 logger = logging.getLogger("portfoliomaster.api")
 
+class QuietConfigFilter(logging.Filter):
+    """Filters out noisy routine /api/config access logs from uvicorn."""
+    def filter(self, record: logging.LogRecord) -> bool:
+        msg = record.getMessage()
+        return "/api/config" not in msg
+
+logging.getLogger("uvicorn.access").addFilter(QuietConfigFilter())
+
 _refresh_lock = threading.Lock()
 _state: dict = {
     "last_refresh_at": None,
     "last_refresh_result": None,
     "is_refreshing": False,
     "refresh_counter": 0,
+    "current_batch": 0,
+    "total_batches": 0,
+    "processed_symbols": 0,
+    "total_symbols": 0,
 }
+
+_sse_subscribers: set[queue.Queue] = set()
+_sse_lock = threading.Lock()
+
+
+def _broadcast_refresh_event(payload: dict) -> None:
+    """Thread-safe event broadcast to all connected SSE clients."""
+    with _sse_lock:
+        subscribers = list(_sse_subscribers)
+    for q in subscribers:
+        try:
+            q.put_nowait(payload)
+        except Exception:
+            pass
 
 
 async def background_refresh_loop():
     """Background worker that periodically refreshes market data quotes."""
+    global _main_event_loop
+    _main_event_loop = asyncio.get_running_loop()
     # Give the app a couple seconds to complete startup before initial check
     await asyncio.sleep(2)
     while True:
@@ -155,6 +186,8 @@ async def background_refresh_loop():
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Initialise database on startup and run background refresh worker."""
+    global _main_event_loop
+    _main_event_loop = asyncio.get_running_loop()
     init_db()
     task = asyncio.create_task(background_refresh_loop())
     try:
@@ -179,6 +212,7 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    max_age=86400,
 )
 
 
@@ -1112,6 +1146,7 @@ def _execute_resolve_missing_ytd_prices() -> dict:
     failed = 0
     skipped = 0
 
+    to_resolve: list[Instrument] = []
     for inst in instruments:
         if (
             inst.start_of_year_price is not None
@@ -1124,8 +1159,69 @@ def _execute_resolve_missing_ytd_prices() -> dict:
         if not inst.provider_symbol:
             skipped += 1
             continue
+        to_resolve.append(inst)
 
-        res = _fetch_start_of_year_quote(inst.provider_symbol, current_year)
+    if not to_resolve:
+        return {
+            "status": "ok",
+            "updated": 0,
+            "failed": 0,
+            "skipped": skipped,
+            "total": len(instruments),
+        }
+
+    # Vectorized download for missing YTD tickers if 2 or more
+    target_date = date(current_year, 1, 1)
+    start_str = target_date.isoformat()
+    end_str = (target_date + timedelta(days=10)).isoformat()
+
+    batch_ytd_data: dict[str, tuple[float, date]] = {}
+    tickers = list({inst.provider_symbol for inst in to_resolve if inst.provider_symbol})
+
+    if len(tickers) > 1:
+        try:
+            df = yf.download(
+                tickers,
+                start=start_str,
+                end=end_str,
+                group_by="ticker",
+                threads=True,
+                progress=False,
+            )
+            if df is not None and not df.empty and isinstance(df.columns, pd.MultiIndex):
+                for sym in tickers:
+                    try:
+                        if sym in df.columns.get_level_values(0):
+                            sub = df[sym]
+                            if "Close" in sub:
+                                close_series = sub["Close"].dropna()
+                                if not close_series.empty:
+                                    price = close_series.iloc[0]
+                                    idx = close_series.index[0]
+                                    actual_dt = (
+                                        idx.date()
+                                        if hasattr(idx, "date")
+                                        else (
+                                            idx.to_pydatetime().date()
+                                            if hasattr(idx, "to_pydatetime")
+                                            else target_date
+                                        )
+                                    )
+                                    if float(price) > 0:
+                                        batch_ytd_data[sym] = (
+                                            round(float(price), 4),
+                                            actual_dt,
+                                        )
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.debug("Batch download for missing YTD failed: %s", e)
+
+    for inst in to_resolve:
+        res = batch_ytd_data.get(inst.provider_symbol)
+        if res is None:
+            res = _fetch_start_of_year_quote(inst.provider_symbol, current_year)
+
         if res is not None:
             price, actual_dt = res
             inst.start_of_year_price = Decimal(str(price))
@@ -1226,17 +1322,54 @@ def refresh_single(ticker: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-def _execute_refresh_all() -> dict:
-    """Core logic to batch-refresh quotes for all active instruments with Yahoo Finance."""
-    with _refresh_lock:
+def _execute_refresh_all(on_batch_progress: Optional[Callable[[dict], None]] = None) -> dict:
+    """Core logic to batch-refresh quotes for all active instruments with Yahoo Finance, committing per-batch."""
+    acquired = _refresh_lock.acquire(blocking=False)
+    if not acquired:
+        logger.info("[Refresh] A batch refresh is already in progress, skipping concurrent duplicate run.")
+        return {
+            "status": "in_progress",
+            "updated": _state.get("processed_symbols", 0),
+            "failed": 0,
+            "total": _state.get("total_symbols", 0),
+        }
+    try:
         _state["is_refreshing"] = True
         try:
             instruments = get_all_instruments()
+            total_inst = len(instruments)
             if not instruments:
                 result = {"status": "ok", "updated": 0, "failed": 0, "total": 0}
                 _state["last_refresh_at"] = datetime.now().isoformat()
                 _state["last_refresh_result"] = result
                 _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
+                _state["current_batch"] = 0
+                _state["total_batches"] = 0
+                _state["processed_symbols"] = 0
+                _state["total_symbols"] = 0
+                start_payload = {
+                    "type": "start",
+                    "total_symbols": 0,
+                    "total_batches": 0,
+                    "batch_size": get_batch_size(),
+                }
+                complete_payload = {
+                    "type": "complete",
+                    "status": "ok",
+                    "updated": 0,
+                    "failed": 0,
+                    "total": 0,
+                    "analysis_prices_updated": 0,
+                    "ytd_prices_updated": 0,
+                }
+                _broadcast_refresh_event(start_payload)
+                _broadcast_refresh_event(complete_payload)
+                if on_batch_progress:
+                    try:
+                        on_batch_progress(start_payload)
+                        on_batch_progress(complete_payload)
+                    except Exception:
+                        pass
                 return result
 
             # Re-normalise symbols before fetching (mirrors render_refresh_control)
@@ -1254,28 +1387,82 @@ def _execute_refresh_all() -> dict:
                     upsert_instrument(inst)
 
             symbols = [inst.provider_symbol for inst in instruments if inst.provider_symbol]
+            total_symbols = len(symbols)
             provider = YahooAdapter()
             batch_size = get_batch_size()
-            runner = BatchRunner(provider=provider, batch_size=batch_size)
-            quotes = runner.run(symbols)
+            total_batches = (total_symbols + batch_size - 1) // batch_size if total_symbols > 0 else 0
+
+            _state["current_batch"] = 0
+            _state["total_batches"] = total_batches
+            _state["processed_symbols"] = 0
+            _state["total_symbols"] = total_symbols
+
+            start_payload = {
+                "type": "start",
+                "total_symbols": total_symbols,
+                "total_batches": total_batches,
+                "batch_size": batch_size,
+            }
+            _broadcast_refresh_event(start_payload)
+            if on_batch_progress:
+                try:
+                    on_batch_progress(start_payload)
+                except Exception as ex:
+                    logger.debug("Error in on_batch_progress (start): %s", ex)
 
             instrument_map = {inst.provider_symbol: inst.id for inst in instruments}
             updated = 0
             failed = 0
-            for symbol, quote in quotes.items():
-                quote.instrument_id = instrument_map.get(symbol)
-                if quote.instrument_id:
-                    upsert_quote(quote)
-                    if quote.is_valid():
-                        updated += 1
-                    else:
-                        failed += 1
+            processed_count = 0
+
+            def on_batch(batch_idx: int, total_b: int, chunk_quotes: Dict[str, Quote]):
+                nonlocal updated, failed, processed_count
+                batch_updated = 0
+                batch_failed = 0
+                for symbol, quote in chunk_quotes.items():
+                    quote.instrument_id = instrument_map.get(symbol)
+                    if quote.instrument_id:
+                        upsert_quote(quote)
+                        if quote.is_valid():
+                            updated += 1
+                            batch_updated += 1
+                        else:
+                            failed += 1
+                            batch_failed += 1
+                    processed_count += 1
+
+                _state["current_batch"] = batch_idx
+                _state["total_batches"] = total_b
+                _state["processed_symbols"] = min(processed_count, total_symbols)
+                _state["total_symbols"] = total_symbols
+                _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
+
+                batch_payload = {
+                    "type": "batch",
+                    "batch_index": batch_idx,
+                    "total_batches": total_b,
+                    "processed_symbols": _state["processed_symbols"],
+                    "total_symbols": total_symbols,
+                    "updated": updated,
+                    "failed": failed,
+                    "batch_updated": batch_updated,
+                    "batch_failed": batch_failed,
+                }
+                _broadcast_refresh_event(batch_payload)
+                if on_batch_progress:
+                    try:
+                        on_batch_progress(batch_payload)
+                    except Exception as ex:
+                        logger.debug("Error in on_batch_progress (batch): %s", ex)
+
+            runner = BatchRunner(provider=provider, batch_size=batch_size)
+            runner.run(symbols, on_batch_complete=on_batch)
 
             result = {
                 "status": "ok",
                 "updated": updated,
                 "failed": failed,
-                "total": len(instruments),
+                "total": total_inst,
             }
 
             # Auto-resolve analysis reference prices for instruments that have analysis_date but no reference price
@@ -1305,15 +1492,112 @@ def _execute_refresh_all() -> dict:
             _state["last_refresh_at"] = datetime.now().isoformat()
             _state["last_refresh_result"] = result
             _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
+
+            complete_payload = {
+                "type": "complete",
+                "status": "ok",
+                "updated": updated,
+                "failed": failed,
+                "total": total_inst,
+                "analysis_prices_updated": result.get("analysis_prices_updated", 0),
+                "ytd_prices_updated": result.get("ytd_prices_updated", 0),
+            }
+            _broadcast_refresh_event(complete_payload)
+            if on_batch_progress:
+                try:
+                    on_batch_progress(complete_payload)
+                except Exception as ex:
+                    logger.debug("Error in on_batch_progress (complete): %s", ex)
+
             return result
+        except Exception as exc:
+            error_payload = {"type": "error", "error": str(exc)}
+            _broadcast_refresh_event(error_payload)
+            if on_batch_progress:
+                try:
+                    on_batch_progress(error_payload)
+                except Exception:
+                    pass
+            raise
         finally:
             _state["is_refreshing"] = False
+    finally:
+        _refresh_lock.release()
 
 
 @app.post("/api/refresh")
 def refresh_all():
     """Batch refresh every instrument's quote from Yahoo Finance."""
     return _execute_refresh_all()
+
+
+@app.get("/api/refresh/stream")
+async def refresh_stream(mode: Optional[str] = None, trigger: Optional[int] = None):
+    """Server-Sent Events (SSE) streaming endpoint for live progressive batch-by-batch quote refreshes.
+
+    Modes:
+    - mode="listen": Persistent SSE connection for live progressive updates across all background/manual refreshes.
+    - default / trigger=1: Triggers a refresh (if not in progress) and streams events until completion.
+    """
+    is_listen_mode = (mode == "listen")
+
+    async def event_generator():
+        q: queue.Queue = queue.Queue()
+        with _sse_lock:
+            _sse_subscribers.add(q)
+
+        # Yield connection confirmation immediately to unbuffer HTTP stream
+        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
+
+        # If a refresh is already in progress, immediately yield current state so the client
+        # displays the real-time progress right away without staying stuck at 0/x
+        if _state.get("is_refreshing"):
+            cur_b = _state.get("current_batch", 0)
+            tot_b = _state.get("total_batches", 0)
+            proc = _state.get("processed_symbols", 0)
+            tot_s = _state.get("total_symbols", 0)
+            init_payload = {
+                "type": "batch" if cur_b > 0 else "start",
+                "batch_index": cur_b,
+                "total_batches": tot_b,
+                "processed_symbols": proc,
+                "total_symbols": tot_s,
+            }
+            yield f"data: {json.dumps(init_payload)}\n\n"
+
+        # If in trigger mode (not pure listen mode) and not already refreshing, trigger refresh in worker thread
+        if not is_listen_mode and not _state.get("is_refreshing"):
+            threading.Thread(target=_execute_refresh_all, daemon=True).start()
+
+        try:
+            while True:
+                try:
+                    item = await asyncio.to_thread(q.get, timeout=1.0)
+                except Exception:
+                    yield ": keepalive\n\n"
+                    continue
+
+                if item is None:
+                    break
+
+                yield f"data: {json.dumps(item)}\n\n"
+
+                # In non-listen mode, terminate the stream when the current refresh finishes
+                if not is_listen_mode and item.get("type") in ("complete", "error"):
+                    break
+        finally:
+            with _sse_lock:
+                _sse_subscribers.discard(q)
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 @app.get("/api/config")
@@ -1327,6 +1611,10 @@ def get_config():
         "last_refresh_at": _state.get("last_refresh_at"),
         "last_refresh_result": _state.get("last_refresh_result"),
         "refresh_counter": _state.get("refresh_counter", 0),
+        "current_batch": _state.get("current_batch", 0),
+        "total_batches": _state.get("total_batches", 0),
+        "processed_symbols": _state.get("processed_symbols", 0),
+        "total_symbols": _state.get("total_symbols", 0),
     }
 
 

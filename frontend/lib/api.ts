@@ -15,6 +15,7 @@ import type {
   PositionsResponse,
   PortfolioMetrics,
   RefreshBatchResponse,
+  RefreshProgressEvent,
   RefreshSingleResponse,
   AppConfig,
   BackupListResponse,
@@ -60,7 +61,6 @@ async function handleResponse<T>(res: Response): Promise<T> {
 export async function getPositions(cache: RequestCache = 'no-store'): Promise<PositionsResponse> {
   const res = await fetch(`${API_BASE_URL}/api/positions`, {
     cache,
-    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<PositionsResponse>(res);
 }
@@ -72,7 +72,6 @@ export async function getPositions(cache: RequestCache = 'no-store'): Promise<Po
 export async function getInstruments(cache: RequestCache = 'no-store'): Promise<InstrumentsResponse> {
   const res = await fetch(`${API_BASE_URL}/api/instruments`, {
     cache,
-    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<InstrumentsResponse>(res);
 }
@@ -153,6 +152,73 @@ export async function refreshAll(): Promise<RefreshBatchResponse> {
 }
 
 /**
+ * 8b. GET /api/refresh/stream
+ * Streams batch-by-batch progress via Server-Sent Events (SSE) and returns final summary.
+ */
+export async function streamRefresh(
+  onProgress?: (event: RefreshProgressEvent) => void
+): Promise<RefreshBatchResponse> {
+  const res = await fetch(`${API_BASE_URL}/api/refresh/stream?trigger=1`);
+  if (!res.ok) {
+    throw new ApiError(`Stream refresh failed: ${res.statusText}`, res.status);
+  }
+
+  if (!res.body) {
+    return refreshAll();
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = '';
+  let finalResult: RefreshBatchResponse = {
+    status: 'ok',
+    updated: 0,
+    failed: 0,
+    total: 0,
+  };
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const blocks = buffer.split('\n\n');
+      buffer = blocks.pop() || '';
+
+      for (const block of blocks) {
+        for (const line of block.split('\n')) {
+          if (line.startsWith('data: ')) {
+            try {
+              const event: RefreshProgressEvent = JSON.parse(line.slice(6));
+              if (onProgress) {
+                onProgress(event);
+              }
+              if (event.type === 'complete') {
+                finalResult = {
+                  status: event.status || 'ok',
+                  updated: event.updated ?? 0,
+                  failed: event.failed ?? 0,
+                  total: event.total ?? event.total_symbols ?? 0,
+                  analysis_prices_updated: event.analysis_prices_updated,
+                  ytd_prices_updated: event.ytd_prices_updated,
+                };
+              }
+            } catch {
+              // Ignore non-json or comments
+            }
+          }
+        }
+      }
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  return finalResult;
+}
+
+/**
  * 9. POST /api/import/preview
  * Uploads a CSV or Excel file and returns validation preview without persisting.
  */
@@ -200,7 +266,6 @@ export async function wipeDatabase(): Promise<GenericStatusResponse> {
 export async function getMetrics(cache: RequestCache = 'no-store'): Promise<PortfolioMetrics> {
   const res = await fetch(`${API_BASE_URL}/api/metrics`, {
     cache,
-    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<PortfolioMetrics>(res);
 }
@@ -297,7 +362,6 @@ export async function checkYahooTicker(ticker: string, currency?: string): Promi
   if (currency) url.searchParams.set('currency', currency);
   const res = await fetch(url.toString(), {
     cache: 'no-store',
-    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<CheckYahooResponse>(res);
 }
@@ -309,7 +373,6 @@ export async function checkYahooTicker(ticker: string, currency?: string): Promi
 export async function getConfig(): Promise<AppConfig> {
   const res = await fetch(`${API_BASE_URL}/api/config`, {
     cache: 'no-store',
-    headers: { 'Cache-Control': 'no-cache, no-store' },
   });
   return handleResponse<AppConfig>(res);
 }

@@ -24,12 +24,17 @@ Built on a decoupled modern architecture:
 
 - **📈 Portfolio Metric Cards & Header Status**:
   - Live summary statistics displayed at the top: Total active positions, Top gainer, Top loser, and Average daily change.
-  - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 60s · Batch 25`).
+  - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 60s · Batch 25`); during an active refresh, it switches to live batch progress (e.g. `Iniciando actualización...` then `Actualizando lote... · 6/11 (150/275)`).
 
 - **🔄 Unified Market Data & Analysis Refresh Engine**:
   - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices and start-of-year (YTD) reference prices in one unified operation.
-  - Configurable background auto-refresh loop driven by `REFRESH_INTERVAL_SECONDS` that runs silently without interrupting open dialogs or inline typing.
-
+  - **High-Speed Vectorized Batch Fetching**: Powered by multi-threaded bulk downloads (`yf.download`) in `YahooAdapter`, reducing refresh times significantly compared to traditional individual API calls.
+  - **Progressive Real-Time Streaming via Server-Sent Events (SSE)** (`GET /api/refresh/stream`): A centralized pub/sub broadcaster streams batch events (`start`, `batch`, `complete`) to the client for **both manual refreshes and scheduled background loops**.
+  - **Incremental Per-Batch SQLite Commits & Live Table Updates**: Quotes are committed to SQLite after each batch (e.g. 25 symbols) and immediately rendered in the UI table in real time, rather than blocking until all 11+ batches finish.
+  - **Zero-Flicker State Preservation**: Incremental updates in `PortfolioProvider` and `WatchlistTable` strictly preserve table state — scroll position, active search filters, column sorting, column widths, and open inline editing (`Analysis Date` or `Research Notes`) are never interrupted or reset.
+  - **Zero CORS Preflight Overhead**: Optimized simple HTTP requests, Next.js proxy rewrites (`/api/:path*`), and FastAPI `CORSMiddleware` with 24-hour preflight caching (`max_age=86400`) eliminate redundant `OPTIONS` round-trips.
+  - **Adaptive Sync Heartbeat**: Adaptive background sync with intelligent log filtering to keep development consoles clean and signal-focused.
+  
 - **📥 CSV & Excel Spreadsheet Import**:
   - Drag-and-drop file upload supporting `.csv` and `.xlsx` files.
   - Two-step import workflow: dry-run validation with preview table, anomaly detection, and explicit database commit.
@@ -128,7 +133,8 @@ PortfolioMaster/
 │   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
-│   └── scripts/                # Automated verification and test scripts
+│   ├── scripts/                # Automated verification and test scripts
+│   └── next.config.ts          # Next.js config with same-origin/api rewrites to the FastAPI backend
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
@@ -139,7 +145,7 @@ PortfolioMaster/
 │   └── refresh/                # Batch quote runner with fault tolerance
 │
 ├── backups/                    # Local automatic safety snapshots (rotated, git-ignored)
-├── tests/                      # Core test suite (calculations, database, ingest, providers, backup/export)
+├── tests/                      # Core test suite (calculations, database, ingest, providers, backup/export, batch_runner)
 ├── portfolio.db                # Local SQLite database file
 ├── requirements.txt            # Python dependencies (FastAPI, Pandas, openpyxl, yfinance, etc.)
 ├── pyproject.toml              # Python package metadata
@@ -163,12 +169,13 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 | `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (supports ticker renaming, currency, exchange, targets, analysis price/date, YTD price/date, notes) |
 | `DELETE` | `/api/instruments/{ticker}` | Delete an instrument from the watchlist |
 | `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and auto-resolve missing analysis and YTD prices for a single instrument |
-| `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance and resolve missing analysis and YTD prices |
+| `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance using vectorized multi-threaded downloads with per-batch SQLite persistence. |
+| `GET` | `/api/refresh/stream` | Server-Sent Events (SSE) stream emitting real-time batch progress (`mode=listen` for continuous pub/sub listener or `?trigger=1` to initiate) |
 | `POST` | `/api/instruments/{ticker}/fetch-analysis-price` | Fetch historical quote from Yahoo Finance for instrument's analysis date (with resilient lookback and same-day fallback) |
 | `POST` | `/api/instruments/{ticker}/fetch-ytd-price` | Fetch start-of-year quote from Yahoo Finance for instrument for current year |
 | `POST` | `/api/instruments/resolve-missing-analysis-prices` | Auto-resolve historical analysis reference prices from Yahoo Finance |
 | `POST` | `/api/instruments/resolve-missing-ytd-prices` | Auto-resolve start-of-year (YTD) reference prices from Yahoo Finance |
-| `GET` | `/api/config` | Retrieve runtime configuration (refresh interval, batch size, last refresh status) |
+| `GET` | `/api/config` | Retrieve runtime configuration (refresh interval, batch size, last refresh status), and live batch progress |
 | `POST` | `/api/import/preview` | Dry-run validation of an uploaded CSV/Excel spreadsheet |
 | `POST` | `/api/import/confirm` | Commit validated spreadsheet instruments into the database (creates safety backup) |
 | `DELETE` | `/api/database` | Reset the SQLite database completely (creates safety backup) |
@@ -191,7 +198,7 @@ Both backend and frontend contain automated test suites.
 Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
 
 1. **Standard Execution (Offline / Fast - Default):**
-   Runs all unit and integration tests using mocks (77 tests):
+   Runs all unit and integration tests using mocks (80 tests):
    ```bash
    venv\Scripts\python -u -m pytest
    ```

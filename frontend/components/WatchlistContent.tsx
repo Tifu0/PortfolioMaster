@@ -145,7 +145,7 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
         console.warn('Could not fetch app configuration from backend:', err);
       }
     }
-    if (!appConfig) {
+    if (!appConfig && !portfolioContext?.config) {
       loadConfig();
     }
     return () => {
@@ -282,59 +282,82 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
         </div>
 
         {/* Top-Right: Auto-refresh & Batch Badge with Live Sync Status */}
-        {appConfig && (
-          <div
-            className={`flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
-              appConfig.is_refreshing
-                ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
-                : 'bg-zinc-900/90 border-zinc-800 text-zinc-300'
-            }`}
-            title={
-              appConfig.is_refreshing
-                ? 'Actualización en lote en progreso en el servidor...'
-                : `Actualización automática cada ${appConfig.refresh_interval_seconds}s en lotes de ${appConfig.batch_size} tickers`
-            }
-          >
-            {appConfig.is_refreshing ? (
-              <>
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                </span>
-                <span className="text-amber-400 font-semibold animate-pulse">
-                  Actualizando lote...
-                </span>
-                <span className="text-zinc-600">·</span>
-                <span className="text-amber-300/80">
-                  Batch{' '}
-                  <strong className="text-amber-200 font-semibold">
-                    {appConfig.batch_size}
-                  </strong>
-                </span>
-              </>
-            ) : (
-              <>
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                </span>
-                <span>
-                  Auto{' '}
-                  <strong className="text-emerald-400 font-semibold">
-                    {appConfig.refresh_interval_seconds}s
-                  </strong>
-                </span>
-                <span className="text-zinc-600">·</span>
-                <span className="text-zinc-400">
-                  Batch{' '}
-                  <strong className="text-zinc-200 font-semibold">
-                    {appConfig.batch_size}
-                  </strong>
-                </span>
-              </>
-            )}
-          </div>
-        )}
+        {appConfig && (() => {
+          const isRefreshing = Boolean(
+            portfolioContext?.isRefreshing ||
+            Boolean(portfolioContext?.batchProgress) ||
+            appConfig.is_refreshing
+          );
+          const currentBatch = portfolioContext?.batchProgress?.currentBatch ?? appConfig.current_batch ?? 0;
+          const totalBatches = portfolioContext?.batchProgress?.totalBatches ?? appConfig.total_batches ?? 0;
+          const processed = portfolioContext?.batchProgress?.processed ?? appConfig.processed_symbols ?? 0;
+          const total = portfolioContext?.batchProgress?.total ?? appConfig.total_symbols ?? 0;
+
+          return (
+            <div
+              className={`flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
+                isRefreshing
+                  ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                  : 'bg-zinc-900/90 border-zinc-800 text-zinc-300'
+              }`}
+              title={
+                isRefreshing
+                  ? 'Actualización en lote en progreso en el servidor...'
+                  : `Actualización automática cada ${appConfig.refresh_interval_seconds}s en lotes de ${appConfig.batch_size} tickers`
+              }
+            >
+              {isRefreshing ? (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                  </span>
+                  <span className="text-amber-400 font-semibold animate-pulse">
+                    {currentBatch > 0 ? 'Actualizando lote...' : 'Iniciando actualización...'}
+                  </span>
+                  <span className="text-zinc-600">·</span>
+                  <span className="text-amber-300/80">
+                    {currentBatch > 0 && totalBatches > 0 ? (
+                      <>
+                        <strong className="text-amber-200 font-semibold">
+                          {currentBatch}/{totalBatches}
+                        </strong>{' '}
+                        ({processed}/{total})
+                      </>
+                    ) : (
+                      <>
+                        Batch{' '}
+                        <strong className="text-amber-200 font-semibold">
+                          {appConfig.batch_size}
+                        </strong>
+                      </>
+                    )}
+                  </span>
+                </>
+              ) : (
+                <>
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span>
+                    Auto{' '}
+                    <strong className="text-emerald-400 font-semibold">
+                      {appConfig.refresh_interval_seconds}s
+                    </strong>
+                  </span>
+                  <span className="text-zinc-600">·</span>
+                  <span className="text-zinc-400">
+                    Batch{' '}
+                    <strong className="text-zinc-200 font-semibold">
+                      {appConfig.batch_size}
+                    </strong>
+                  </span>
+                </>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {/* Phase 4: Metric Cards */}
