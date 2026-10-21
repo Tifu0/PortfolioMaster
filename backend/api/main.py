@@ -102,6 +102,8 @@ _refresh_lock = threading.Lock()
 _state: dict = {
     "last_refresh_at": None,
     "last_refresh_result": None,
+    "is_refreshing": False,
+    "refresh_counter": 0,
 }
 
 
@@ -1227,76 +1229,85 @@ def refresh_single(ticker: str):
 def _execute_refresh_all() -> dict:
     """Core logic to batch-refresh quotes for all active instruments with Yahoo Finance."""
     with _refresh_lock:
-        instruments = get_all_instruments()
-        if not instruments:
-            return {"status": "ok", "updated": 0, "failed": 0, "total": 0}
-
-        # Re-normalise symbols before fetching (mirrors render_refresh_control)
-        for inst in instruments:
-            norm_ticker, exchange = normalize(inst.user_ticker, inst.currency)
-            suffix = get_yahoo_suffix(inst.user_ticker, exchange, inst.currency)
-            expected = (
-                f"{norm_ticker}{suffix}"
-                if suffix and not norm_ticker.upper().endswith(suffix.upper())
-                else norm_ticker
-            )
-            if inst.provider_symbol != expected or inst.exchange != exchange:
-                inst.provider_symbol = expected
-                inst.exchange = exchange
-                upsert_instrument(inst)
-
-        symbols = [inst.provider_symbol for inst in instruments if inst.provider_symbol]
-        provider = YahooAdapter()
-        batch_size = get_batch_size()
-        runner = BatchRunner(provider=provider, batch_size=batch_size)
-        quotes = runner.run(symbols)
-
-        instrument_map = {inst.provider_symbol: inst.id for inst in instruments}
-        updated = 0
-        failed = 0
-        for symbol, quote in quotes.items():
-            quote.instrument_id = instrument_map.get(symbol)
-            if quote.instrument_id:
-                upsert_quote(quote)
-                if quote.is_valid():
-                    updated += 1
-                else:
-                    failed += 1
-
-        result = {
-            "status": "ok",
-            "updated": updated,
-            "failed": failed,
-            "total": len(instruments),
-        }
-
-        # Auto-resolve analysis reference prices for instruments that have analysis_date but no reference price
+        _state["is_refreshing"] = True
         try:
-            analysis_res = _execute_resolve_missing_analysis_prices()
-            if analysis_res.get("updated", 0) > 0:
-                logger.info(
-                    "[AutoRefresh] Resolved %d missing analysis reference prices.",
-                    analysis_res["updated"],
-                )
-                result["analysis_prices_updated"] = analysis_res["updated"]
-        except Exception as e:
-            logger.warning("Could not auto-resolve missing analysis prices during batch refresh: %s", e)
+            instruments = get_all_instruments()
+            if not instruments:
+                result = {"status": "ok", "updated": 0, "failed": 0, "total": 0}
+                _state["last_refresh_at"] = datetime.now().isoformat()
+                _state["last_refresh_result"] = result
+                _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
+                return result
 
-        # Auto-resolve YTD reference prices for active instruments missing start-of-year price for current year
-        try:
-            ytd_res = _execute_resolve_missing_ytd_prices()
-            if ytd_res.get("updated", 0) > 0:
-                logger.info(
-                    "[AutoRefresh] Resolved %d missing YTD reference prices.",
-                    ytd_res["updated"],
+            # Re-normalise symbols before fetching (mirrors render_refresh_control)
+            for inst in instruments:
+                norm_ticker, exchange = normalize(inst.user_ticker, inst.currency)
+                suffix = get_yahoo_suffix(inst.user_ticker, exchange, inst.currency)
+                expected = (
+                    f"{norm_ticker}{suffix}"
+                    if suffix and not norm_ticker.upper().endswith(suffix.upper())
+                    else norm_ticker
                 )
-                result["ytd_prices_updated"] = ytd_res["updated"]
-        except Exception as e:
-            logger.warning("Could not auto-resolve missing YTD prices during batch refresh: %s", e)
+                if inst.provider_symbol != expected or inst.exchange != exchange:
+                    inst.provider_symbol = expected
+                    inst.exchange = exchange
+                    upsert_instrument(inst)
 
-        _state["last_refresh_at"] = datetime.now().isoformat()
-        _state["last_refresh_result"] = result
-        return result
+            symbols = [inst.provider_symbol for inst in instruments if inst.provider_symbol]
+            provider = YahooAdapter()
+            batch_size = get_batch_size()
+            runner = BatchRunner(provider=provider, batch_size=batch_size)
+            quotes = runner.run(symbols)
+
+            instrument_map = {inst.provider_symbol: inst.id for inst in instruments}
+            updated = 0
+            failed = 0
+            for symbol, quote in quotes.items():
+                quote.instrument_id = instrument_map.get(symbol)
+                if quote.instrument_id:
+                    upsert_quote(quote)
+                    if quote.is_valid():
+                        updated += 1
+                    else:
+                        failed += 1
+
+            result = {
+                "status": "ok",
+                "updated": updated,
+                "failed": failed,
+                "total": len(instruments),
+            }
+
+            # Auto-resolve analysis reference prices for instruments that have analysis_date but no reference price
+            try:
+                analysis_res = _execute_resolve_missing_analysis_prices()
+                if analysis_res.get("updated", 0) > 0:
+                    logger.info(
+                        "[AutoRefresh] Resolved %d missing analysis reference prices.",
+                        analysis_res["updated"],
+                    )
+                    result["analysis_prices_updated"] = analysis_res["updated"]
+            except Exception as e:
+                logger.warning("Could not auto-resolve missing analysis prices during batch refresh: %s", e)
+
+            # Auto-resolve YTD reference prices for active instruments missing start-of-year price for current year
+            try:
+                ytd_res = _execute_resolve_missing_ytd_prices()
+                if ytd_res.get("updated", 0) > 0:
+                    logger.info(
+                        "[AutoRefresh] Resolved %d missing YTD reference prices.",
+                        ytd_res["updated"],
+                    )
+                    result["ytd_prices_updated"] = ytd_res["updated"]
+            except Exception as e:
+                logger.warning("Could not auto-resolve missing YTD prices during batch refresh: %s", e)
+
+            _state["last_refresh_at"] = datetime.now().isoformat()
+            _state["last_refresh_result"] = result
+            _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
+            return result
+        finally:
+            _state["is_refreshing"] = False
 
 
 @app.post("/api/refresh")
@@ -1307,13 +1318,15 @@ def refresh_all():
 
 @app.get("/api/config")
 def get_config():
-    """Return runtime configuration including refresh interval and batch size."""
+    """Return runtime configuration including refresh interval, batch size, and background sync status."""
     return {
         "status": "ok",
         "refresh_interval_seconds": get_refresh_interval(),
         "batch_size": get_batch_size(),
+        "is_refreshing": _state.get("is_refreshing", False),
         "last_refresh_at": _state.get("last_refresh_at"),
         "last_refresh_result": _state.get("last_refresh_result"),
+        "refresh_counter": _state.get("refresh_counter", 0),
     }
 
 

@@ -509,6 +509,31 @@ class TestConfig:
         assert isinstance(body["refresh_interval_seconds"], (int, float))
         assert isinstance(body["batch_size"], int)
         assert body["batch_size"] >= 1
+        assert "is_refreshing" in body
+        assert isinstance(body["is_refreshing"], bool)
+        assert "refresh_counter" in body
+        assert isinstance(body["refresh_counter"], int)
+
+    def test_execute_refresh_all_increments_refresh_counter(self, monkeypatch):
+        from backend.api.main import _execute_refresh_all
+        from unittest.mock import MagicMock
+
+        # Mock YahooAdapter to avoid network call
+        mock_adapter = MagicMock()
+        mock_adapter.fetch.return_value = {}
+        monkeypatch.setattr("backend.api.main.YahooAdapter", lambda: mock_adapter)
+
+        r_before = client.get("/api/config").json()
+        c_before = r_before.get("refresh_counter", 0)
+
+        _execute_refresh_all()
+
+        r_after = client.get("/api/config").json()
+        c_after = r_after.get("refresh_counter", 0)
+        assert c_after > c_before
+        assert r_after["last_refresh_at"] is not None
+        assert r_after["is_refreshing"] is False
+
 
 
 # ---------------------------------------------------------------------- #

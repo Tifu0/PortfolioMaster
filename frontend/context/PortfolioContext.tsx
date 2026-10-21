@@ -5,6 +5,7 @@ import React, {
   use,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
   useTransition,
@@ -168,24 +169,78 @@ export function PortfolioProvider({
     [positions]
   );
 
-  // Fetch initial config on mount if not provided
-  useEffect(() => {
-    let active = true;
-    if (!config) {
-      getConfig()
-        .then((cfg) => {
-          if (active) setConfig(cfg);
-        })
-        .catch((err) => {
-          console.warn('Could not load backend config:', err);
-        });
-    }
-    return () => {
-      active = false;
-    };
-  }, [config]);
+  const lastKnownRefreshAtRef = useRef<string | null | undefined>(undefined);
+  const lastKnownCounterRef = useRef<number | undefined>(undefined);
+  const wasRefreshingRef = useRef<boolean>(false);
+  const isSyncingRef = useRef<boolean>(false);
 
-  // Periodic background auto-refresh driven by config.refresh_interval_seconds
+  // Active sync heartbeat: polls /api/config every 3 seconds to detect when
+  // background batch updates complete in the backend, triggering zero-F5 silent updates.
+  useEffect(() => {
+    let isCancelled = false;
+
+    async function checkBackendSync() {
+      if (isSyncingRef.current) return;
+      isSyncingRef.current = true;
+      try {
+        const cfg = await getConfig();
+        if (isCancelled) return;
+
+        const prevRefreshAt = lastKnownRefreshAtRef.current;
+        const prevCounter = lastKnownCounterRef.current;
+        const wasRefreshing = wasRefreshingRef.current;
+
+        // Initialize baselines on initial mount
+        if (prevRefreshAt === undefined && prevCounter === undefined) {
+          lastKnownRefreshAtRef.current = cfg.last_refresh_at ?? null;
+          lastKnownCounterRef.current = cfg.refresh_counter ?? 0;
+          wasRefreshingRef.current = Boolean(cfg.is_refreshing);
+          setConfig(cfg);
+          return;
+        }
+
+        const counterChanged =
+          cfg.refresh_counter !== undefined &&
+          prevCounter !== undefined &&
+          cfg.refresh_counter > prevCounter;
+
+        const refreshAtChanged =
+          Boolean(cfg.last_refresh_at) &&
+          prevRefreshAt !== undefined &&
+          cfg.last_refresh_at !== prevRefreshAt;
+
+        const finishedRefreshing = wasRefreshing && !cfg.is_refreshing;
+
+        // Update tracking state
+        lastKnownRefreshAtRef.current = cfg.last_refresh_at ?? null;
+        lastKnownCounterRef.current = cfg.refresh_counter ?? 0;
+        wasRefreshingRef.current = Boolean(cfg.is_refreshing);
+        setConfig(cfg);
+
+        // If a batch finished in the backend, trigger silent portfolio reload immediately!
+        if (counterChanged || refreshAtChanged || finishedRefreshing) {
+          await refreshPortfolioData({ silent: true });
+        }
+      } catch (err) {
+        // Silently ignore transient network blips
+      } finally {
+        isSyncingRef.current = false;
+      }
+    }
+
+    // Initial check immediately on mount
+    checkBackendSync();
+
+    // 3-second heartbeat to detect backend batch finishes with near-zero latency
+    const intervalId = setInterval(checkBackendSync, 3000);
+
+    return () => {
+      isCancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [refreshPortfolioData]);
+
+  // Fallback periodic auto-refresh driven by config.refresh_interval_seconds
   useEffect(() => {
     const intervalSec = config?.refresh_interval_seconds;
     if (!intervalSec || intervalSec <= 0) return;
@@ -198,20 +253,33 @@ export function PortfolioProvider({
     return () => clearInterval(intervalId);
   }, [config?.refresh_interval_seconds, refreshPortfolioData]);
 
-  const value: PortfolioContextType = {
-    positions,
-    metrics,
-    config,
-    isRefreshing,
-    lastRefreshedAt,
-    refreshPortfolioData,
-    optimisticDelete,
-    optimisticUpdatePosition,
-    setPositions,
-    setMetrics,
-    setConfig,
-    seedInitialData,
-  };
+  const value = useMemo<PortfolioContextType>(
+    () => ({
+      positions,
+      metrics,
+      config,
+      isRefreshing,
+      lastRefreshedAt,
+      refreshPortfolioData,
+      optimisticDelete,
+      optimisticUpdatePosition,
+      setPositions,
+      setMetrics,
+      setConfig,
+      seedInitialData,
+    }),
+    [
+      positions,
+      metrics,
+      config,
+      isRefreshing,
+      lastRefreshedAt,
+      refreshPortfolioData,
+      optimisticDelete,
+      optimisticUpdatePosition,
+      seedInitialData,
+    ]
+  );
 
   return <PortfolioContext value={value}>{children}</PortfolioContext>;
 }

@@ -119,8 +119,8 @@ PortfolioMaster/
 │   ├── api/
 │   │   └── main.py             # FastAPI application and REST endpoints
 │   └── tests/
-│       ├── test_api.py         # Backend API integration tests (34 tests)
-│       └── test_backup_api.py  # Backup & Export API integration tests (10 tests)
+│       ├── test_api.py         # Backend API integration tests
+│       └── test_backup_api.py  # Backup & Export API integration tests
 │
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
@@ -128,7 +128,7 @@ PortfolioMaster/
 │   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
-│   └── scripts/                # Automated verification and test scripts (14 test suites)
+│   └── scripts/                # Automated verification and test scripts
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
@@ -191,7 +191,7 @@ Both backend and frontend contain automated test suites.
 Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
 
 1. **Standard Execution (Offline / Fast - Default):**
-   Runs all unit and integration tests using mocks (76 tests):
+   Runs all unit and integration tests using mocks (77 tests):
    ```bash
    venv\Scripts\python -u -m pytest
    ```

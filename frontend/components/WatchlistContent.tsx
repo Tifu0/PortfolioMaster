@@ -190,20 +190,6 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
     }
   }, [portfolioContext]);
 
-  // Auto-refresh timer: synchronizes client table state with backend quotes updates
-  useEffect(() => {
-    if (!appConfig || !appConfig.refresh_interval_seconds || appConfig.refresh_interval_seconds <= 0) {
-      return;
-    }
-
-    const intervalMs = appConfig.refresh_interval_seconds * 1000;
-    const intervalId = setInterval(() => {
-      reloadData();
-    }, intervalMs);
-
-    return () => clearInterval(intervalId);
-  }, [appConfig, reloadData]);
-
   const handleDataChange = useCallback(
     (newPositions: Position[], newMetrics: PortfolioMetrics | null) => {
       if (portfolioContext) {
@@ -275,29 +261,58 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
           </p>
         </div>
 
-        {/* Top-Right: Auto-refresh & Batch Badge */}
+        {/* Top-Right: Auto-refresh & Batch Badge with Live Sync Status */}
         {appConfig && (
           <div
-            className="flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full bg-zinc-900/90 border border-zinc-800 text-xs font-mono text-zinc-300 shadow-sm backdrop-blur-sm"
-            title={`Actualización automática cada ${appConfig.refresh_interval_seconds}s en lotes de ${appConfig.batch_size} tickers`}
+            className={`flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
+              appConfig.is_refreshing
+                ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+                : 'bg-zinc-900/90 border-zinc-800 text-zinc-300'
+            }`}
+            title={
+              appConfig.is_refreshing
+                ? 'Actualización en lote en progreso en el servidor...'
+                : `Actualización automática cada ${appConfig.refresh_interval_seconds}s en lotes de ${appConfig.batch_size} tickers`
+            }
           >
-            <span className="relative flex h-2 w-2">
-              <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-              <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-            </span>
-            <span>
-              Auto{' '}
-              <strong className="text-emerald-400 font-semibold">
-                {appConfig.refresh_interval_seconds}s
-              </strong>
-            </span>
-            <span className="text-zinc-600">·</span>
-            <span className="text-zinc-400">
-              Batch{' '}
-              <strong className="text-zinc-200 font-semibold">
-                {appConfig.batch_size}
-              </strong>
-            </span>
+            {appConfig.is_refreshing ? (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+                </span>
+                <span className="text-amber-400 font-semibold animate-pulse">
+                  Actualizando lote...
+                </span>
+                <span className="text-zinc-600">·</span>
+                <span className="text-amber-300/80">
+                  Batch{' '}
+                  <strong className="text-amber-200 font-semibold">
+                    {appConfig.batch_size}
+                  </strong>
+                </span>
+              </>
+            ) : (
+              <>
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>
+                  Auto{' '}
+                  <strong className="text-emerald-400 font-semibold">
+                    {appConfig.refresh_interval_seconds}s
+                  </strong>
+                </span>
+                <span className="text-zinc-600">·</span>
+                <span className="text-zinc-400">
+                  Batch{' '}
+                  <strong className="text-zinc-200 font-semibold">
+                    {appConfig.batch_size}
+                  </strong>
+                </span>
+              </>
+            )}
           </div>
         )}
       </div>

@@ -248,8 +248,10 @@ export interface AppConfig {
   status: string;
   refresh_interval_seconds: number;
   batch_size: number;
+  is_refreshing?: boolean;
   last_refresh_at?: string | null;
   last_refresh_result?: RefreshBatchResponse | null;
+  refresh_counter?: number;
 }
 
 export interface BackupItem {
