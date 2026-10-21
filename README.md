@@ -8,7 +8,8 @@ Built on a decoupled modern architecture:
 
 ---
 
-<img width="1919" height="1079" alt="Captura de pantalla 2026-10-17 175413" src="https://github.com/user-attachments/assets/47c9fa94-b971-41c8-987b-17a0a23aa751" />
+<img width="1919" height="1079" alt="Captura de pantalla 2026-10-21 180503" src="https://github.com/user-attachments/assets/e46aea90-8355-44a3-893e-0cf3e5eb49f9" />
+
 
 ---
 
