@@ -37,11 +37,15 @@ def _parse_d(v: object) -> Optional[date]:
 
 
 def _parse_dec(v: object) -> Optional[Decimal]:
-    """Safe parsing for Decimals from numeric or string values."""
+    """Safe parsing for Decimals from numeric or string values.
+    
+    Returns positive Decimal or None. DB constraints prohibit 0 or negative prices.
+    """
     if v is None or v == "":
         return None
     try:
-        return Decimal(str(v).strip())
+        d = Decimal(str(v).strip())
+        return d if d > 0 else None
     except Exception:
         return None
 
@@ -109,6 +113,10 @@ class MultiTenantWatchlistRepository:
         """Create a new watchlist instrument for this tenant."""
         clean_ticker = user_ticker.strip()
         norm_symbol = provider_symbol.strip().upper() if provider_symbol else clean_ticker.upper()
+        if ":" in norm_symbol:
+            from portfoliomaster.ingest.normalizer import normalize
+            norm_sym, _ = normalize(norm_symbol, currency)
+            norm_symbol = norm_sym.upper()
 
         # Ensure market_quotes entry exists for provider_symbol
         if norm_symbol:
@@ -124,6 +132,18 @@ class MultiTenantWatchlistRepository:
                 self.session.add(quote_entry)
                 self.session.flush()
 
+        an_price = _parse_dec(analysis_reference_price)
+        an_date = analysis_date
+        if an_price is not None and an_date is None:
+            an_date = date.today()
+
+        soy_price = _parse_dec(start_of_year_price)
+        soy_date = start_of_year_date
+        if soy_price is not None and soy_date is None:
+            soy_date = date(date.today().year, 1, 1)
+
+        tgt_price = _parse_dec(target_price)
+
         inst = UserInstrument(
             user_id=self.user_id,
             user_ticker=clean_ticker,
@@ -131,11 +151,11 @@ class MultiTenantWatchlistRepository:
             exchange=exchange,
             currency=currency,
             company_name=company_name or clean_ticker,
-            analysis_date=analysis_date,
-            analysis_reference_price=analysis_reference_price,
-            start_of_year_date=start_of_year_date,
-            start_of_year_price=start_of_year_price,
-            target_price=target_price,
+            analysis_date=an_date,
+            analysis_reference_price=an_price,
+            start_of_year_date=soy_date,
+            start_of_year_price=soy_price,
+            target_price=tgt_price,
             comment=comment or "",
             active=active,
         )
@@ -218,8 +238,18 @@ class MultiTenantWatchlistRepository:
                 continue
             clean_ticker = str(raw_ticker).strip()
 
-            raw_provider = item.get("provider_symbol") or clean_ticker
-            norm_provider = str(raw_provider).strip().upper()
+            raw_provider = item.get("provider_symbol")
+            if not raw_provider or ":" in str(raw_provider):
+                from portfoliomaster.ingest.normalizer import normalize
+                from portfoliomaster.core.config import get_yahoo_suffix
+                norm_sym, exch = normalize(clean_ticker, str(item.get("currency") or ""))
+                suffix = get_yahoo_suffix(clean_ticker, exch, str(item.get("currency") or ""))
+                if suffix and not norm_sym.upper().endswith(suffix.upper()):
+                    norm_provider = f"{norm_sym}{suffix}".upper()
+                else:
+                    norm_provider = norm_sym.upper()
+            else:
+                norm_provider = str(raw_provider).strip().upper()
 
             # Ensure market_quote placeholder exists (mirrors trg_ensure_market_quote)
             if norm_provider:
@@ -235,10 +265,16 @@ class MultiTenantWatchlistRepository:
                     self.session.add(quote_entry)
                     self.session.flush()
 
-            an_date = _parse_d(item.get("analysis_date"))
             an_price = _parse_dec(item.get("analysis_reference_price"))
-            soy_date = _parse_d(item.get("start_of_year_date"))
+            an_date = _parse_d(item.get("analysis_date"))
+            if an_price is not None and an_date is None:
+                an_date = date.today()
+
             soy_price = _parse_dec(item.get("start_of_year_price"))
+            soy_date = _parse_d(item.get("start_of_year_date"))
+            if soy_price is not None and soy_date is None:
+                soy_date = date(date.today().year, 1, 1)
+
             tgt_price = _parse_dec(item.get("target_price"))
             active_val = _parse_bool(item.get("active"))
 

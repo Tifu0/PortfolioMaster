@@ -130,6 +130,7 @@ class MarketQuote(Base):
             create_type=False,
         ),
         default="UNAVAILABLE",
+        server_default="UNAVAILABLE",
         nullable=False,
     )
     error_message: Mapped[Optional[str]] = mapped_column(Text, nullable=True)

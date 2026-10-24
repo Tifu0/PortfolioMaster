@@ -53,6 +53,10 @@ from .routers.refresh import (
 
 from .common import is_multi_tenant_db
 
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 
@@ -223,15 +227,22 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
         request.url.path,
         exc,
     )
+    # Ensure immediate flush to standard error stream for cloud log collection (Render/Docker)
+    sys.stderr.write(f"\n[ERROR] Unhandled exception on {request.method} {request.url.path}: {exc}\n")
+    sys.stderr.flush()
+
     is_prod_env = (
         os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod")
         or os.environ.get("RENDER", "").lower() == "true"
     )
-    detail_message = (
-        "An unexpected internal error occurred on the server."
-        if is_prod_env
-        else f"Internal Server Error: {type(exc).__name__}: {str(exc)}"
-    )
+    exc_name = type(exc).__name__
+    if "IntegrityError" in exc_name or "CheckViolation" in str(exc) or "NotNullViolation" in str(exc):
+        detail_message = f"Database constraint violation: {exc}"
+    elif is_prod_env:
+        detail_message = "An unexpected internal error occurred on the server."
+    else:
+        detail_message = f"Internal Server Error: {exc_name}: {str(exc)}"
+
     return JSONResponse(
         status_code=500,
         content={

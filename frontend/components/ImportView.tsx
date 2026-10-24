@@ -150,12 +150,13 @@ export function ImportView() {
   };
 
   const downloadSampleCsv = () => {
+    const todayStr = new Date().toISOString().split('T')[0];
     const csvContent =
-      'user_ticker,company_name,currency,target_price,analysis_reference_price,comment\n' +
-      'AAPL,Apple Inc.,USD,220.00,185.00,Ecosystem and services market leader\n' +
-      'BME:SAN,Banco Santander,EUR,5.50,4.25,Attractive valuation and dividend yield\n' +
-      'MSFT,Microsoft Corp.,USD,480.00,420.00,Cloud growth and AI innovation leadership\n' +
-      'LON:AZN,AstraZeneca PLC,GBP,140.00,120.00,Strong oncology drug pipeline\n';
+      'user_ticker,company_name,currency,target_price,analysis_reference_price,analysis_date,comment\n' +
+      `AAPL,Apple Inc.,USD,220.00,185.00,${todayStr},Ecosystem and services market leader\n` +
+      `BME:SAN,Banco Santander,EUR,5.50,4.25,${todayStr},Attractive valuation and dividend yield\n` +
+      `MSFT,Microsoft Corp.,USD,480.00,420.00,${todayStr},Cloud growth and AI innovation leadership\n` +
+      `LON:AZN,AstraZeneca PLC,GBP,140.00,120.00,${todayStr},Strong oncology drug pipeline\n`;
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);

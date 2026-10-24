@@ -9,6 +9,7 @@ import os
 import tempfile
 import uuid
 from datetime import date, datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from fastapi.responses import StreamingResponse
@@ -112,11 +113,18 @@ def import_confirm(
         from portfoliomaster.db.session import session_scope
         from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
 
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            count = repo.import_or_restore_user_watchlist(instruments_payload, replace_all=False)
-            session.commit()
-        return {"status": "ok", "committed": count, "errors": []}
+        try:
+            with session_scope() as session:
+                repo = MultiTenantWatchlistRepository(session, user_id)
+                count = repo.import_or_restore_user_watchlist(instruments_payload, replace_all=False)
+                session.commit()
+            return {"status": "ok", "committed": count, "errors": []}
+        except Exception as e:
+            logger.exception("Error committing instruments in multi-tenant mode: %s", e)
+            raise HTTPException(
+                status_code=400,
+                detail=f"Database error during import: {e}"
+            )
 
     committed = 0
     commit_errors: list[str] = []
@@ -143,12 +151,18 @@ def import_confirm(
             tgt_price = inst_dict.get("target_price")
             soy_price = inst_dict.get("start_of_year_price")
 
+            ref_dec = Decimal(str(ref_price)) if ref_price is not None and float(ref_price) > 0 else None
+            tgt_dec = Decimal(str(tgt_price)) if tgt_price is not None and float(tgt_price) > 0 else None
+            soy_dec = Decimal(str(soy_price)) if soy_price is not None and float(soy_price) > 0 else None
+
             analysis_dt = None
             if inst_dict.get("analysis_date"):
                 try:
                     analysis_dt = date.fromisoformat(str(inst_dict["analysis_date"]))
                 except ValueError:
                     pass
+            if ref_dec is not None and analysis_dt is None:
+                analysis_dt = date.today()
 
             soy_dt = None
             if inst_dict.get("start_of_year_date"):
@@ -156,6 +170,8 @@ def import_confirm(
                     soy_dt = date.fromisoformat(str(inst_dict["start_of_year_date"]))
                 except ValueError:
                     pass
+            if soy_dec is not None and soy_dt is None:
+                soy_dt = date(date.today().year, 1, 1)
 
             # Active boolean parsing
             raw_active = inst_dict.get("active", True)
@@ -171,10 +187,10 @@ def import_confirm(
                 currency=inst_dict.get("currency", ""),
                 company_name=inst_dict.get("company_name", ticker),
                 analysis_date=analysis_dt,
-                analysis_reference_price=Decimal(str(ref_price)) if ref_price is not None else None,
+                analysis_reference_price=ref_dec,
                 start_of_year_date=soy_dt,
-                start_of_year_price=Decimal(str(soy_price)) if soy_price is not None else None,
-                target_price=Decimal(str(tgt_price)) if tgt_price is not None else None,
+                start_of_year_price=soy_dec,
+                target_price=tgt_dec,
                 comment=inst_dict.get("comment", ""),
                 active=is_active,
             )
