@@ -48,6 +48,9 @@ COLUMN_MAPPING = {
     "currency": ["Currency", "Moneda", "Divisa"],
     "comment": [
         "Comment",
+        "Comments",
+        "Notes",
+        "Note",
         "Comentarios",
         "Comentario",
         "COMENTARIO",
@@ -74,18 +77,20 @@ def normalize_header(name: str | None) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Precompute normalized alias lookup table once at import time
+_ALIAS_TO_INTERNAL: dict[str, str] = {}
+for _internal_key, _aliases in COLUMN_MAPPING.items():
+    for _alias in _aliases:
+        _norm = normalize_header(_alias)
+        if _norm and _norm not in _ALIAS_TO_INTERNAL:
+            _ALIAS_TO_INTERNAL[_norm] = _internal_key
+
+
 def map_columns(df_columns: list[str]) -> dict[str, str]:
     """Map user-provided column names to internal keys."""
-    alias_to_internal: dict[str, str] = {}
-    for internal_key, aliases in COLUMN_MAPPING.items():
-        for alias in aliases:
-            key = normalize_header(alias)
-            if key and key not in alias_to_internal:
-                alias_to_internal[key] = internal_key
-
     mapping: dict[str, str] = {}
     for col in df_columns:
         key = normalize_header(col)
-        if key in alias_to_internal and col not in mapping:
-            mapping[col] = alias_to_internal[key]
+        if key in _ALIAS_TO_INTERNAL and col not in mapping:
+            mapping[col] = _ALIAS_TO_INTERNAL[key]
     return mapping

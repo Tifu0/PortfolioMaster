@@ -10,6 +10,7 @@
     "test": "tsx scripts/verify_api_client.mts && tsx scripts/verify_phase3.mts && tsx scripts/verify_phase4.mts && tsx scripts/verify_phase5.mts && tsx scripts/verify_phase6.mts && tsx scripts/verify_phase7.mts && tsx scripts/verify_backup_export.mts && tsx scripts/verify_toolbar_and_backup_tab.mts && tsx scripts/verify_api_cache.mts && tsx scripts/verify_portfolio_context.mts && tsx scripts/verify_watchlist_fixes.mts && tsx scripts/verify_analysis_date_column.mts && tsx scripts/verify_responsive_headers_and_row_height.mts && tsx scripts/verify_save_and_update_analysis_date.mts && tsx scripts/verify_batch_auto_sync.mts"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.118.0",
     "@tanstack/react-table": "^8.21.3",
     "lucide-react": "^1.57.0",
     "next": "16.4.1",

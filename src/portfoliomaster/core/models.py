@@ -49,13 +49,16 @@ class QuoteStatus(Enum):
         return False
 
     def display_label(self) -> str:
-        return {
-            QuoteStatus.FRESH: "Actual (fresco)",
-            QuoteStatus.DELAYED: "Cerrado / EOD",
-            QuoteStatus.STALE: "Vencido",
-            QuoteStatus.UNAVAILABLE: "No disponible",
-            QuoteStatus.ERROR: "Error",
-        }[self]
+        return _STATUS_DISPLAY_LABELS.get(self, "Desconocido")
+
+
+_STATUS_DISPLAY_LABELS: dict[QuoteStatus, str] = {
+    QuoteStatus.FRESH: "Actual (fresco)",
+    QuoteStatus.DELAYED: "Cerrado / EOD",
+    QuoteStatus.STALE: "Vencido",
+    QuoteStatus.UNAVAILABLE: "No disponible",
+    QuoteStatus.ERROR: "Error",
+}
 
 
 class Exchange(Enum):

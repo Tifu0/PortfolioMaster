@@ -10,7 +10,9 @@ import React, {
   useState,
 } from 'react';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
-import { getPositions, getMetrics, getConfig } from '@/lib/api';
+import { getPositions, getMetrics, getConfig, refreshAll } from '@/lib/api';
+import { supabase, getAuthToken } from '@/lib/supabase';
+import { useAuth } from '@/context/AuthContext';
 
 export interface PortfolioContextType {
   positions: Position[];
@@ -66,7 +68,12 @@ export function PortfolioProvider({
 
   const isInitialSeededRef = useRef(initialPositions.length > 0);
   const positionsRef = useRef(positions);
-  positionsRef.current = positions;
+  useEffect(() => {
+    positionsRef.current = positions;
+  }, [positions]);
+
+  const { session, isLoading: isAuthLoading, isAuthConfigured } = useAuth();
+  const prevSessionUserIdRef = useRef<string | null | undefined>(undefined);
 
   // Seed initial data passed from server components or initial render
   const seedInitialData = useCallback(
@@ -90,6 +97,15 @@ export function PortfolioProvider({
   const refreshPortfolioData = useCallback(
     async (options?: { silent?: boolean }) => {
       const isSilent = options?.silent ?? false;
+
+      // When auth is configured but user is not signed in, do not flood protected endpoints with 401s
+      if (isAuthConfigured && !session && !isAuthLoading) {
+        setPositions([]);
+        setMetrics(null);
+        if (!isSilent) setIsRefreshing(false);
+        return;
+      }
+
       if (!isSilent) {
         setIsRefreshing(true);
       }
@@ -130,7 +146,7 @@ export function PortfolioProvider({
         }
       }
     },
-    []
+    [isAuthConfigured, isAuthLoading, session]
   );
 
   // Optimistic UI: Immediately delete an instrument and return a rollback callback
@@ -180,6 +196,31 @@ export function PortfolioProvider({
     },
     []
   );
+
+  // Synchronize portfolio data when auth session changes (login / logout)
+  useEffect(() => {
+    if (!isAuthConfigured || isAuthLoading) return;
+    const currentUserId = session?.user?.id ?? null;
+
+    if (prevSessionUserIdRef.current === undefined) {
+      prevSessionUserIdRef.current = currentUserId;
+      return;
+    }
+
+    if (prevSessionUserIdRef.current !== currentUserId) {
+      prevSessionUserIdRef.current = currentUserId;
+      if (currentUserId) {
+        queueMicrotask(() => {
+          refreshPortfolioData({ silent: false });
+        });
+      } else {
+        queueMicrotask(() => {
+          setPositions([]);
+          setMetrics(null);
+        });
+      }
+    }
+  }, [session, isAuthLoading, isAuthConfigured, refreshPortfolioData]);
 
   const lastKnownRefreshAtRef = useRef<string | null | undefined>(undefined);
   const lastKnownCounterRef = useRef<number | undefined>(undefined);
@@ -249,7 +290,7 @@ export function PortfolioProvider({
         if (counterChanged || refreshAtChanged || finishedRefreshing) {
           await refreshPortfolioData({ silent: true });
         }
-      } catch (err) {
+      } catch {
         // Silently ignore transient network blips
       } finally {
         isSyncingRef.current = false;
@@ -269,98 +310,230 @@ export function PortfolioProvider({
   }, [refreshPortfolioData]);
 
   // Real-Time Server-Sent Events (SSE) Listener:
-  // Subscribes to live batch updates (/api/refresh/stream?mode=listen) so both automatic scheduled refreshes
-  // and manual batch refreshes update positions and progress live batch-by-batch across the app.
+  // Subscribes to live batch updates (/api/refresh/stream?mode=listen) using a fetch-based stream reader.
+  // Securely sends Supabase Bearer token in headers without exposing credentials in query strings.
   useEffect(() => {
-    if (typeof window === 'undefined' || typeof EventSource === 'undefined') return;
+    if (typeof window === 'undefined') return;
 
-    let eventSource: EventSource | null = null;
+    let abortController: AbortController | null = null;
     let isCancelled = false;
     let reconnectTimer: NodeJS.Timeout | null = null;
 
-    function connectSSE() {
+    async function connectSSEStream() {
       if (isCancelled) return;
       try {
-        const streamUrl = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/refresh/stream?mode=listen`;
-        eventSource = new EventSource(streamUrl);
-
-        eventSource.onmessage = (event) => {
-          if (isCancelled || !event.data) return;
-          try {
-            const data = JSON.parse(event.data);
-            if (data.type === 'start') {
-              setIsRefreshing(true);
-              if (data.total_batches) {
-                setBatchProgress({
-                  currentBatch: 0,
-                  totalBatches: data.total_batches,
-                  processed: 0,
-                  total: data.total_symbols ?? 0,
-                });
-              }
-            } else if (data.type === 'batch') {
-              setIsRefreshing(true);
-              if (data.batch_index && data.total_batches) {
-                setBatchProgress({
-                  currentBatch: data.batch_index,
-                  totalBatches: data.total_batches,
-                  processed: data.processed_symbols ?? 0,
-                  total: data.total_symbols ?? 0,
-                });
-              }
-              // Progressive live update: re-fetch positions & metrics in background per completed batch
-              refreshPortfolioData({ silent: true });
-            } else if (data.type === 'complete') {
-              setBatchProgress(null);
-              setIsRefreshing(false);
-              refreshPortfolioData({ silent: true });
-            } else if (data.type === 'error') {
-              setBatchProgress(null);
-              setIsRefreshing(false);
-            }
-          } catch {
-            // Ignore non-json or comments
-          }
+        const token = await getAuthToken();
+        if (isAuthConfigured && !token) {
+          // Do not attempt authenticated SSE connection without a session
+          return;
+        }
+        const headers: Record<string, string> = {
+          Accept: 'text/event-stream',
         };
+        if (token) {
+          headers['Authorization'] = `Bearer ${token}`;
+        }
 
-        eventSource.onerror = () => {
-          if (eventSource) {
-            eventSource.close();
-            eventSource = null;
-          }
+        const baseUrl = process.env.NEXT_PUBLIC_API_URL || '';
+        const streamUrl = `${baseUrl.replace(/\/$/, '')}/api/refresh/stream?mode=listen`;
+
+        abortController = new AbortController();
+        const res = await fetch(streamUrl, {
+          headers,
+          signal: abortController.signal,
+        });
+
+        if (!res.ok || !res.body) {
           if (!isCancelled && !reconnectTimer) {
             reconnectTimer = setTimeout(() => {
               reconnectTimer = null;
-              connectSSE();
+              connectSSEStream();
             }, 5000);
           }
-        };
-      } catch {
-        // SSE connection failure handled silently, fallback to checkBackendSync
+          return;
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder('utf-8');
+        let buffer = '';
+
+        while (!isCancelled) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split('\n\n');
+          buffer = blocks.pop() || '';
+
+          for (const block of blocks) {
+            for (const line of block.split('\n')) {
+              const trimmed = line.trim();
+              if (trimmed.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(trimmed.slice(6));
+                  if (data.type === 'start') {
+                    setIsRefreshing(true);
+                    if (data.total_batches) {
+                      setBatchProgress({
+                        currentBatch: 0,
+                        totalBatches: data.total_batches,
+                        processed: 0,
+                        total: data.total_symbols ?? 0,
+                      });
+                    }
+                  } else if (data.type === 'batch') {
+                    setIsRefreshing(true);
+                    if (data.batch_index && data.total_batches) {
+                      setBatchProgress({
+                        currentBatch: data.batch_index,
+                        totalBatches: data.total_batches,
+                        processed: data.processed_symbols ?? 0,
+                        total: data.total_symbols ?? 0,
+                      });
+                    }
+                    refreshPortfolioData({ silent: true });
+                  } else if (data.type === 'complete') {
+                    setBatchProgress(null);
+                    setIsRefreshing(false);
+                    refreshPortfolioData({ silent: true });
+                  } else if (data.type === 'error') {
+                    setBatchProgress(null);
+                    setIsRefreshing(false);
+                  }
+                } catch {
+                  // Ignore non-json or comments
+                }
+              }
+            }
+          }
+        }
+      } catch (err: unknown) {
+        if (!isCancelled && (err as { name?: string })?.name !== 'AbortError' && !reconnectTimer) {
+          reconnectTimer = setTimeout(() => {
+            reconnectTimer = null;
+            connectSSEStream();
+          }, 5000);
+        }
       }
     }
 
-    connectSSE();
+    connectSSEStream();
 
     return () => {
       isCancelled = true;
       if (reconnectTimer) clearTimeout(reconnectTimer);
-      if (eventSource) eventSource.close();
+      if (abortController) abortController.abort();
+    };
+  }, [refreshPortfolioData, isAuthConfigured]);
+
+  // Global unhandled promise rejection listener
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const handleUnhandledRejection = (event: PromiseRejectionEvent) => {
+      console.error('[PortfolioMaster Unhandled Rejection]:', event.reason);
+    };
+    window.addEventListener('unhandledrejection', handleUnhandledRejection);
+    return () => window.removeEventListener('unhandledrejection', handleUnhandledRejection);
+  }, []);
+
+  // Keep live refs for timer callbacks
+  const lastRefreshTimestampRef = useRef<number>(0);
+  const isRefreshingRef = useRef<boolean>(isRefreshing);
+
+  useEffect(() => {
+    isRefreshingRef.current = isRefreshing;
+  }, [isRefreshing]);
+
+  useEffect(() => {
+    if (lastRefreshTimestampRef.current === 0) {
+      lastRefreshTimestampRef.current = Date.now();
+    }
+  }, []);
+
+  useEffect(() => {
+    if (lastRefreshedAt) {
+      lastRefreshTimestampRef.current = lastRefreshedAt.getTime();
+    }
+  }, [lastRefreshedAt]);
+
+  // 1. Smart visibility-aware timer: 150 seconds (2.5 min) with pause on blur and instant catch-up
+  useEffect(() => {
+    if (typeof window === 'undefined' || typeof document === 'undefined') return;
+
+    const SMART_REFRESH_INTERVAL_MS = 150_000;
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const triggerSmartRefresh = async () => {
+      if (document.visibilityState !== 'visible' || isRefreshingRef.current) {
+        return;
+      }
+      try {
+        await refreshAll();
+      } catch (err) {
+        console.debug('Background smart refresh tick completed/throttled:', err);
+      } finally {
+        await refreshPortfolioData({ silent: true });
+      }
+    };
+
+    const startTimer = () => {
+      if (intervalId) clearInterval(intervalId);
+      intervalId = setInterval(triggerSmartRefresh, SMART_REFRESH_INTERVAL_MS);
+    };
+
+    const stopTimer = () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible') {
+        const elapsedMs = Date.now() - lastRefreshTimestampRef.current;
+        if (elapsedMs >= SMART_REFRESH_INTERVAL_MS) {
+          triggerSmartRefresh();
+        }
+        startTimer();
+      } else {
+        stopTimer();
+      }
+    };
+
+    // Initialize timer only if tab is currently visible
+    if (document.visibilityState === 'visible') {
+      startTimer();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopTimer();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, [refreshPortfolioData]);
 
-  // Fallback periodic auto-refresh driven by config.refresh_interval_seconds
+  // 2. Supabase Realtime synchronization on public.market_quotes
   useEffect(() => {
-    const intervalSec = config?.refresh_interval_seconds;
-    if (!intervalSec || intervalSec <= 0) return;
+    const client = supabase;
+    if (!client) return;
 
-    const intervalMs = intervalSec * 1000;
-    const intervalId = setInterval(() => {
-      refreshPortfolioData({ silent: true });
-    }, intervalMs);
+    const channel = client
+      .channel('realtime:market_quotes')
+      .on(
+        'postgres_changes',
+        { event: '*', schema: 'public', table: 'market_quotes' },
+        () => {
+          // Silent background revalidation without table layout shifts
+          refreshPortfolioData({ silent: true });
+        }
+      )
+      .subscribe();
 
-    return () => clearInterval(intervalId);
-  }, [config?.refresh_interval_seconds, refreshPortfolioData]);
+    return () => {
+      client.removeChannel(channel);
+    };
+  }, [refreshPortfolioData]);
 
   const value = useMemo<PortfolioContextType>(
     () => ({
@@ -404,4 +577,8 @@ export function usePortfolio(): PortfolioContextType {
     throw new Error('usePortfolio must be used within a PortfolioProvider');
   }
   return context;
+}
+
+export function usePortfolioOptional(): PortfolioContextType | null {
+  return use(PortfolioContext);
 }

@@ -6,6 +6,7 @@
 // and TanStack Table client-side hooks.
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useRouter } from 'next/navigation';
 import {
   ColumnDef,
@@ -35,28 +36,28 @@ import {
   Loader2,
   Edit3,
   PlusCircle,
-  Calendar,
   FileText,
   Download,
   Upload,
   SlidersHorizontal,
   Rows3,
 } from 'lucide-react';
-import { BackupExportModal } from '@/components/BackupExportModal';
-import { usePortfolio } from '@/context/PortfolioContext';
-import type { Position, QuoteStatus, PortfolioMetrics, RefreshBatchResponse, AppConfig } from '@/lib/types';
+import { usePortfolioOptional } from '@/context/PortfolioContext';
+import type { Position, QuoteStatus, PortfolioMetrics, AppConfig } from '@/lib/types';
 import {
   fetchAnalysisPrice,
   getPositions,
   getMetrics,
-  refreshAll,
   streamRefresh,
   refreshInstrument,
-  resolveMissingAnalysisPrices,
-  resolveMissingYtdPrices,
   updateInstrument,
   wipeDatabase,
 } from '@/lib/api';
+
+const BackupExportModal = dynamic(
+  () => import('@/components/BackupExportModal').then((mod) => mod.BackupExportModal),
+  { ssr: false }
+);
 
 // ========================================================================== //
 // Row Height (Density) Configuration & Empirical Bounds
@@ -261,18 +262,34 @@ function formatDeclineToTarget(
   };
 }
 
+const tableCurrencyFormatters = new Map<string, Intl.NumberFormat>();
+
 function formatCurrency(price: number | null | undefined, currency: string): string {
   if (price === null || price === undefined || isNaN(price)) {
     return '—';
   }
-  const curr = currency ? currency.toUpperCase() : 'EUR';
+  const curr = currency && currency.length === 3 ? currency.toUpperCase() : 'EUR';
+  let formatter = tableCurrencyFormatters.get(curr);
+  if (!formatter) {
+    try {
+      formatter = new Intl.NumberFormat('es-ES', {
+        style: 'currency',
+        currency: curr,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      formatter = new Intl.NumberFormat('es-ES', {
+        style: 'currency',
+        currency: 'EUR',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+    tableCurrencyFormatters.set(curr, formatter);
+  }
   try {
-    return new Intl.NumberFormat('es-ES', {
-      style: 'currency',
-      currency: curr.length === 3 ? curr : 'EUR',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(price);
+    return formatter.format(price);
   } catch {
     return `${price.toFixed(2)} ${currency}`;
   }
@@ -406,7 +423,7 @@ function ColumnSortIndicator({
 }
 
 // Helper: robust numeric sorting with nulls and NaNs placed deterministically at the end
-function numericSortWithNulls<T>(
+function numericSortWithNulls(
   rowA: { getValue: (id: string) => unknown },
   rowB: { getValue: (id: string) => unknown },
   columnId: string
@@ -548,13 +565,7 @@ export function WatchlistTable({
   onEditTicker,
   onAddInstrument,
 }: WatchlistTableProps) {
-  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    portfolioContext = usePortfolio();
-  } catch {
-    // Fallback if rendered outside provider
-  }
+  const portfolioContext = usePortfolioOptional();
 
   // Fallback data state used only if rendered outside PortfolioProvider
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
@@ -567,14 +578,14 @@ export function WatchlistTable({
       return initialPositions;
     }
     return portfolioContext ? portfolioContext.positions : localPositions;
-  }, [portfolioContext?.isInitialized, portfolioContext?.positions, initialPositions, localPositions]);
+  }, [portfolioContext, initialPositions, localPositions]);
 
   const activeMetrics = useMemo(() => {
     if (portfolioContext && portfolioContext.isInitialized && portfolioContext.metrics) {
       return portfolioContext.metrics;
     }
     return _initialMetrics || portfolioContext?.metrics || null;
-  }, [portfolioContext?.isInitialized, portfolioContext?.metrics, _initialMetrics]);
+  }, [portfolioContext, _initialMetrics]);
 
   const data = activePositions;
   const setData = portfolioContext ? portfolioContext.setPositions : setLocalPositions;
@@ -676,7 +687,6 @@ export function WatchlistTable({
 
   // Refresh states
   const [batchRefreshing, setBatchRefreshing] = useState(false);
-  const [resolvingAnalysisPrices, setResolvingAnalysisPrices] = useState(false);
   const [refreshingTickers, setRefreshingTickers] = useState<Set<string>>(new Set());
 
   // Wipe database modal
@@ -875,7 +885,7 @@ export function WatchlistTable({
     } finally {
       setSavingCommentTicker(null);
     }
-  }, [commentDrafts, addToast, onDataChange, activeMetrics, portfolioContext]);
+  }, [commentDrafts, addToast, onDataChange, activeMetrics, portfolioContext, data, setData]);
 
   // ── Reload data from API ────────────────────────────────────────────── //
 
@@ -996,7 +1006,7 @@ export function WatchlistTable({
         });
       }
     },
-    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData]
+    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData, data, setData]
   );
 
   // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
@@ -1019,6 +1029,20 @@ export function WatchlistTable({
           }
         }
       });
+
+      if (quotesRes.status === 'fresh') {
+        addToast(
+          'info',
+          quotesRes.message || 'Precios al día (actualizados recientemente)'
+        );
+        if (portfolioContext) {
+          portfolioContext.setBatchProgress(null);
+          await portfolioContext.refreshPortfolioData({ silent: true });
+        } else {
+          await reloadData();
+        }
+        return;
+      }
 
       const updatedQuotes = quotesRes.updated ?? 0;
       const totalQuotes = quotesRes.total ?? 0;
@@ -1060,6 +1084,8 @@ export function WatchlistTable({
         const result = await refreshInstrument(ticker);
         if (result.status === 'ok') {
           addToast('success', `${ticker}: cotización actualizada`);
+        } else if (result.status === 'fresh') {
+          addToast('info', `${ticker}: ${result.message || 'Precio al día (actualizado recientemente)'}`);
         } else {
           addToast('info', `${ticker}: ${result.detail || 'sin cotización'}`);
         }
@@ -1099,27 +1125,7 @@ export function WatchlistTable({
       setWipingDb(false);
       setWipeModalOpen(false);
     }
-  }, [addToast, onDataChange, portfolioContext]);
-
-  // ── Resolve Missing Analysis Prices ────────────────────────────────── //
-
-  const handleResolveAnalysisPrices = useCallback(async () => {
-    if (resolvingAnalysisPrices) return;
-    setResolvingAnalysisPrices(true);
-    try {
-      const res = await resolveMissingAnalysisPrices();
-      addToast(
-        'success',
-        `Precios de fecha de análisis: ${res.updated} actualizados (${res.failed} no encontrados, ${res.skipped} ya tenían precio)`
-      );
-      await reloadData();
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      addToast('error', `Error al resolver precios de análisis: ${msg}`);
-    } finally {
-      setResolvingAnalysisPrices(false);
-    }
-  }, [resolvingAnalysisPrices, addToast, reloadData]);
+  }, [addToast, onDataChange, portfolioContext, setData]);
 
   // ── Computed filters ────────────────────────────────────────────────── //
 

@@ -19,6 +19,7 @@ if _PROJECT_ROOT not in sys.path:
 _tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp_db.close()
 os.environ["PORTFOLIOMASTER_DB_PATH"] = _tmp_db.name
+os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
 
 _tmp_backup_dir = tempfile.mkdtemp(prefix="pm_backups_")
 os.environ["PORTFOLIOMASTER_BACKUP_DIR"] = _tmp_backup_dir
@@ -28,9 +29,22 @@ from portfoliomaster.db.connection import init_db
 
 init_db()
 
+import uuid
+import jwt
 from backend.api.main import app  # noqa: E402
 
-client = TestClient(app)
+TEST_USER_ID = uuid.UUID("c6dd2d21-c378-40f4-9848-5680db9fec27")
+TEST_JWT_SECRET = "test-supabase-jwt-secret-for-testing-purposes-only-32b"
+os.environ["SUPABASE_JWT_SECRET"] = TEST_JWT_SECRET
+
+def _mint_test_token(user_id: uuid.UUID = TEST_USER_ID) -> str:
+    return jwt.encode(
+        {"sub": str(user_id), "aud": "authenticated", "role": "authenticated"},
+        TEST_JWT_SECRET,
+        algorithm="HS256",
+    )
+
+client = TestClient(app, headers={"Authorization": f"Bearer {_mint_test_token()}"})
 
 
 @pytest.fixture(autouse=True)

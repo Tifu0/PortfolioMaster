@@ -17,9 +17,9 @@ PROJECT_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, "..", "..", ".."))
 DB_PATH = os.path.join(PROJECT_ROOT, DATABASE_FILENAME)
 
 def get_connection(db_path=None):
-    """Get a connection to the SQLite database."""
+    """Get a connection to the SQLite database with 30s busy timeout."""
     target = db_path or os.environ.get("PORTFOLIOMASTER_DB_PATH") or DB_PATH
-    return sqlite3.connect(target)
+    return sqlite3.connect(target, timeout=30.0)
 
 def init_db():
     """Initialize database schema."""

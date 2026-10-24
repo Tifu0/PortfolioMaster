@@ -22,17 +22,11 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { previewImport, confirmImport } from '@/lib/api';
-import { usePortfolio } from '@/context/PortfolioContext';
+import { usePortfolioOptional } from '@/context/PortfolioContext';
 import type { ImportPreviewResponse, Instrument } from '@/lib/types';
 
 export function ImportView() {
-  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    portfolioContext = usePortfolio();
-  } catch {
-    // Standalone fallback
-  }
+  const portfolioContext = usePortfolioOptional();
   const router = useRouter();
 
   const [file, setFile] = useState<File | null>(null);
@@ -72,7 +66,7 @@ export function ImportView() {
   const validateAndSetFile = (selectedFile: File) => {
     const ext = selectedFile.name.split('.').pop()?.toLowerCase();
     if (ext !== 'csv' && ext !== 'xlsx') {
-      setErrorMessage('Formato no compatible. Por favor sube un archivo con extensión .csv o .xlsx');
+      setErrorMessage('Unsupported file format. Please upload a .csv or .xlsx file.');
       return;
     }
     setFile(selectedFile);
@@ -91,7 +85,7 @@ export function ImportView() {
       setPreview(result);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(`Error al procesar el archivo: ${msg}`);
+      setErrorMessage(`Error analyzing file: ${msg}`);
       setPreview(null);
     } finally {
       setIsAnalyzing(false);
@@ -104,7 +98,7 @@ export function ImportView() {
     setErrorMessage(null);
 
     try {
-      // Send instruments dictionary matching backend API expectations
+      // Send instruments dictionary matching backend API expectations (CRITICAL FIX: Bug 5 - includes YTD references)
       const instrumentsToCommit = preview.instruments.map((inst: Instrument) => ({
         user_ticker: inst.user_ticker,
         provider_symbol: inst.provider_symbol,
@@ -113,6 +107,8 @@ export function ImportView() {
         company_name: inst.company_name,
         analysis_date: inst.analysis_date,
         analysis_reference_price: inst.analysis_reference_price,
+        start_of_year_date: inst.start_of_year_date,
+        start_of_year_price: inst.start_of_year_price,
         target_price: inst.target_price,
         comment: inst.comment,
         active: inst.active,
@@ -120,13 +116,13 @@ export function ImportView() {
 
       const res = await confirmImport(instrumentsToCommit);
       if (res.errors && res.errors.length > 0) {
-        setErrorMessage(`Se importaron ${res.committed} instrumentos con algunos avisos: ${res.errors.join(', ')}`);
+        setErrorMessage(`Imported ${res.committed} instruments with notices: ${res.errors.join(', ')}`);
       }
       setSuccessCount(res.committed);
       setPreview(null);
       setFile(null);
 
-      // Invalidate and refresh portfolio state across routes ("Zero-F5" Architecture)
+      // Invalidate and refresh portfolio state across routes
       if (portfolioContext) {
         await portfolioContext.refreshPortfolioData({ silent: true });
       }
@@ -137,7 +133,7 @@ export function ImportView() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(`Error al confirmar la importación: ${msg}`);
+      setErrorMessage(`Error confirming import: ${msg}`);
     } finally {
       setIsCommitting(false);
     }
@@ -156,16 +152,16 @@ export function ImportView() {
   const downloadSampleCsv = () => {
     const csvContent =
       'user_ticker,company_name,currency,target_price,analysis_reference_price,comment\n' +
-      'AAPL,Apple Inc.,USD,220.00,185.00,Líder en servicios y ecosistema\n' +
-      'BME:SAN,Banco Santander,EUR,5.50,4.25,Valoración atractiva y dividendo\n' +
-      'MSFT,Microsoft Corp.,USD,480.00,420.00,Crecimiento en Azure e Inteligencia Artificial\n' +
-      'LON:AZN,AstraZeneca PLC,GBP,140.00,120.00,Fuerte pipeline oncológico\n';
+      'AAPL,Apple Inc.,USD,220.00,185.00,Ecosystem and services market leader\n' +
+      'BME:SAN,Banco Santander,EUR,5.50,4.25,Attractive valuation and dividend yield\n' +
+      'MSFT,Microsoft Corp.,USD,480.00,420.00,Cloud growth and AI innovation leadership\n' +
+      'LON:AZN,AstraZeneca PLC,GBP,140.00,120.00,Strong oncology drug pipeline\n';
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.setAttribute('href', url);
-    link.setAttribute('download', 'plantilla_portfoliomaster.csv');
+    link.setAttribute('download', 'watchlist_template.csv');
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
@@ -182,10 +178,10 @@ export function ImportView() {
             </div>
             <div>
               <h3 className="font-semibold text-emerald-300 text-base">
-                ¡Importación completada con éxito!
+                Import completed successfully!
               </h3>
               <p className="text-xs text-emerald-400/80 mt-0.5">
-                Se han guardado correctamente <strong className="font-mono">{successCount}</strong> instrumentos en tu base de datos SQLite.
+                Successfully saved <strong className="font-mono">{successCount}</strong> instruments to your watchlist.
               </p>
             </div>
           </div>
@@ -194,13 +190,13 @@ export function ImportView() {
               onClick={handleReset}
               className="px-3.5 py-2 text-xs font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-xl transition"
             >
-              Importar otro archivo
+              Import another file
             </button>
             <Link
               href="/"
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition shadow-sm"
             >
-              Ver en Watchlist
+              View in Watchlist
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
@@ -222,20 +218,20 @@ export function ImportView() {
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-                Cargar Archivo CSV o Excel
+                Upload CSV or Excel File
               </h2>
               <p className="text-xs text-zinc-400 mt-1">
-                Sube tu hoja de cálculo con los activos a seguir. El sistema normalizará símbolos y detectará mercados automáticamente.
+                Upload your watchlist spreadsheet. Symbols will be normalized and market exchanges detected automatically.
               </p>
             </div>
 
             <button
               onClick={downloadSampleCsv}
               className="inline-flex items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white px-3.5 py-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-800 border border-zinc-700/60 transition self-start sm:self-auto"
-              title="Descargar plantilla CSV de ejemplo"
+              title="Download sample CSV template"
             >
               <Download className="w-3.5 h-3.5 text-emerald-400" />
-              Descargar Plantilla CSV
+              Download CSV Template
             </button>
           </div>
 
@@ -265,10 +261,10 @@ export function ImportView() {
 
             <div className="flex flex-col gap-1 max-w-sm">
               <span className="text-sm font-semibold text-zinc-200">
-                Haz clic para seleccionar o arrastra tu archivo aquí
+                Click to select or drag and drop your spreadsheet here
               </span>
               <span className="text-xs text-zinc-500">
-                Soporta archivos <strong className="text-zinc-400">.CSV</strong> y <strong className="text-zinc-400">.XLSX</strong>
+                Supports <strong className="text-zinc-400">.CSV</strong> and <strong className="text-zinc-400">.XLSX</strong> formats
               </span>
             </div>
           </div>
@@ -298,7 +294,7 @@ export function ImportView() {
                     handleReset();
                   }}
                   className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
-                  title="Eliminar archivo"
+                  title="Remove file"
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -311,12 +307,12 @@ export function ImportView() {
                   {isAnalyzing ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Analizando...
+                      Analyzing...
                     </>
                   ) : (
                     <>
                       <RefreshCw className="w-3.5 h-3.5" />
-                      Analizar y Validar
+                      Analyze & Validate
                     </>
                   )}
                 </button>
@@ -332,7 +328,7 @@ export function ImportView() {
           {/* Header & Status Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Instrumentos Válidos</span>
+              <span className="text-xs text-zinc-400 font-medium">Valid Instruments</span>
               <div className="mt-2 text-2xl font-bold font-mono text-emerald-400 flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                 {preview.valid_count}
@@ -340,7 +336,7 @@ export function ImportView() {
             </div>
 
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Avisos / Duplicados</span>
+              <span className="text-xs text-zinc-400 font-medium">Warnings / Duplicates</span>
               <div className="mt-2 text-2xl font-bold font-mono text-amber-400 flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-amber-400" />
                 {preview.warnings.length}
@@ -348,7 +344,7 @@ export function ImportView() {
             </div>
 
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Símbolos no resueltos</span>
+              <span className="text-xs text-zinc-400 font-medium">Unresolved Symbols</span>
               <div className="mt-2 text-2xl font-bold font-mono text-orange-400 flex items-center gap-2">
                 <HelpCircle className="w-5 h-5 text-orange-400" />
                 {preview.unresolved.length}
@@ -356,7 +352,7 @@ export function ImportView() {
             </div>
 
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Errores de Fila</span>
+              <span className="text-xs text-zinc-400 font-medium">Row Errors</span>
               <div className="mt-2 text-2xl font-bold font-mono text-rose-400 flex items-center gap-2">
                 <XCircle className="w-5 h-5 text-rose-400" />
                 {preview.errors.length}
@@ -369,10 +365,10 @@ export function ImportView() {
             <div className="p-4 rounded-xl bg-orange-500/10 border border-orange-500/30 text-xs text-orange-300">
               <div className="flex items-center gap-2 font-semibold">
                 <HelpCircle className="w-4 h-4 text-orange-400" />
-                <span>Símbolos sin mercado resuelto ({preview.unresolved.length}):</span>
+                <span>Unresolved Exchange Symbols ({preview.unresolved.length}):</span>
               </div>
               <p className="mt-1 text-orange-300/80">
-                Los siguientes tickers no tienen mercado asignado (`UNKNOWN`). Yahoo Finance podría no encontrar cotización si no se incluye prefijo (ej: `BME:SAN` para España):
+                The following tickers have an UNKNOWN exchange assigned. Market data providers may fail unless qualified with a regional prefix (e.g. `BME:SAN`):
               </p>
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {preview.unresolved.map((sym, idx) => (
@@ -389,7 +385,7 @@ export function ImportView() {
             <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
               <div className="flex items-center gap-2 font-semibold">
                 <AlertTriangle className="w-4 h-4 text-amber-400" />
-                <span>Avisos de duplicados ({preview.warnings.length}):</span>
+                <span>Duplicate Notices ({preview.warnings.length}):</span>
               </div>
               <ul className="mt-2 list-disc list-inside space-y-1 text-amber-300/80">
                 {preview.warnings.map((w, idx) => (
@@ -404,7 +400,7 @@ export function ImportView() {
             <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
               <div className="flex items-center gap-2 font-semibold">
                 <XCircle className="w-4 h-4 text-rose-400" />
-                <span>Errores de validación ({preview.errors.length}):</span>
+                <span>Validation Errors ({preview.errors.length}):</span>
               </div>
               <ul className="mt-2 list-disc list-inside space-y-1 text-rose-300/80">
                 {preview.errors.map((e, idx) => (
@@ -421,10 +417,10 @@ export function ImportView() {
                 <div>
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
                     <TableIcon className="w-4 h-4 text-emerald-400" />
-                    Vista Previa de Valores Validados ({preview.instruments.length})
+                    Validated Instruments Preview ({preview.instruments.length})
                   </h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Revisa los datos normalizados antes de confirmar la importación.
+                    Review normalized market data before committing import.
                   </p>
                 </div>
 
@@ -433,7 +429,7 @@ export function ImportView() {
                     onClick={handleReset}
                     className="px-3.5 py-2 text-xs font-medium text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-xl transition"
                   >
-                    Descartar
+                    Discard
                   </button>
                   <button
                     onClick={handleConfirm}
@@ -443,12 +439,12 @@ export function ImportView() {
                     {isCommitting ? (
                       <>
                         <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Guardando...
+                        Saving...
                       </>
                     ) : (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        Confirmar Importación ({preview.instruments.length})
+                        Confirm Import ({preview.instruments.length})
                       </>
                     )}
                   </button>
@@ -461,12 +457,12 @@ export function ImportView() {
                   <thead className="bg-zinc-950/80 text-zinc-400 font-medium border-b border-zinc-800">
                     <tr>
                       <th className="py-3 px-4">Ticker</th>
-                      <th className="py-3 px-4">Empresa</th>
-                      <th className="py-3 px-4">Mercado</th>
-                      <th className="py-3 px-4">Divisa</th>
-                      <th className="py-3 px-4 text-right">Precio Ref.</th>
-                      <th className="py-3 px-4 text-right">Precio Obj.</th>
-                      <th className="py-3 px-4">Comentarios</th>
+                      <th className="py-3 px-4">Company</th>
+                      <th className="py-3 px-4">Exchange</th>
+                      <th className="py-3 px-4">Currency</th>
+                      <th className="py-3 px-4 text-right">Analysis Price</th>
+                      <th className="py-3 px-4 text-right">Target Price</th>
+                      <th className="py-3 px-4">Comments</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 bg-zinc-900/40">

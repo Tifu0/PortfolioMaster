@@ -46,6 +46,12 @@ exports/
 *.csv
 *.xlsx
 
+# Frontend
+node_modules/
+.next/
+frontend/.next/
+frontend/node_modules/
+
 # OS generated
 .DS_Store
 Thumbs.db
@@ -59,6 +65,11 @@ Thumbs.db
 test-results/
 playwright-report/
 
-# Automatic database backups & generated docs
+# Automatic database backups
 backups/
-docs/
+
+# supabase sql
+SQL_supabase.txt
+
+#docs 
+docs/ 

@@ -1,4 +1,3 @@
-import * as api from '../lib/api';
 import type { Position } from '../lib/types';
 
 console.log('Testing Phase 3 Watchlist Table and API data contracts...');

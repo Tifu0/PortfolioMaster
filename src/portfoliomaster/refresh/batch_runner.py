@@ -1,7 +1,7 @@
 from typing import List, Dict, Optional, Callable
 from ..providers.base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus
-from ..core.config import DEFAULT_BATCH_SIZE, get_batch_size
+from ..core.config import get_batch_size
 import time
 import logging
 
@@ -18,15 +18,17 @@ class BatchRunner:
         symbols: List[str],
         on_batch_complete: Optional[Callable[[int, int, Dict[str, Quote]], None]] = None,
     ) -> Dict[str, Quote]:
-        """Run batch refresh with retries, progressive callbacks, and error isolation."""
+        """Run batch refresh with deduplication, retries, progressive callbacks, and error isolation."""
         results = {}
-        total_symbols = len(symbols)
+        # Ensure unique provider_symbols preserving order
+        unique_symbols = list(dict.fromkeys(s.strip().upper() for s in symbols if s and str(s).strip()))
+        total_symbols = len(unique_symbols)
         if total_symbols == 0:
             return results
 
         total_batches = (total_symbols + self.batch_size - 1) // self.batch_size
         for batch_idx, i in enumerate(range(0, total_symbols, self.batch_size), start=1):
-            chunk = symbols[i : i + self.batch_size]
+            chunk = unique_symbols[i : i + self.batch_size]
             self.logger.info(
                 f"[BatchRunner] Batch {batch_idx}/{total_batches} ({len(chunk)} symbols): {chunk}"
             )

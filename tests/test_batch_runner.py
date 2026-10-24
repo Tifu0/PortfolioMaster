@@ -1,8 +1,7 @@
-import pytest
 from unittest.mock import MagicMock
 from portfoliomaster.refresh.batch_runner import BatchRunner
 from portfoliomaster.providers.base import MarketDataProvider
-from portfoliomaster.core.models import Quote, QuoteStatus
+from portfoliomaster.core.models import Quote
 from decimal import Decimal
 
 def test_batch_runner_chunking():

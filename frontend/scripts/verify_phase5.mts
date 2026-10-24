@@ -1,5 +1,5 @@
 import * as api from '../lib/api';
-import type { ImportPreviewResponse, ImportConfirmResponse, Instrument } from '../lib/types';
+import type { ImportPreviewResponse, ImportConfirmResponse } from '../lib/types';
 import { ImportView } from '../components/ImportView';
 
 console.log('Testing Phase 5 CSV/Excel Import and API data contracts...');

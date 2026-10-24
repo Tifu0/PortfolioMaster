@@ -1,0 +1,29 @@
+services:
+  - type: web
+    name: portfoliomaster-backend
+    runtime: python
+    region: frankfurt
+    plan: starter
+    buildCommand: "pip install -r requirements.txt && pip install ."
+    preDeployCommand: "alembic upgrade head"
+    startCommand: "uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.12.6
+      - key: ENVIRONMENT
+        value: production
+      - key: DATABASE_URL
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+      - key: SUPABASE_URL
+        sync: false
+      - key: REFRESH_INTERVAL_SECONDS
+        value: "0"
+      - key: REFRESH_COOLDOWN_SECONDS
+        value: "120"
+      - key: BATCH_SIZE
+        value: "10"
+      - key: CORS_ORIGINS
+        sync: false

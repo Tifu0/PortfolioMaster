@@ -224,11 +224,64 @@ npm test
 
 ---
 
-## 🔒 Privacy & Local-First Disclaimer
+## ☁️ Production Deployment Architecture
 
-- **100% Local-First:** All portfolio data, analysis notes, and quotes are stored locally in your SQLite database (`portfolio.db`). No financial information or user data is ever sent to third-party cloud servers.
-- **Market Data:** Price quotes are retrieved directly from Yahoo Finance via `yfinance`.
-- **Personal Use:** This application is intended solely for personal tracking and research. It does not execute live financial transactions or provide investment advice.
+PortfolioMaster supports high-availability, multi-tenant cloud deployment:
+
+- **Frontend**: **Next.js 16 (App Router)** deployed to **Vercel** (`frontend` as root directory).
+- **Backend API**: **FastAPI** ASGI web service deployed to **Render** with Uvicorn.
+- **Database**: **Supabase PostgreSQL** with Row-Level Security (RLS) policies and shared `market_quotes` decoupling.
+- **Authentication**: **Supabase Auth** with cryptographic JWT verification (`HS256`, audience `authenticated`).
+- **Local Development**: Isolated SQLite backend (`portfolio.db`) with automatic fallback when `DATABASE_URL` is unset.
+
+### 1. Render Deployment (FastAPI Web Service)
+1. Link repository to Render and create a **Web Service** using `render.yaml`.
+2. Configure settings:
+   - **Environment**: Python 3.12.6
+   - **Build Command**: `pip install -r requirements.txt && pip install .`
+   - **Pre-Deploy Command**: `alembic upgrade head`
+   - **Start Command**: `uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT`
+   - **Health Check Path**: `/health`
+3. Set Environment Variables:
+   - `DATABASE_URL`: `postgresql+psycopg://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres`
+   - `SUPABASE_JWT_SECRET`: From Supabase Dashboard -> Project Settings -> API -> JWT Secret
+   - `SUPABASE_URL`: `https://[REF].supabase.co`
+   - `CORS_ORIGINS`: `https://your-frontend.vercel.app`
+   - `ENVIRONMENT`: `production`
+
+### 2. Vercel Deployment (Next.js App Router)
+1. Import repository on Vercel.
+2. Configure settings:
+   - **Root Directory**: `frontend`
+   - **Framework Preset**: `Next.js`
+3. Set Environment Variables:
+   - `NEXT_PUBLIC_API_URL`: `https://portfoliomaster-backend.onrender.com`
+   - `NEXT_PUBLIC_SUPABASE_URL`: `https://[REF].supabase.co`
+   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase anon public key
+
+---
+
+## 🚚 Migrating Legacy SQLite Data to Supabase PostgreSQL
+
+To migrate an existing SQLite database (`portfolio.db`) or JSON v1.0 backup into your multi-tenant Supabase PostgreSQL database:
+
+```bash
+# 1. Dry run (validation, duplicate detection, orphan check, checksum reconciliation - 0 DB writes)
+python scripts/migrate_sqlite_to_web.py --sqlite portfolio.db --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..." --dry-run
+
+# 2. Live migration (atomic commit with rollback safety)
+python scripts/migrate_sqlite_to_web.py --sqlite portfolio.db --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..."
+
+# 3. Rollback (if ever needed to cleanly purge migrated user records)
+python scripts/migrate_sqlite_to_web.py --rollback --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..."
+```
+
+---
+
+## 🔒 Privacy & Architecture Modes
+
+- **Multi-Tenant Cloud Mode:** When `DATABASE_URL` is set to Supabase PostgreSQL, all user data is partitioned by `user_id` authenticated via Supabase JWT with Row Level Security.
+- **Local-First Mode:** When `DATABASE_URL` is unset in development, data is stored locally in SQLite (`portfolio.db`).
 
 ---
 

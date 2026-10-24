@@ -7,7 +7,6 @@ imported so this file stays testable in isolation.
 
 import os
 from pathlib import Path
-from decimal import Decimal
 from typing import Optional
 
 # Attempt to load .env from project root or working directory
@@ -83,9 +82,6 @@ DATABASE_FILENAME: str = "portfolio.db"
 # App binding.
 DEFAULT_BIND_ADDRESS: str = "127.0.0.1"
 DEFAULT_PORT: int = 8501
-
-# Provider / symbol normalization reference.
-from typing import Optional
 
 # Provider / symbol normalization reference.
 # provider_symbol -> (exchange, currency_hint) discovered on first fetch.

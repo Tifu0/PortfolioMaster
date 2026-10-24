@@ -9,12 +9,16 @@ from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Optional, Union
-from .config import FreshnessConfig
 
-from .models import CalculationResult, Quote, QuoteStatus
-from .config import DISPLAY_DECIMAL_PLACES
+from .config import DISPLAY_DECIMAL_PLACES, FreshnessConfig
+from .models import CalculationResult, Quote
 
 Number = Union[float, Decimal, int, str, None]
+
+# Precomputed constants to avoid reallocations on row-by-row financial calculations
+_DISPLAY_QUANTIZE = Decimal(10) ** -DISPLAY_DECIMAL_PLACES
+_HUNDRED = Decimal(100)
+_ZERO = Decimal(0)
 
 
 def _to_decimal(value: Number) -> Optional[Decimal]:
@@ -62,7 +66,7 @@ def _to_decimal(value: Number) -> Optional[Decimal]:
 
 def _safe_div(numerator: Decimal, denominator: Decimal) -> Optional[Decimal]:
     """Return numerator / denominator, or None if invalid / division by zero."""
-    if denominator == 0:
+    if denominator == _ZERO:
         return None
     try:
         return numerator / denominator
@@ -74,7 +78,16 @@ def _round(value: Optional[Decimal]) -> Optional[Decimal]:
     """Round a Decimal to display precision using half-up rounding."""
     if value is None:
         return None
-    return value.quantize(Decimal(10) ** -DISPLAY_DECIMAL_PLACES, rounding=ROUND_HALF_UP)
+    return value.quantize(_DISPLAY_QUANTIZE, rounding=ROUND_HALF_UP)
+
+
+def _is_valid_price(value: Number) -> bool:
+    """A price is valid when it converts to a positive finite number."""
+    if isinstance(value, Decimal):
+        return not (value.is_nan() or value.is_infinite()) and value > _ZERO
+    d = _to_decimal(value)
+    return d is not None and d > _ZERO
+
 
 def daily_variation(
     latest_price: Number,
@@ -82,20 +95,18 @@ def daily_variation(
 ) -> CalculationResult:
     """(latest_price / previous_close - 1) * 100."""
     result = CalculationResult()
-    
-    # CORRECCIÓN: Convertir latest_price a Decimal
+
     price = _to_decimal(latest_price)
     close = _to_decimal(previous_close)
-    
+
     result.price_valid = _is_valid_price(price)
     if close is None or price is None or not result.price_valid:
         return result
-        
-    # Ahora ambos son Decimal, la resta funciona
+
     daily = _safe_div(price - close, close)
     if daily is None:
         return result
-    result.daily_variation = _round(daily * 100)
+    result.daily_variation = _round(daily * _HUNDRED)
     result.daily_variation_valid = True
     return result
 
@@ -106,20 +117,18 @@ def variation_since_analysis(
 ) -> CalculationResult:
     """(latest_price / analysis_reference_price - 1) * 100."""
     result = CalculationResult()
-    
-    # CORRECCIÓN: Convertir latest_price a Decimal
+
     price = _to_decimal(latest_price)
     ref = _to_decimal(analysis_reference_price)
-    
+
     result.price_valid = _is_valid_price(price)
     if ref is None or price is None or not result.price_valid:
         return result
-        
-    # Ahora ambos son Decimal
+
     ratio = _safe_div(price - ref, ref)
     if ratio is None:
         return result
-    result.variation_since_analysis = _round(ratio * 100)
+    result.variation_since_analysis = _round(ratio * _HUNDRED)
     result.variation_since_analysis_valid = True
     return result
 
@@ -141,10 +150,9 @@ def ytd_variation(
     ratio = _safe_div(price - ref, ref)
     if ratio is None:
         return result
-    result.ytd_variation = _round(ratio * 100)
+    result.ytd_variation = _round(ratio * _HUNDRED)
     result.ytd_variation_valid = True
     return result
-
 
 
 def decline_to_target(
@@ -153,20 +161,18 @@ def decline_to_target(
 ) -> CalculationResult:
     """((target_price - latest_price) / latest_price) * 100."""
     result = CalculationResult()
-    
-    # CORRECCIÓN: Convertir latest_price a Decimal
+
     target = _to_decimal(target_price)
     price = _to_decimal(latest_price)
-    
+
     result.price_valid = _is_valid_price(price)
     if target is None or price is None or not result.price_valid:
         return result
-        
-    # Ahora ambos son Decimal
+
     decline = _safe_div(target - price, price)
     if decline is None:
         return result
-    result.decline_to_target = _round(decline * 100)
+    result.decline_to_target = _round(decline * _HUNDRED)
     result.decline_to_target_valid = True
     result.target_valid = True
     return result
@@ -176,7 +182,7 @@ def is_target_reached(
     latest_price: Number,
     target_price: Number,
     quote: Quote,
-    freshness_config: FreshnessConfig
+    freshness_config: FreshnessConfig,
 ) -> CalculationResult:
     """latest_price <= target_price, only when the quote is trustworthy.
 
@@ -190,8 +196,8 @@ def is_target_reached(
     target = _to_decimal(target_price)
     if price is None or target is None:
         return result
-    result.price_valid = price > 0
-    result.target_valid = target > 0
+    result.price_valid = price > _ZERO
+    result.target_valid = target > _ZERO
     if not result.price_valid or not result.target_valid:
         return result
     if not quote.status.is_usable_for_alerts(freshness_config):

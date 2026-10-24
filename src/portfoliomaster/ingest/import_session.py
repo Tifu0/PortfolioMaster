@@ -6,7 +6,7 @@ from typing import Any, List, Optional, Tuple
 import pandas as pd
 
 from ..core.calculations import _to_decimal
-from ..core.config import YAHOO_SUFFIXES, get_yahoo_suffix
+from ..core.config import get_yahoo_suffix
 from ..core.models import Exchange, Instrument
 from .columns import map_columns
 from .normalizer import normalize
@@ -80,24 +80,32 @@ def import_spreadsheet(
     instruments = []
     row_errors = []
     unresolved_symbols = set()
-    for idx, row in df.iterrows():
-        row_dict = {key: row.get(key) for key in df.columns}
-        row_dict["user_ticker"] = _cell_str(row_dict.get("user_ticker"))
-        row_dict["company_name"] = _cell_str(row_dict.get("company_name"))
-        row_dict["currency"] = _cell_str(row_dict.get("currency"))
-        row_dict["comment"] = _cell_str(row_dict.get("comment"))
+    records = df.to_dict(orient="records")
+    for idx, row in enumerate(records):
+        user_ticker = _cell_str(row.get("user_ticker"))
+        company_name = _cell_str(row.get("company_name"))
+        currency = _cell_str(row.get("currency"))
+        comment = _cell_str(row.get("comment"))
 
-        if not row_dict["user_ticker"] and not row_dict["company_name"]:
+        if not user_ticker and not company_name:
             continue
+
+        row_dict = {
+            **row,
+            "user_ticker": user_ticker,
+            "company_name": company_name,
+            "currency": currency,
+            "comment": comment,
+        }
 
         errors = validate_row(row_dict)
         if errors:
-            row_errors.append(f"Fila {int(idx) + 2}: {errors}")
+            row_errors.append(f"Fila {idx + 2}: {errors}")
             continue
 
         inst = Instrument(
-            user_ticker=row_dict["user_ticker"],
-            company_name=row_dict["company_name"],
+            user_ticker=user_ticker,
+            company_name=company_name,
             analysis_date=_cell_date(row.get("analysis_date")),
             analysis_reference_price=_to_decimal(
                 None
@@ -113,8 +121,8 @@ def import_spreadsheet(
             target_price=_to_decimal(
                 None if _is_blank(row.get("target_price")) else row.get("target_price")
             ),
-            currency=row_dict["currency"],
-            comment=row_dict["comment"],
+            currency=currency,
+            comment=comment,
             active=_cell_bool(row.get("active"), default=True),
         )
 

@@ -5,14 +5,19 @@
 // It also reads query parameters (?add=1 or ?edit=TICKER) to control modal visibility.
 
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { MetricCards } from '@/components/MetricCards';
 import { WatchlistTable } from '@/components/WatchlistTable';
-import { ManualEntryModal } from '@/components/ManualEntryModal';
 import { getPositions, getMetrics, getConfig } from '@/lib/api';
-import { usePortfolio } from '@/context/PortfolioContext';
+import { usePortfolioOptional } from '@/context/PortfolioContext';
 import { Check, AlertTriangle, Info, X } from 'lucide-react';
+
+const ManualEntryModal = dynamic(
+  () => import('@/components/ManualEntryModal').then((mod) => mod.ManualEntryModal),
+  { ssr: false }
+);
 
 interface WatchlistContentProps {
   initialPositions: Position[];
@@ -65,13 +70,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
  * ManualEntryModal, and reactive state updates.
  */
 export function WatchlistContent({ initialPositions, initialMetrics, initialConfig }: WatchlistContentProps) {
-  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    portfolioContext = usePortfolio();
-  } catch {
-    // Fallback if rendered outside provider
-  }
+  const portfolioContext = usePortfolioOptional();
 
   // Seed initial server-fetched data into portfolio provider
   useEffect(() => {
@@ -92,21 +91,21 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
       return initialPositions;
     }
     return portfolioContext ? portfolioContext.positions : localPositions;
-  }, [portfolioContext?.isInitialized, portfolioContext?.positions, initialPositions, localPositions]);
+  }, [portfolioContext, initialPositions, localPositions]);
 
   const metrics = useMemo(() => {
     if (portfolioContext && portfolioContext.isInitialized && portfolioContext.metrics) {
       return portfolioContext.metrics;
     }
     return initialMetrics || portfolioContext?.metrics || localMetrics;
-  }, [portfolioContext?.isInitialized, portfolioContext?.metrics, initialMetrics, localMetrics]);
+  }, [portfolioContext, initialMetrics, localMetrics]);
 
   const appConfig = useMemo(() => {
     if (portfolioContext && portfolioContext.config) {
       return portfolioContext.config;
     }
     return initialConfig || localConfig;
-  }, [portfolioContext?.config, initialConfig, localConfig]);
+  }, [portfolioContext, initialConfig, localConfig]);
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);

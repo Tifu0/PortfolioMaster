@@ -1,4 +1,4 @@
-from typing import Tuple, Optional
+from typing import Tuple
 from ..core.models import Exchange
 from ..core.config import EXCHANGE_HINTS, YAHOO_SUFFIXES, CURRENCY_TO_EXCHANGE
 
@@ -30,12 +30,13 @@ def normalize(ticker: str, currency: str = "") -> Tuple[str, Exchange]:
         return symbol_clean, Exchange.UNKNOWN
 
     # Sin prefijo: verificar si termina en .US
-    if ticker_clean.upper().endswith(".US"):
+    upper_ticker = ticker_clean.upper()
+    if upper_ticker.endswith(".US"):
         return ticker_clean[:-3], Exchange.US
 
     # Si ya tiene un sufijo Yahoo conocido (ej. RMS.PA, VIS.MC)
     for ex, suf in YAHOO_SUFFIXES.items():
-        if suf and ticker_clean.upper().endswith(suf.upper()):
+        if suf and upper_ticker.endswith(suf):
             return ticker_clean, ex
 
     # Fallback por divisa (ej. IPH con divisa AUD -> AUSTRALIA)

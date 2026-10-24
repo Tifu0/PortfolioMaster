@@ -37,10 +37,10 @@ export function HeaderNav() {
         href="/?add=1"
         onClick={handleAddClick}
         className="flex items-center gap-2 px-4 py-3 text-sm font-medium border-b-2 border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700 transition cursor-pointer"
-        title="Añadir nuevo instrumento manualmente"
+        title="Add new instrument manually"
       >
         <PlusCircle className="w-4 h-4" />
-        Añadir Valor
+        Add Instrument
       </Link>
       <Link
         href="/import"
@@ -51,7 +51,7 @@ export function HeaderNav() {
         }`}
       >
         <Upload className="w-4 h-4" />
-        Importar
+        Import
       </Link>
       <Link
         href="/backup"

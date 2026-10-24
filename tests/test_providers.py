@@ -1,8 +1,6 @@
-import pytest
 from portfoliomaster.providers.mock_provider import MockProvider
 from portfoliomaster.core.models import Quote, QuoteStatus
 from decimal import Decimal
-from datetime import datetime
 
 def test_mock_provider_batch():
     mock_data = {

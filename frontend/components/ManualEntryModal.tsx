@@ -13,17 +13,11 @@ import {
   Loader2,
   Check,
   CalendarCheck,
-  AlertTriangle,
-  Building,
-  DollarSign,
-  Calendar,
-  FileText,
-  Target,
   Search,
   CheckCircle,
   AlertCircle,
 } from 'lucide-react';
-import type { Position, Instrument, Exchange, CheckYahooResponse } from '@/lib/types';
+import type { Instrument, CheckYahooResponse } from '@/lib/types';
 import {
   createInstrument,
   updateInstrument,
@@ -35,7 +29,7 @@ import {
   fetchYtdPrice,
   checkYahooTicker,
 } from '@/lib/api';
-import { usePortfolio } from '@/context/PortfolioContext';
+import { usePortfolioOptional } from '@/context/PortfolioContext';
 
 const POPULAR_EXCHANGES: { label: string; value: string }[] = [
   { label: 'AUTO (Detección automática)', value: 'AUTO' },
@@ -79,13 +73,7 @@ export function ManualEntryModal({
   onSuccess,
   onError,
 }: ManualEntryModalProps) {
-  let portfolioContext: ReturnType<typeof usePortfolio> | null = null;
-  try {
-    // eslint-disable-next-line react-hooks/rules-of-hooks
-    portfolioContext = usePortfolio();
-  } catch {
-    // Standalone fallback
-  }
+  const portfolioContext = usePortfolioOptional();
 
   const isEditMode = Boolean(initialTickerToEdit);
   const [loading, setLoading] = useState(false);
@@ -101,8 +89,6 @@ export function ManualEntryModal({
   const [addAnalysisDate, setAddAnalysisDate] = useState(
     new Date().toISOString().split('T')[0]
   );
-  const [addStartOfYearPrice, setAddStartOfYearPrice] = useState('');
-  const [addStartOfYearDate, setAddStartOfYearDate] = useState('');
   const [addComment, setAddComment] = useState('');
   const [addFetchYahoo, setAddFetchYahoo] = useState(true);
   const [addManualPrice, setAddManualPrice] = useState('');
@@ -166,48 +152,55 @@ export function ManualEntryModal({
 
   // Synchronize modal state and fetch instrument details whenever modal opens or ticker changes
   useEffect(() => {
+    let ignore = false;
     if (!isOpen) {
       // Clean up modal state on close to guarantee zero stale cache on reopen
-      setOriginalTickerToEdit('');
-      setEditTicker('');
-      setEditCompanyName('');
-      setEditExchange('AUTO');
-      setEditCurrency('AUTO');
-      setEditTargetPrice('');
-      setEditAnalysisPrice('');
-      setEditAnalysisDate('');
-      setEditStartOfYearPrice('');
-      setEditStartOfYearDate('');
-      setEditComment('');
-      setEditLatestPrice('');
-      setEditPrevClose('');
-      setConfirmDelete(false);
-      setYahooCheckResult(null);
-      setIsAnalysisPriceManuallyEdited(false);
-      setSavingAction(null);
-      return;
+      void Promise.resolve().then(() => {
+        if (ignore) return;
+        setOriginalTickerToEdit('');
+        setEditTicker('');
+        setEditCompanyName('');
+        setEditExchange('AUTO');
+        setEditCurrency('AUTO');
+        setEditTargetPrice('');
+        setEditAnalysisPrice('');
+        setEditAnalysisDate('');
+        setEditStartOfYearPrice('');
+        setEditStartOfYearDate('');
+        setEditComment('');
+        setEditLatestPrice('');
+        setEditPrevClose('');
+        setConfirmDelete(false);
+        setYahooCheckResult(null);
+        setIsAnalysisPriceManuallyEdited(false);
+        setSavingAction(null);
+      });
+      return () => {
+        ignore = true;
+      };
     }
-
-    loadInstruments();
-    setIsAnalysisPriceManuallyEdited(false);
-    setSavingAction(null);
-
-    const targetTicker = initialTickerToEdit;
-    if (!targetTicker) {
-      setOriginalTickerToEdit('');
-      setEditTicker('');
-      setConfirmDelete(false);
-      setYahooCheckResult(null);
-      return;
-    }
-
-    setOriginalTickerToEdit(targetTicker);
-    setEditTicker(targetTicker);
-    setYahooCheckResult(null);
-    setConfirmDelete(false);
 
     let isMounted = true;
-    (async () => {
+    void Promise.resolve().then(async () => {
+      if (!isMounted) return;
+      loadInstruments();
+      setIsAnalysisPriceManuallyEdited(false);
+      setSavingAction(null);
+
+      const targetTicker = initialTickerToEdit;
+      if (!targetTicker) {
+        setOriginalTickerToEdit('');
+        setEditTicker('');
+        setConfirmDelete(false);
+        setYahooCheckResult(null);
+        return;
+      }
+
+      setOriginalTickerToEdit(targetTicker);
+      setEditTicker(targetTicker);
+      setYahooCheckResult(null);
+      setConfirmDelete(false);
+
       try {
         const detail = await getInstrument(targetTicker);
         if (!isMounted) return;
@@ -254,7 +247,8 @@ export function ManualEntryModal({
       } catch (err: unknown) {
         console.error('Error fetching instrument details:', err);
       }
-    })();
+    });
+
     return () => {
       isMounted = false;
     };
@@ -314,16 +308,16 @@ export function ManualEntryModal({
         company_name: addCompanyName.trim() || undefined,
         exchange: addExchange,
         currency: addCurrency.trim().toUpperCase(),
-        target_price: addTargetPrice ? parseFloat(addTargetPrice) : null,
-        analysis_reference_price: addAnalysisPrice ? parseFloat(addAnalysisPrice) : null,
-        analysis_date: addAnalysisDate || null,
-        start_of_year_price: addStartOfYearPrice ? parseFloat(addStartOfYearPrice) : null,
-        start_of_year_date: addStartOfYearDate || null,
+        target_price: addTargetPrice.trim() !== '' ? parseFloat(addTargetPrice) : null,
+        analysis_reference_price: addAnalysisPrice.trim() !== '' ? parseFloat(addAnalysisPrice) : null,
+        analysis_date: addAnalysisDate && addAnalysisDate.trim() ? addAnalysisDate.trim() : null,
+        start_of_year_price: null,
+        start_of_year_date: null,
         comment: addComment.trim(),
         fetch_yahoo: addFetchYahoo,
-        manual_price: !addFetchYahoo && addManualPrice ? parseFloat(addManualPrice) : null,
+        manual_price: !addFetchYahoo && addManualPrice.trim() !== '' ? parseFloat(addManualPrice) : null,
         manual_previous_close:
-          !addFetchYahoo && addManualPrevClose ? parseFloat(addManualPrevClose) : null,
+          !addFetchYahoo && addManualPrevClose.trim() !== '' ? parseFloat(addManualPrevClose) : null,
       });
 
       onSuccess?.(`Instrumento ${addTicker.trim()} añadido con éxito.`);
@@ -489,17 +483,17 @@ export function ManualEntryModal({
       }
 
       const payload: Parameters<typeof updateInstrument>[1] = {
-        company_name: editCompanyName.trim() || null,
-        exchange: editExchange !== 'AUTO' ? editExchange : null,
-        currency: editCurrency !== 'AUTO' ? editCurrency : null,
-        target_price: editTargetPrice ? parseFloat(editTargetPrice) : null,
+        company_name: editCompanyName.trim() !== '' ? editCompanyName.trim() : null,
+        exchange: editExchange !== 'AUTO' && editExchange.trim() !== '' ? editExchange : null,
+        currency: editCurrency !== 'AUTO' && editCurrency.trim() !== '' ? editCurrency : null,
+        target_price: editTargetPrice.trim() !== '' ? parseFloat(editTargetPrice) : null,
         analysis_reference_price: resolvedAnalysisPrice,
-        analysis_date: resolvedAnalysisDate,
-        start_of_year_price: editStartOfYearPrice ? parseFloat(editStartOfYearPrice) : null,
-        start_of_year_date: editStartOfYearDate || null,
-        comment: editComment.trim() || null,
-        latest_price: editLatestPrice ? parseFloat(editLatestPrice) : null,
-        previous_close: editPrevClose ? parseFloat(editPrevClose) : null,
+        analysis_date: resolvedAnalysisDate ? (typeof resolvedAnalysisDate === 'string' ? resolvedAnalysisDate.trim() : resolvedAnalysisDate) : null,
+        start_of_year_price: editStartOfYearPrice.trim() !== '' ? parseFloat(editStartOfYearPrice) : null,
+        start_of_year_date: editStartOfYearDate.trim() !== '' ? editStartOfYearDate.trim() : null,
+        comment: editComment.trim() !== '' ? editComment.trim() : null,
+        latest_price: editLatestPrice.trim() !== '' ? parseFloat(editLatestPrice) : null,
+        previous_close: editPrevClose.trim() !== '' ? parseFloat(editPrevClose) : null,
       };
 
       if (trimmedNewTicker !== targetTicker.toUpperCase()) {

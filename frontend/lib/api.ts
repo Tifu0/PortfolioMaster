@@ -7,6 +7,7 @@ import type {
   CheckYahooResponse,
   GenericStatusResponse,
   ImportConfirmResponse,
+  ImportInstrumentPayload,
   ImportPreviewResponse,
   InstrumentCreateRequest,
   InstrumentDetailResponse,
@@ -21,9 +22,62 @@ import type {
   BackupListResponse,
   RestoreResponse,
 } from './types';
+import { getAuthToken } from './supabase';
 
-const API_BASE_URL =
-  process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+const isServer = typeof window === 'undefined';
+
+/**
+ * Base URL resolution:
+ * On client (browser), calls use relative path ('/api/...') hitting Next.js proxy/BFF.
+ * On server (SSR), calls use API_BASE_URL or NEXT_PUBLIC_API_URL.
+ * Localhost fallback is restricted strictly to non-production development.
+ */
+const rawApiUrl = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL;
+export const API_BASE_URL = isServer
+  ? (rawApiUrl ? rawApiUrl.replace(/\/$/, '') : (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000'))
+  : '';
+
+/**
+ * Authenticated fetch wrapper that injects Supabase Bearer JWT token on all outgoing API calls.
+ * Dispatches 'portfoliomaster:auth-required' event on 401 Unauthorized to trigger the auth flow.
+ */
+export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  const headers = new Headers(init?.headers);
+  if (!headers.has('Authorization')) {
+    const token = await getAuthToken();
+    if (token) {
+      headers.set('Authorization', `Bearer ${token}`);
+    }
+  }
+  const response = await fetch(input, {
+    ...init,
+    headers,
+  });
+
+  if (response.status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(
+      new CustomEvent('portfoliomaster:auth-required', {
+        detail: { message: 'Tu sesión ha expirado o requiere autenticación. Por favor, identifícate.' },
+      })
+    );
+  }
+
+  return response;
+}
+
+function getFullUrl(path: string): URL {
+  if (isServer) {
+    const rawBackend = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL;
+    if (!rawBackend && process.env.NODE_ENV === 'production') {
+      throw new Error(
+        '[Configuration Error] API_BASE_URL or NEXT_PUBLIC_API_URL is required in production environment for server-side requests.'
+      );
+    }
+    const base = rawBackend ? rawBackend.replace(/\/$/, '') : 'http://localhost:8000';
+    return new URL(path.startsWith('/') ? path : `/${path}`, base);
+  }
+  return new URL(path.startsWith('/') ? path : `/${path}`, window.location.origin);
+}
 
 export class ApiError extends Error {
   status: number;
@@ -59,7 +113,7 @@ async function handleResponse<T>(res: Response): Promise<T> {
  * Fetches the full watchlist with quotes and server-computed derived columns.
  */
 export async function getPositions(cache: RequestCache = 'no-store'): Promise<PositionsResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/positions`, {
+  const res = await authFetch(`${API_BASE_URL}/api/positions`, {
     cache,
   });
   return handleResponse<PositionsResponse>(res);
@@ -70,7 +124,7 @@ export async function getPositions(cache: RequestCache = 'no-store'): Promise<Po
  * Fetches all active instruments.
  */
 export async function getInstruments(cache: RequestCache = 'no-store'): Promise<InstrumentsResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments`, {
     cache,
   });
   return handleResponse<InstrumentsResponse>(res);
@@ -81,7 +135,7 @@ export async function getInstruments(cache: RequestCache = 'no-store'): Promise<
  * Fetches a single instrument along with its quote.
  */
 export async function getInstrument(ticker: string): Promise<InstrumentDetailResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}`, {
     cache: 'no-store',
   });
   return handleResponse<InstrumentDetailResponse>(res);
@@ -94,7 +148,7 @@ export async function getInstrument(ticker: string): Promise<InstrumentDetailRes
 export async function createInstrument(
   data: InstrumentCreateRequest
 ): Promise<InstrumentDetailResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -110,7 +164,7 @@ export async function updateInstrument(
   ticker: string,
   data: InstrumentUpdateRequest
 ): Promise<InstrumentDetailResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
@@ -123,7 +177,7 @@ export async function updateInstrument(
  * Deletes an instrument and its quotes.
  */
 export async function deleteInstrument(ticker: string): Promise<GenericStatusResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}`, {
     method: 'DELETE',
   });
   return handleResponse<GenericStatusResponse>(res);
@@ -134,7 +188,7 @@ export async function deleteInstrument(ticker: string): Promise<GenericStatusRes
  * Forces a Yahoo Finance quote refresh for a single instrument.
  */
 export async function refreshInstrument(ticker: string): Promise<RefreshSingleResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}/refresh`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}/refresh`, {
     method: 'POST',
   });
   return handleResponse<RefreshSingleResponse>(res);
@@ -145,7 +199,7 @@ export async function refreshInstrument(ticker: string): Promise<RefreshSingleRe
  * Batch refreshes all active instruments from Yahoo Finance.
  */
 export async function refreshAll(): Promise<RefreshBatchResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/refresh`, {
+  const res = await authFetch(`${API_BASE_URL}/api/refresh`, {
     method: 'POST',
   });
   return handleResponse<RefreshBatchResponse>(res);
@@ -158,7 +212,7 @@ export async function refreshAll(): Promise<RefreshBatchResponse> {
 export async function streamRefresh(
   onProgress?: (event: RefreshProgressEvent) => void
 ): Promise<RefreshBatchResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/refresh/stream?trigger=1`);
+  const res = await authFetch(`${API_BASE_URL}/api/refresh/stream?trigger=1`);
   if (!res.ok) {
     throw new ApiError(`Stream refresh failed: ${res.statusText}`, res.status);
   }
@@ -200,6 +254,8 @@ export async function streamRefresh(
                   updated: event.updated ?? 0,
                   failed: event.failed ?? 0,
                   total: event.total ?? event.total_symbols ?? 0,
+                  refreshed_count: event.refreshed_count,
+                  message: event.message,
                   analysis_prices_updated: event.analysis_prices_updated,
                   ytd_prices_updated: event.ytd_prices_updated,
                 };
@@ -226,7 +282,7 @@ export async function previewImport(file: File | Blob, filename?: string): Promi
   const formData = new FormData();
   formData.append('file', file, filename || (file instanceof File ? file.name : 'upload.csv'));
 
-  const res = await fetch(`${API_BASE_URL}/api/import/preview`, {
+  const res = await authFetch(`${API_BASE_URL}/api/import/preview`, {
     method: 'POST',
     body: formData,
   });
@@ -238,9 +294,9 @@ export async function previewImport(file: File | Blob, filename?: string): Promi
  * Commits a list of validated instruments to SQLite.
  */
 export async function confirmImport(
-  instruments: Array<Record<string, unknown>>
+  instruments: ImportInstrumentPayload[]
 ): Promise<ImportConfirmResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/import/confirm`, {
+  const res = await authFetch(`${API_BASE_URL}/api/import/confirm`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ instruments }),
@@ -253,7 +309,7 @@ export async function confirmImport(
  * Wipes all instruments and quotes from SQLite database.
  */
 export async function wipeDatabase(): Promise<GenericStatusResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/database`, {
+  const res = await authFetch(`${API_BASE_URL}/api/database`, {
     method: 'DELETE',
   });
   return handleResponse<GenericStatusResponse>(res);
@@ -264,7 +320,7 @@ export async function wipeDatabase(): Promise<GenericStatusResponse> {
  * Fetches portfolio summary metrics (positions count, best/worst performer, average daily change).
  */
 export async function getMetrics(cache: RequestCache = 'no-store'): Promise<PortfolioMetrics> {
-  const res = await fetch(`${API_BASE_URL}/api/metrics`, {
+  const res = await authFetch(`${API_BASE_URL}/api/metrics`, {
     cache,
   });
   return handleResponse<PortfolioMetrics>(res);
@@ -278,11 +334,11 @@ export async function fetchAnalysisPrice(
   ticker: string,
   targetDate?: string
 ): Promise<{ status: string; ticker: string; analysis_date: string; analysis_reference_price: number }> {
-  const url = new URL(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}/fetch-analysis-price`);
+  const url = getFullUrl(`/api/instruments/${encodeURIComponent(ticker)}/fetch-analysis-price`);
   if (targetDate) {
     url.searchParams.set('target_date', targetDate);
   }
-  const res = await fetch(url.toString(), {
+  const res = await authFetch(url.toString(), {
     method: 'POST',
   });
   return handleResponse<{ status: string; ticker: string; analysis_date: string; analysis_reference_price: number }>(res);
@@ -299,7 +355,7 @@ export async function resolveMissingAnalysisPrices(): Promise<{
   skipped: number;
   total: number;
 }> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments/resolve-missing-analysis-prices`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments/resolve-missing-analysis-prices`, {
     method: 'POST',
   });
   return handleResponse<{
@@ -319,11 +375,11 @@ export async function fetchYtdPrice(
   ticker: string,
   targetYear?: number
 ): Promise<{ status: string; ticker: string; start_of_year_date: string; start_of_year_price: number }> {
-  const url = new URL(`${API_BASE_URL}/api/instruments/${encodeURIComponent(ticker)}/fetch-ytd-price`);
+  const url = getFullUrl(`/api/instruments/${encodeURIComponent(ticker)}/fetch-ytd-price`);
   if (targetYear) {
     url.searchParams.set('target_year', String(targetYear));
   }
-  const res = await fetch(url.toString(), {
+  const res = await authFetch(url.toString(), {
     method: 'POST',
   });
   return handleResponse<{ status: string; ticker: string; start_of_year_date: string; start_of_year_price: number }>(res);
@@ -340,7 +396,7 @@ export async function resolveMissingYtdPrices(): Promise<{
   skipped: number;
   total: number;
 }> {
-  const res = await fetch(`${API_BASE_URL}/api/instruments/resolve-missing-ytd-prices`, {
+  const res = await authFetch(`${API_BASE_URL}/api/instruments/resolve-missing-ytd-prices`, {
     method: 'POST',
   });
   return handleResponse<{
@@ -357,10 +413,10 @@ export async function resolveMissingYtdPrices(): Promise<{
  * Validates whether a ticker exists and has quotes available on Yahoo Finance.
  */
 export async function checkYahooTicker(ticker: string, currency?: string): Promise<CheckYahooResponse> {
-  const url = new URL(`${API_BASE_URL}/api/instruments/check-yahoo`);
+  const url = getFullUrl('/api/instruments/check-yahoo');
   url.searchParams.set('ticker', ticker);
   if (currency) url.searchParams.set('currency', currency);
-  const res = await fetch(url.toString(), {
+  const res = await authFetch(url.toString(), {
     cache: 'no-store',
   });
   return handleResponse<CheckYahooResponse>(res);
@@ -407,7 +463,7 @@ function triggerFileDownload(blob: Blob, defaultFilename: string, contentDisposi
  * Downloads watchlist data in CSV, Excel (.xlsx), or JSON format.
  */
 export async function exportWatchlist(format: 'csv' | 'excel' | 'json'): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/export/${format}`);
+  const res = await authFetch(`${API_BASE_URL}/api/export/${format}`);
   if (!res.ok) {
     let errorDetail = `Export failed (${res.status})`;
     try {
@@ -433,7 +489,7 @@ export async function exportWatchlist(format: 'csv' | 'excel' | 'json'): Promise
  * Downloads atomic raw SQLite database snapshot (.db).
  */
 export async function downloadDatabaseBackup(): Promise<void> {
-  const res = await fetch(`${API_BASE_URL}/api/backup/download`);
+  const res = await authFetch(`${API_BASE_URL}/api/backup/download`);
   if (!res.ok) {
     let errorDetail = `Backup download failed (${res.status})`;
     try {
@@ -458,7 +514,7 @@ export async function downloadDatabaseBackup(): Promise<void> {
  * Lists available local automatic snapshots in backups/.
  */
 export async function getBackupList(): Promise<BackupListResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/backup/list`, {
+  const res = await authFetch(`${API_BASE_URL}/api/backup/list`, {
     cache: 'no-store',
   });
   return handleResponse<BackupListResponse>(res);
@@ -472,7 +528,7 @@ export async function restoreBackupFile(file: File): Promise<RestoreResponse> {
   const formData = new FormData();
   formData.append('file', file, file.name);
 
-  const res = await fetch(`${API_BASE_URL}/api/backup/restore`, {
+  const res = await authFetch(`${API_BASE_URL}/api/backup/restore`, {
     method: 'POST',
     body: formData,
   });
@@ -484,7 +540,7 @@ export async function restoreBackupFile(file: File): Promise<RestoreResponse> {
  * Restores database from a local automatic snapshot in backups/.
  */
 export async function restoreLocalBackup(filename: string): Promise<RestoreResponse> {
-  const res = await fetch(`${API_BASE_URL}/api/backup/restore/${encodeURIComponent(filename)}`, {
+  const res = await authFetch(`${API_BASE_URL}/api/backup/restore/${encodeURIComponent(filename)}`, {
     method: 'POST',
   });
   return handleResponse<RestoreResponse>(res);

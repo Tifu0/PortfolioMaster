@@ -52,7 +52,7 @@ export type Exchange =
   | 'UNKNOWN';
 
 export interface Instrument {
-  id: number | null;
+  id: number | string | null;
   user_ticker: string;
   provider_symbol: string | null;
   exchange: Exchange | string;
@@ -68,8 +68,8 @@ export interface Instrument {
 }
 
 export interface Quote {
-  id: number | null;
-  instrument_id: number | null;
+  id: number | string | null;
+  instrument_id: number | string | null;
   price: number | null;
   previous_close: number | null;
   quote_timestamp: string | null; // ISO datetime
@@ -80,7 +80,7 @@ export interface Quote {
 }
 
 export interface Position {
-  id: number | null;
+  id: number | string | null;
   user_ticker: string;
   provider_symbol: string | null;
   exchange: string;
@@ -190,6 +190,8 @@ export interface RefreshBatchResponse {
   updated: number;
   failed: number;
   total: number;
+  refreshed_count?: number;
+  message?: string;
   analysis_prices_updated?: number;
   ytd_prices_updated?: number;
   [key: string]: unknown;
@@ -213,6 +215,21 @@ export interface ImportPreviewResponse {
   unresolved: string[];
   warnings: string[];
   valid_count: number;
+}
+
+export interface ImportInstrumentPayload {
+  user_ticker: string;
+  provider_symbol?: string | null;
+  company_name?: string | null;
+  exchange?: string | null;
+  currency?: string | null;
+  target_price?: number | null;
+  analysis_reference_price?: number | null;
+  analysis_date?: string | null;
+  start_of_year_price?: number | null;
+  start_of_year_date?: string | null;
+  comment?: string | null;
+  active?: boolean | null;
 }
 
 export interface ImportConfirmResponse {
@@ -273,6 +290,8 @@ export interface RefreshProgressEvent {
   batch_failed?: number;
   status?: string;
   error?: string;
+  message?: string;
+  refreshed_count?: number;
   analysis_prices_updated?: number;
   ytd_prices_updated?: number;
 }

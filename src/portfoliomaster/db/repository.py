@@ -1,10 +1,11 @@
 import sqlite3
 from datetime import date, datetime
 from decimal import Decimal
+from typing import Optional, List
 
 from .connection import get_connection
-from ..core.models import Quote, Instrument
-from ..core.models import Exchange
+from ..core.models import Quote, Instrument, Exchange, QuoteStatus
+
 
 def _exchange_value(exchange) -> str:
     """Return the string value of an Exchange enum or a plain string."""
@@ -12,12 +13,11 @@ def _exchange_value(exchange) -> str:
         return Exchange.UNKNOWN.value
     if isinstance(exchange, Exchange):
         return exchange.value
-    # already a string (or something str-like)
     return str(exchange)
 
 
 def _sql_value(value):
-    """Convert values SQLite cannot bind natively (Decimal, date)."""
+    """Convert values SQLite cannot bind natively (Decimal, date, datetime)."""
     if value is None:
         return None
     if isinstance(value, Decimal):
@@ -29,9 +29,9 @@ def _sql_value(value):
     return value
 
 
-def wipe_database():
+def wipe_database(db_path: Optional[str] = None):
     """Wipe all data from instruments and quotes."""
-    conn = get_connection()
+    conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM quotes")
     cursor.execute("DELETE FROM instruments")
@@ -39,9 +39,9 @@ def wipe_database():
     conn.close()
 
 
-def upsert_instrument(instrument: Instrument):
+def upsert_instrument(instrument: Instrument, db_path: Optional[str] = None):
     """Insert or update an instrument by user_ticker."""
-    conn = get_connection()
+    conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -84,11 +84,11 @@ def upsert_instrument(instrument: Instrument):
     conn.close()
 
 
-def update_instrument_by_id(instrument: Instrument):
+def update_instrument_by_id(instrument: Instrument, db_path: Optional[str] = None):
     """Update an instrument by its database primary key id."""
     if not instrument.id:
-        return upsert_instrument(instrument)
-    conn = get_connection()
+        return upsert_instrument(instrument, db_path=db_path)
+    conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -128,9 +128,13 @@ def update_instrument_by_id(instrument: Instrument):
     conn.close()
 
 
-def upsert_quote(quote: Quote):
-    """Insert or update a quote."""
-    conn = get_connection()
+def upsert_quote(quote: Quote, db_path: Optional[str] = None):
+    """Insert or update a quote.
+
+    CRITICAL FIX (Bug 3): Preserves existing valid price, previous_close, and
+    quote_timestamp if the incoming quote has price=None (e.g. temporary provider failure).
+    """
+    conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute(
         """
@@ -140,11 +144,11 @@ def upsert_quote(quote: Quote):
         )
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(instrument_id) DO UPDATE SET
-            price = excluded.price,
-            previous_close = excluded.previous_close,
-            quote_timestamp = excluded.quote_timestamp,
+            price = CASE WHEN excluded.price IS NOT NULL THEN excluded.price ELSE quotes.price END,
+            previous_close = CASE WHEN excluded.previous_close IS NOT NULL THEN excluded.previous_close ELSE quotes.previous_close END,
+            quote_timestamp = CASE WHEN excluded.quote_timestamp IS NOT NULL THEN excluded.quote_timestamp ELSE quotes.quote_timestamp END,
             fetched_at = excluded.fetched_at,
-            provider = excluded.provider,
+            provider = CASE WHEN excluded.provider != '' THEN excluded.provider ELSE quotes.provider END,
             status = excluded.status,
             error_message = excluded.error_message
         """,
@@ -163,22 +167,25 @@ def upsert_quote(quote: Quote):
     conn.close()
 
 
-def get_all_instruments():
-    """Retrieve all active instruments as Instrument objects."""
-    conn = get_connection()
+def get_all_instruments(include_inactive: bool = False, db_path: Optional[str] = None) -> List[Instrument]:
+    """Retrieve instruments as Instrument objects."""
+    conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-    cursor.execute("SELECT * FROM instruments WHERE active = 1")
+    if include_inactive:
+        cursor.execute("SELECT * FROM instruments")
+    else:
+        cursor.execute("SELECT * FROM instruments WHERE active = 1")
     rows = cursor.fetchall()
     conn.close()
     return [_row_to_instrument(row) for row in rows]
 
 
-def get_instrument_by_ticker(ticker: str) -> Instrument | None:
+def get_instrument_by_ticker(ticker: str, db_path: Optional[str] = None) -> Instrument | None:
     """Retrieve an instrument by its user_ticker."""
     if not ticker:
         return None
-    conn = get_connection()
+    conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM instruments WHERE user_ticker = ?", (ticker.strip(),))
@@ -189,11 +196,11 @@ def get_instrument_by_ticker(ticker: str) -> Instrument | None:
     return None
 
 
-def get_quote_by_instrument_id(instrument_id: int) -> Quote | None:
+def get_quote_by_instrument_id(instrument_id: int, db_path: Optional[str] = None) -> Quote | None:
     """Retrieve the latest quote for an instrument by instrument_id."""
     if not instrument_id:
         return None
-    conn = get_connection()
+    conn = get_connection(db_path)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     cursor.execute("SELECT * FROM quotes WHERE instrument_id = ?", (instrument_id,))
@@ -202,7 +209,6 @@ def get_quote_by_instrument_id(instrument_id: int) -> Quote | None:
     if not row:
         return None
 
-    from ..core.models import QuoteStatus
     try:
         raw_status = row["status"]
         if raw_status is None:
@@ -221,19 +227,19 @@ def get_quote_by_instrument_id(instrument_id: int) -> Quote | None:
         instrument_id=row["instrument_id"],
         price=_safe_decimal(row["price"]),
         previous_close=_safe_decimal(row["previous_close"]),
-        quote_timestamp=_parse_date(row["quote_timestamp"]),
-        fetched_at=_parse_date(row["fetched_at"]),
+        quote_timestamp=_parse_datetime(row["quote_timestamp"]),
+        fetched_at=_parse_datetime(row["fetched_at"]),
         provider=row["provider"] or "",
         status=status_enum,
         error_message=row["error_message"],
     )
 
 
-def delete_instrument(ticker: str) -> bool:
+def delete_instrument(ticker: str, db_path: Optional[str] = None) -> bool:
     """Delete an instrument and its quotes by user_ticker."""
     if not ticker:
         return False
-    conn = get_connection()
+    conn = get_connection(db_path)
     cursor = conn.cursor()
     cursor.execute("SELECT id FROM instruments WHERE user_ticker = ?", (ticker.strip(),))
     row = cursor.fetchone()
@@ -248,30 +254,43 @@ def delete_instrument(ticker: str) -> bool:
     return True
 
 
-def _parse_date(value):
-    """Parse a date/DATETIME string from SQLite into a Python date.
-
-    SQLite returns stored dates as strings; we convert only when the
-    value is a non-empty string so the dataclass fields stay None for
-    missing cells instead of raising.
-    """
+def _parse_date(value) -> date | None:
+    """Parse a date string from SQLite into a Python date."""
     if value is None:
         return None
-    if isinstance(value, (date, datetime)):
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
         return value
+    val_str = str(value).strip()
     try:
-        return date.fromisoformat(str(value).strip())
+        # Extract the date part if it contains time
+        clean_part = val_str.split(" ")[0].split("T")[0]
+        return date.fromisoformat(clean_part)
     except ValueError:
         return None
 
 
-def _safe_decimal(value) -> Decimal | None:
-    """Convert a possibly-None / string database value into Decimal or None.
+def _parse_datetime(value) -> datetime | None:
+    """Parse a datetime/timestamp string from SQLite into a Python datetime (Bug 8 fix)."""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime(value.year, value.month, value.day)
+    val_str = str(value).strip()
+    try:
+        return datetime.fromisoformat(val_str)
+    except ValueError:
+        try:
+            return datetime.strptime(val_str, "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
 
-    SQLite may return strings like "1.147,21" (Spanish thousands separator)
-    in imported cells; this keeps those un-parsed so they do not silently
-    become wrong numbers, and returns None when the cell is empty.
-    """
+
+def _safe_decimal(value) -> Decimal | None:
+    """Convert a possibly-None / string database value into Decimal or None."""
     if value is None:
         return None
     if isinstance(value, Decimal):

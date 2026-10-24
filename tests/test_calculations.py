@@ -1,4 +1,3 @@
-import pytest
 from decimal import Decimal
 from portfoliomaster.core.calculations import (
     daily_variation,

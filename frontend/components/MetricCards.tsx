@@ -15,18 +15,34 @@ interface MetricCardsProps {
   positions?: Position[];
 }
 
+const metricCurrencyFormatters = new Map<string, Intl.NumberFormat>();
+
 function formatCurrency(price: number | null | undefined, currency: string): string {
   if (price === null || price === undefined || isNaN(price)) {
     return '—';
   }
-  const curr = currency ? currency.toUpperCase() : 'EUR';
+  const curr = currency && currency.length === 3 ? currency.toUpperCase() : 'EUR';
+  let formatter = metricCurrencyFormatters.get(curr);
+  if (!formatter) {
+    try {
+      formatter = new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: curr,
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    } catch {
+      formatter = new Intl.NumberFormat('en-US', {
+        style: 'currency',
+        currency: 'EUR',
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      });
+    }
+    metricCurrencyFormatters.set(curr, formatter);
+  }
   try {
-    return new Intl.NumberFormat('es-ES', {
-      style: 'currency',
-      currency: curr.length === 3 ? curr : 'EUR',
-      minimumFractionDigits: 2,
-      maximumFractionDigits: 2,
-    }).format(price);
+    return formatter.format(price);
   } catch {
     return `${price.toFixed(2)} ${currency}`;
   }
@@ -71,7 +87,23 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
     const worst = sorted[0];
     const best = sorted[sorted.length - 1];
 
-    const sum = valid.reduce((acc, p) => acc + (p.daily_variation ?? 0), 0);
+    let sum = 0;
+    let posCount = 0;
+    let negCount = 0;
+    let neuCount = 0;
+
+    for (const p of valid) {
+      const val = p.daily_variation ?? 0;
+      sum += val;
+      if (val > 0.0001) {
+        posCount++;
+      } else if (val < -0.0001) {
+        negCount++;
+      } else {
+        neuCount++;
+      }
+    }
+
     const avg = Math.round((sum / valid.length) * 100) / 100;
 
     return {
@@ -96,11 +128,9 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
           }
         : null,
       average_daily_change: avg,
-      positive_count: valid.filter((p) => (p.daily_variation ?? 0) > 0.0001).length,
-      negative_count: valid.filter((p) => (p.daily_variation ?? 0) < -0.0001).length,
-      neutral_count: valid.filter(
-        (p) => Math.abs(p.daily_variation ?? 0) <= 0.0001
-      ).length,
+      positive_count: posCount,
+      negative_count: negCount,
+      neutral_count: neuCount,
     };
   }, [providedMetrics, positions]);
 
@@ -115,12 +145,12 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
       : 'text-zinc-200';
 
   return (
-    <section aria-label="Métricas del Portfolio" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <section aria-label="Portfolio Metrics" className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
       {/* 1. Total Positions */}
       <div className="relative group overflow-hidden rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-5 backdrop-blur transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900/90 shadow-sm">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-zinc-400 tracking-wide uppercase">
-            Total Posiciones
+            Total Positions
           </span>
           <div className="w-8 h-8 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
             <Layers className="w-4 h-4" />
@@ -131,7 +161,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
           <span className="text-3xl font-extrabold tracking-tight text-white font-mono">
             {metrics.total_positions}
           </span>
-          <span className="text-xs text-zinc-400 font-medium">valores</span>
+          <span className="text-xs text-zinc-400 font-medium">instruments</span>
         </div>
 
         <div className="mt-2.5 flex items-center justify-between text-xs text-zinc-400 border-t border-zinc-800/60 pt-2.5">
@@ -141,10 +171,10 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
                 metrics.positions_with_quotes > 0 ? 'bg-emerald-400 animate-pulse' : 'bg-zinc-600'
               }`}
             />
-            {metrics.positions_with_quotes} con cotización
+            {metrics.positions_with_quotes} with quote
           </span>
           <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-zinc-800 text-zinc-300">
-            Activos
+            Active
           </span>
         </div>
       </div>
@@ -153,7 +183,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
       <div className="relative group overflow-hidden rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-5 backdrop-blur transition-all duration-200 hover:border-emerald-500/30 hover:bg-zinc-900/90 shadow-sm">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-zinc-400 tracking-wide uppercase">
-            Mayor Subida
+            Top Gainer
           </span>
           <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400">
             <TrendingUp className="w-4 h-4" />
@@ -184,7 +214,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
         ) : (
           <div className="mt-4 flex flex-col justify-center text-xs text-zinc-500 py-2">
             <span className="font-mono text-lg text-zinc-600">—</span>
-            <span className="mt-1">Sin cotizaciones disponibles</span>
+            <span className="mt-1">No quotes available</span>
           </div>
         )}
       </div>
@@ -193,7 +223,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
       <div className="relative group overflow-hidden rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-5 backdrop-blur transition-all duration-200 hover:border-rose-500/30 hover:bg-zinc-900/90 shadow-sm">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-zinc-400 tracking-wide uppercase">
-            Mayor Caída
+            Top Loser
           </span>
           <div className="w-8 h-8 rounded-lg bg-rose-500/10 border border-rose-500/20 flex items-center justify-center text-rose-400">
             <TrendingDown className="w-4 h-4" />
@@ -224,7 +254,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
         ) : (
           <div className="mt-4 flex flex-col justify-center text-xs text-zinc-500 py-2">
             <span className="font-mono text-lg text-zinc-600">—</span>
-            <span className="mt-1">Sin cotizaciones disponibles</span>
+            <span className="mt-1">No quotes available</span>
           </div>
         )}
       </div>
@@ -233,7 +263,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
       <div className="relative group overflow-hidden rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-5 backdrop-blur transition-all duration-200 hover:border-zinc-700 hover:bg-zinc-900/90 shadow-sm">
         <div className="flex items-center justify-between">
           <span className="text-xs font-medium text-zinc-400 tracking-wide uppercase">
-            Var. Media Diaria
+            Avg Daily Change
           </span>
           <div className="w-8 h-8 rounded-lg bg-indigo-500/10 border border-indigo-500/20 flex items-center justify-center text-indigo-400">
             <Activity className="w-4 h-4" />
@@ -244,7 +274,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
           <span className={`text-3xl font-extrabold tracking-tight font-mono ${avgColorClass}`}>
             {avgChange !== null ? `${avgChange >= 0 ? '+' : ''}${avgChange.toFixed(2)}%` : '—'}
           </span>
-          <span className="text-xs text-zinc-400 font-medium">media</span>
+          <span className="text-xs text-zinc-400 font-medium">average</span>
         </div>
 
         <div className="mt-2.5 flex items-center justify-between text-xs text-zinc-400 border-t border-zinc-800/60 pt-2.5">
@@ -266,7 +296,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
             )}
           </div>
           <span className="text-[10px] text-zinc-400">
-            {metrics.positions_with_quotes} activos
+            {metrics.positions_with_quotes} active
           </span>
         </div>
       </div>

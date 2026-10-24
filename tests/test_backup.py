@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import os
 import sqlite3
-import tempfile
 from datetime import date
 from decimal import Decimal
 
@@ -22,11 +21,10 @@ from portfoliomaster.backup.sqlite_backup import (
     list_automatic_backups,
     restore_automatic_backup,
     restore_sqlite_backup,
-    rotate_backups,
     validate_sqlite_backup,
 )
 from portfoliomaster.core.models import Exchange, Instrument, Quote, QuoteStatus
-from portfoliomaster.db.connection import get_connection, init_db
+from portfoliomaster.db.connection import init_db
 from portfoliomaster.db.repository import (
     get_all_instruments,
     get_quote_by_instrument_id,
@@ -226,8 +224,8 @@ class TestExporters:
 
         csv_str = export_to_csv()
         assert "Ticker" in csv_str
-        assert "Precio de Análisis" in csv_str
-        assert "Precio Inicio Año" in csv_str
+        assert "Analysis Price" in csv_str
+        assert "Start of Year Price" in csv_str
 
         # Write to temporary file and re-import via the core parser
         csv_path = tmp_path / "exported_watchlist.csv"

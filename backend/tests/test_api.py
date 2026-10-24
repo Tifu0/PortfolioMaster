@@ -27,6 +27,7 @@ import tempfile
 _tmp_db = tempfile.NamedTemporaryFile(suffix=".db", delete=False)
 _tmp_db.close()
 os.environ["PORTFOLIOMASTER_DB_PATH"] = _tmp_db.name
+os.environ["DATABASE_URL"] = f"sqlite:///{_tmp_db.name}"
 
 from fastapi.testclient import TestClient
 from portfoliomaster.db.connection import init_db
@@ -35,9 +36,22 @@ from portfoliomaster.db.connection import init_db
 init_db()
 
 # pyrefly: ignore [missing-import]
+import uuid
+import jwt
 from backend.api.main import app  # noqa: E402
 
-client = TestClient(app)
+TEST_USER_ID = uuid.UUID("c6dd2d21-c378-40f4-9848-5680db9fec27")
+TEST_JWT_SECRET = "test-supabase-jwt-secret-for-testing-purposes-only-32b"
+os.environ["SUPABASE_JWT_SECRET"] = TEST_JWT_SECRET
+
+def _mint_test_token(user_id: uuid.UUID = TEST_USER_ID) -> str:
+    return jwt.encode(
+        {"sub": str(user_id), "aud": "authenticated", "role": "authenticated"},
+        TEST_JWT_SECRET,
+        algorithm="HS256",
+    )
+
+client = TestClient(app, headers={"Authorization": f"Bearer {_mint_test_token()}"})
 
 
 # ---------------------------------------------------------------------- #
@@ -716,6 +730,16 @@ class TestTickerRenameMetadata:
         assert pos["currency"] == "USD"
         assert pos["exchange"] == "US"
         assert pos["latest_price"] == 120.0
+
+
+def test_all_healthcheck_route_aliases():
+    """Ensure /health, /healthcheck, /api/health, and /api/healthcheck all return 200."""
+    for path in ["/health", "/healthcheck", "/api/health", "/api/healthcheck"]:
+        r = client.get(path)
+        assert r.status_code == 200
+        data = r.json()
+        assert data["status"] == "ok"
+        assert data["database"] == "connected"
 
 
 # ---------------------------------------------------------------------- #
