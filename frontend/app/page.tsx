@@ -78,13 +78,21 @@ async function WatchlistDataLoader() {
     positions = [];
   }
 
+  // An auth requirement during unauthenticated SSR is expected in multi-tenant mode, not a network connection failure.
+  const isAuthNotice =
+    fetchError &&
+    (fetchError.includes('Authentication required') ||
+      fetchError.includes('Bearer token') ||
+      fetchError.includes('401'));
+  const connectionError = isAuthNotice ? null : fetchError;
+
   return (
     <div className="flex flex-col gap-6">
-      {fetchError && (
+      {connectionError && (
         <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-3">
           <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
           <span>
-            Aviso de conexión: No se pudo conectar con el backend ({fetchError}).
+            Aviso de conexión: No se pudo conectar con el backend ({connectionError}).
             Comprueba la variable de entorno <code className="bg-amber-500/20 px-1 py-0.5 rounded font-mono">NEXT_PUBLIC_API_URL</code> y que el servicio FastAPI esté activo.
           </span>
         </div>

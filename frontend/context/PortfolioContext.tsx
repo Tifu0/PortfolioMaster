@@ -204,6 +204,11 @@ export function PortfolioProvider({
 
     if (prevSessionUserIdRef.current === undefined) {
       prevSessionUserIdRef.current = currentUserId;
+      if (currentUserId) {
+        queueMicrotask(() => {
+          refreshPortfolioData({ silent: false });
+        });
+      }
       return;
     }
 
