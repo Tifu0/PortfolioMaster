@@ -126,7 +126,7 @@ class MarketQuote(Base):
             "UNAVAILABLE",
             "ERROR",
             name="quote_status",
-            native_enum=True,
+            native_enum=False,
             create_type=False,
         ),
         default="UNAVAILABLE",
