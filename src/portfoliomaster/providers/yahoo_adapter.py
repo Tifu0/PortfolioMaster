@@ -4,10 +4,17 @@ import math
 from datetime import datetime, date, timedelta
 from decimal import Decimal
 from typing import Dict, List, Optional, Any
+import warnings
 import pandas as pd
 import requests
 from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
+
+# Silence known upstream Pandas / yfinance deprecation warnings (e.g. Pandas4Warning inplace keyword)
+warnings.filterwarnings("ignore", message=".*The inplace keyword.*", category=Warning)
+warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
+warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
+
 import yfinance as yf
 
 from .base import MarketDataProvider
@@ -264,13 +271,15 @@ class YahooAdapter(MarketDataProvider):
         # Vectorized multi-threaded batch download when 2 or more symbols are requested
         if len(unique_yahoo_symbols) > 1:
             try:
-                df = yf.download(
-                    unique_yahoo_symbols,
-                    period="5d",
-                    group_by="ticker",
-                    threads=True,
-                    progress=False,
-                )
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    df = yf.download(
+                        unique_yahoo_symbols,
+                        period="5d",
+                        group_by="ticker",
+                        threads=True,
+                        progress=False,
+                    )
                 if df is not None and not df.empty and isinstance(df.columns, pd.MultiIndex):
                     for y_sym in unique_yahoo_symbols:
                         try:

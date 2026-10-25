@@ -116,35 +116,40 @@ class RefreshService:
                 b_updated = 0
                 b_failed = 0
 
-                for sym, q in chunk_quotes.items():
-                    # Non-destructive safe upsert: preserves existing valid price if q.price is None
-                    uow.quotes.upsert_market_quote_safe(
-                        provider_symbol=sym,
-                        price=q.price,
-                        previous_close=q.previous_close,
-                        quote_timestamp=q.quote_timestamp,
-                        status=q.status.name if hasattr(q.status, "name") else str(q.status),
-                        error_message=q.error_message,
-                        provider=q.provider or "yahoo",
+                try:
+                    for sym, q in chunk_quotes.items():
+                        # Non-destructive safe upsert: preserves existing valid price if q.price is None
+                        uow.quotes.upsert_market_quote_safe(
+                            provider_symbol=sym,
+                            price=q.price,
+                            previous_close=q.previous_close,
+                            quote_timestamp=q.quote_timestamp,
+                            status=q.status.name if hasattr(q.status, "name") else str(q.status),
+                            error_message=q.error_message,
+                            provider=q.provider or "yahoo",
+                        )
+                        if q.is_valid():
+                            updated += 1
+                            b_updated += 1
+                        else:
+                            failed += 1
+                            b_failed += 1
+                        processed += 1
+
+                    uow.commit()
+
+                    # Update live progress in DB
+                    uow.refresh_runs.update_progress(
+                        run_id=run_id,
+                        processed=processed,
+                        successful=updated,
+                        failed=failed,
                     )
-                    if q.is_valid():
-                        updated += 1
-                        b_updated += 1
-                    else:
-                        failed += 1
-                        b_failed += 1
-                    processed += 1
-
-                uow.commit()
-
-                # Update live progress in DB
-                uow.refresh_runs.update_progress(
-                    run_id=run_id,
-                    processed=processed,
-                    successful=updated,
-                    failed=failed,
-                )
-                uow.commit()
+                    uow.commit()
+                except Exception as ex:
+                    uow.rollback()
+                    logger.error(f"[RefreshService] Error processing batch {b_idx}: {ex}")
+                    raise
 
                 b_evt = {
                     "type": "batch",

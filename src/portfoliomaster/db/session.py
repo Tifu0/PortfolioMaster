@@ -8,6 +8,7 @@ from typing import Generator, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from .schema import Base
@@ -60,16 +61,28 @@ def get_engine(db_url: Optional[str] = None, echo: bool = False) -> Engine:
     # Always create new engine if custom URL is provided or if none exists
     if db_url or _ENGINE is None:
         connect_args: dict = {}
-        if url.startswith("sqlite"):
+        try:
+            parsed_url = make_url(url)
+            backend = parsed_url.get_backend_name()
+            driver = parsed_url.get_driver_name()
+        except Exception:
+            backend = "sqlite" if url.startswith("sqlite") else "postgresql"
+            driver = "psycopg2" if "+psycopg2" in url else "psycopg"
+
+        if backend == "sqlite":
             connect_args["check_same_thread"] = False
-        elif "+psycopg2" in url:
-            # Standard psycopg2 driver: do NOT pass psycopg 3 specific arguments
-            pass
-        elif "+psycopg" in url:
-            # Psycopg 3 connection arguments: disable prepare_threshold for Supabase Poolers (PgBouncer/Supavisor)
-            connect_args["prepare_threshold"] = None
+        elif backend == "postgresql":
+            # For PostgreSQL:
+            # When using psycopg 3 (the default in SQLAlchemy 2.0 when psycopg is installed, or explicit +psycopg),
+            # disable prepare_threshold for Supabase / PgBouncer / Supavisor connection poolers (port 6543 / Render).
+            # In transaction pooling mode, prepared statements (_pg3_0) cause:
+            #   psycopg.errors.InvalidSqlStatementName: prepared statement "_pg3_0" does not exist
+            # Psycopg 2 does not support prepare_threshold and would error if passed.
+            if driver == "psycopg2" or "+psycopg2" in url:
+                pass
+            else:
+                connect_args["prepare_threshold"] = None
         else:
-            # Standard generic driver: do NOT pass psycopg3-only arguments
             pass
 
         engine_kwargs: dict = {

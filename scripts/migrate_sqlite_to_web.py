@@ -490,10 +490,23 @@ def migrate_instruments(
     )
 
 
+def _get_migration_connect_args(url: str) -> dict:
+    """Return driver-safe connect args for database connections."""
+    connect_args = {}
+    try:
+        from sqlalchemy.engine.url import make_url
+        parsed = make_url(url)
+        if parsed.get_backend_name() == "postgresql" and parsed.get_driver_name() != "psycopg2" and "+psycopg2" not in url:
+            connect_args["prepare_threshold"] = None
+    except Exception:
+        pass
+    return connect_args
+
+
 def rollback_user_migration(user_id: uuid.UUID, db_url: Optional[str] = None) -> int:
     """Safely roll back migrated user instruments for a given user_id."""
     resolved_db_url = db_url or os.getenv("DATABASE_URL") or os.getenv("PORTFOLIOMASTER_DB_URL") or "sqlite:///./portfolio_web.db"
-    engine = create_engine(resolved_db_url)
+    engine = create_engine(resolved_db_url, connect_args=_get_migration_connect_args(resolved_db_url))
     from sqlalchemy import delete
     session_factory = sessionmaker(bind=engine)
     with session_factory() as session:
@@ -549,7 +562,7 @@ def run_migration(
 
     from sqlalchemy import inspect, text
     try:
-        engine = create_engine(resolved_db_url)
+        engine = create_engine(resolved_db_url, connect_args=_get_migration_connect_args(resolved_db_url))
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as e:

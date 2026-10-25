@@ -315,38 +315,43 @@ def _execute_refresh_all(
                     batch_updated = 0
                     batch_failed = 0
 
-                    for sym, quote in chunk_quotes.items():
-                        status_str = quote.status.name if hasattr(quote.status, "name") else str(quote.status)
-                        quotes_repo.upsert_market_quote_safe(
-                            provider_symbol=sym,
-                            price=quote.price,
-                            previous_close=quote.previous_close,
-                            quote_timestamp=quote.quote_timestamp,
-                            status=status_str,
-                            error_message=quote.error_message,
-                            provider=quote.provider or "yahoo",
-                        )
-                        inst_list = symbol_map.get(sym, [])
-                        if quote.is_valid():
-                            updated += len(inst_list) if inst_list else 1
-                            batch_updated += len(inst_list) if inst_list else 1
-                        else:
-                            failed += len(inst_list) if inst_list else 1
-                            batch_failed += len(inst_list) if inst_list else 1
-                        processed_count += 1
-
-                    session.commit()
-                    if run_id:
-                        try:
-                            run_repo.update_progress(
-                                run_id=run_id,
-                                processed=processed_count,
-                                successful=updated,
-                                failed=failed,
+                    try:
+                        for sym, quote in chunk_quotes.items():
+                            status_str = quote.status.name if hasattr(quote.status, "name") else str(quote.status)
+                            quotes_repo.upsert_market_quote_safe(
+                                provider_symbol=sym,
+                                price=quote.price,
+                                previous_close=quote.previous_close,
+                                quote_timestamp=quote.quote_timestamp,
+                                status=status_str,
+                                error_message=quote.error_message,
+                                provider=quote.provider or "yahoo",
                             )
-                            session.commit()
-                        except Exception:
-                            session.rollback()
+                            inst_list = symbol_map.get(sym, [])
+                            if quote.is_valid():
+                                updated += len(inst_list) if inst_list else 1
+                                batch_updated += len(inst_list) if inst_list else 1
+                            else:
+                                failed += len(inst_list) if inst_list else 1
+                                batch_failed += len(inst_list) if inst_list else 1
+                            processed_count += 1
+
+                        session.commit()
+                        if run_id:
+                            try:
+                                run_repo.update_progress(
+                                    run_id=run_id,
+                                    processed=processed_count,
+                                    successful=updated,
+                                    failed=failed,
+                                )
+                                session.commit()
+                            except Exception:
+                                session.rollback()
+                    except Exception as ex:
+                        session.rollback()
+                        logger.error(f"[Refresh] Error processing batch {batch_idx}: {ex}")
+                        raise
 
                     _state["current_batch"] = batch_idx
                     _state["total_batches"] = total_b

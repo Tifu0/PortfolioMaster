@@ -65,10 +65,17 @@ def test_production_fails_closed_when_database_url_is_placeholder():
 
 
 def test_psycopg2_vs_psycopg3_connect_args():
-    """psycopg3 (+psycopg) should disable prepare_threshold; psycopg2 (+psycopg2) should not."""
-    # Test psycopg3
+    """psycopg3 (+psycopg or generic postgresql://) should disable prepare_threshold; psycopg2 (+psycopg2) should not."""
+    # Test psycopg3 with explicit driver
     with patch("portfoliomaster.db.session.create_engine") as mock_create:
         get_engine(db_url="postgresql+psycopg://user:pass@localhost/testdb")
+        mock_create.assert_called_once()
+        _, kwargs = mock_create.call_args
+        assert kwargs.get("connect_args") == {"prepare_threshold": None}
+
+    # Test generic postgresql:// (resolves to psycopg3 when installed, e.g. on Render/Supabase)
+    with patch("portfoliomaster.db.session.create_engine") as mock_create:
+        get_engine(db_url="postgresql://user:pass@localhost/testdb")
         mock_create.assert_called_once()
         _, kwargs = mock_create.call_args
         assert kwargs.get("connect_args") == {"prepare_threshold": None}

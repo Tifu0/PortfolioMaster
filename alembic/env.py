@@ -71,12 +71,23 @@ def run_migrations_offline() -> None:
 def run_migrations_online() -> None:
     """Run migrations in 'online' mode."""
     configuration = config.get_section(config.config_ini_section, {})
-    configuration["sqlalchemy.url"] = get_url()
+    url = get_url()
+    configuration["sqlalchemy.url"] = url
+
+    connect_args = {}
+    try:
+        from sqlalchemy.engine.url import make_url
+        parsed = make_url(url)
+        if parsed.get_backend_name() == "postgresql" and parsed.get_driver_name() != "psycopg2" and "+psycopg2" not in url:
+            connect_args["prepare_threshold"] = None
+    except Exception:
+        pass
 
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=connect_args,
     )
 
     with connectable.connect() as connection:
