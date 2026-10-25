@@ -203,6 +203,8 @@ export function AuthModal() {
               Correo Electrónico
             </label>
             <input
+              id="auth-email-input"
+              data-testid="auth-email-input"
               ref={emailInputRef}
               type="email"
               required
@@ -221,6 +223,8 @@ export function AuthModal() {
               Contraseña
             </label>
             <input
+              id="auth-password-input"
+              data-testid="auth-password-input"
               type="password"
               required
               autoComplete={mode === 'signin' ? 'current-password' : 'new-password'}
@@ -233,9 +237,11 @@ export function AuthModal() {
           </div>
 
           <button
+            id="auth-submit-btn"
+            data-testid="auth-submit-btn"
             type="submit"
             disabled={loading || !isAuthConfigured}
-            className="w-full mt-2 py-2.5 px-4 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 font-semibold text-sm rounded-xl transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm"
+            className="w-full mt-2 py-2.5 px-4 bg-emerald-500 hover:bg-emerald-600 text-zinc-950 font-semibold text-sm rounded-xl transition flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed shadow-sm cursor-pointer"
           >
             {loading ? (
               <>

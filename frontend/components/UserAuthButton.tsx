@@ -38,9 +38,11 @@ export function UserAuthButton() {
 
   return (
     <button
+      id="user-auth-btn"
+      data-testid="user-auth-btn"
       type="button"
       onClick={() => openAuthModal()}
-      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 text-xs font-semibold rounded-lg transition shadow-sm"
+      className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 text-emerald-400 hover:text-emerald-300 text-xs font-semibold rounded-lg transition shadow-sm cursor-pointer"
     >
       <LogIn className="w-3.5 h-3.5" />
       <span>Iniciar Sesión</span>

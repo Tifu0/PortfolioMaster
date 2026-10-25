@@ -109,6 +109,7 @@ export function PortfolioProvider({
       if (isAuthConfigured && !session && !isAuthLoading) {
         setPositions([]);
         setMetrics(null);
+        setIsInitialized(true);
         if (!isSilent) setIsRefreshing(false);
         return;
       }
@@ -148,6 +149,7 @@ export function PortfolioProvider({
       } catch (err) {
         console.error('Error during portfolio data refresh:', err);
       } finally {
+        setIsInitialized(true);
         if (!isSilent) {
           setIsRefreshing(false);
         }

@@ -41,8 +41,10 @@ import {
   Upload,
   SlidersHorizontal,
   Rows3,
+  LogIn,
 } from 'lucide-react';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { useAuth } from '@/context/AuthContext';
 import type { Position, QuoteStatus, PortfolioMetrics, AppConfig } from '@/lib/types';
 import {
   fetchAnalysisPrice,
@@ -566,6 +568,7 @@ export function WatchlistTable({
   onAddInstrument,
 }: WatchlistTableProps) {
   const portfolioContext = usePortfolioOptional();
+  const { user, isAuthConfigured, openAuthModal } = useAuth();
 
   // Fallback data state used only if rendered outside PortfolioProvider
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
@@ -1667,6 +1670,7 @@ export function WatchlistTable({
     onColumnSizingChange: handleColumnSizingChange,
     columnResizeMode: 'onChange',
     enableColumnResizing: true,
+    autoResetPageIndex: false,
     getCoreRowModel: getCoreRowModel(),
     getSortedRowModel: getSortedRowModel(),
     getFilteredRowModel: getFilteredRowModel(),
@@ -2439,7 +2443,26 @@ export function WatchlistTable({
                   colSpan={columns.length}
                   className="py-16 text-center text-zinc-400"
                 >
-                  {portfolioContext && (!portfolioContext.isInitialized || portfolioContext.isRefreshing) && data.length === 0 ? (
+                  {isAuthConfigured && !user && data.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center gap-3 max-w-sm mx-auto py-6">
+                      <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-sm">
+                        <LogIn className="w-6 h-6" />
+                      </div>
+                      <p className="text-sm font-semibold text-white">
+                        Inicia sesión para ver tu cartera
+                      </p>
+                      <p className="text-xs text-zinc-400 text-center leading-relaxed">
+                        Accede con tu cuenta para visualizar tus posiciones, cotizaciones en tiempo real y métricas financieras.
+                      </p>
+                      <button
+                        onClick={() => openAuthModal()}
+                        className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-zinc-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-lg shadow-emerald-950/40"
+                      >
+                        <LogIn className="w-4 h-4" />
+                        Iniciar Sesión
+                      </button>
+                    </div>
+                  ) : portfolioContext && (!portfolioContext.isInitialized || portfolioContext.isRefreshing) && data.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
                       <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
                       <p className="text-sm font-medium text-zinc-300">

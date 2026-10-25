@@ -4,7 +4,7 @@
 // reactive state between MetricCards, WatchlistTable, and ManualEntryModal.
 // It also reads query parameters (?add=1 or ?edit=TICKER) to control modal visibility.
 
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams, useRouter } from 'next/navigation';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
@@ -73,19 +73,32 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
   const portfolioContext = usePortfolioOptional();
 
   // Seed initial server-fetched data into portfolio provider
+  const seedInitialData = portfolioContext?.seedInitialData;
   useEffect(() => {
-    if (portfolioContext) {
-      portfolioContext.seedInitialData(initialPositions, initialMetrics, initialConfig);
+    if (seedInitialData) {
+      seedInitialData(initialPositions, initialMetrics, initialConfig);
     }
-  }, [portfolioContext, initialPositions, initialMetrics, initialConfig]);
+  }, [seedInitialData, initialPositions, initialMetrics, initialConfig]);
 
   // When initialPositions is empty (e.g. unauthenticated SSR in cloud deployments),
   // automatically trigger client-side data refresh once the user session is available
+  const hasTriggeredInitialRefresh = useRef(false);
+  const isInitialized = portfolioContext?.isInitialized;
+  const isRefreshing = portfolioContext?.isRefreshing;
+  const refreshPortfolioData = portfolioContext?.refreshPortfolioData;
+
   useEffect(() => {
-    if (portfolioContext && !portfolioContext.isInitialized && !portfolioContext.isRefreshing) {
-      portfolioContext.refreshPortfolioData({ silent: true });
+    if (
+      !hasTriggeredInitialRefresh.current &&
+      portfolioContext &&
+      !isInitialized &&
+      !isRefreshing &&
+      refreshPortfolioData
+    ) {
+      hasTriggeredInitialRefresh.current = true;
+      refreshPortfolioData({ silent: true });
     }
-  }, [portfolioContext]);
+  }, [portfolioContext, isInitialized, isRefreshing, refreshPortfolioData]);
 
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
   const [localMetrics, setLocalMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
