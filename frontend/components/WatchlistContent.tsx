@@ -79,6 +79,14 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
     }
   }, [portfolioContext, initialPositions, initialMetrics, initialConfig]);
 
+  // When initialPositions is empty (e.g. unauthenticated SSR in cloud deployments),
+  // automatically trigger client-side data refresh once the user session is available
+  useEffect(() => {
+    if (portfolioContext && !portfolioContext.isInitialized && !portfolioContext.isRefreshing) {
+      portfolioContext.refreshPortfolioData({ silent: true });
+    }
+  }, [portfolioContext]);
+
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
   const [localMetrics, setLocalMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
   const [localConfig, setLocalConfig] = useState<AppConfig | null>(initialConfig || null);

@@ -82,12 +82,19 @@ export function PortfolioProvider({
       newMetrics: PortfolioMetrics | null,
       newConfig?: AppConfig | null
     ) => {
-      if (!isInitialSeededRef.current || positionsRef.current.length === 0) {
-        setPositions(newPositions);
+      if (newPositions && newPositions.length > 0) {
+        if (!isInitialSeededRef.current || positionsRef.current.length === 0) {
+          setPositions(newPositions);
+          if (newMetrics) setMetrics(newMetrics);
+          if (newConfig) setConfig(newConfig);
+          setIsInitialized(true);
+          isInitialSeededRef.current = true;
+        }
+      } else {
+        // If initial positions from SSR are empty (e.g. unauthenticated SSR in cloud deployment),
+        // seed config and metrics but do not mark initialized so client-side authenticated fetch runs
         if (newMetrics) setMetrics(newMetrics);
         if (newConfig) setConfig(newConfig);
-        setIsInitialized(true);
-        isInitialSeededRef.current = true;
       }
     },
     []

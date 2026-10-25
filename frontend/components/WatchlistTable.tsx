@@ -2439,28 +2439,40 @@ export function WatchlistTable({
                   colSpan={columns.length}
                   className="py-16 text-center text-zinc-400"
                 >
-                  <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
-                    <Info className="w-8 h-8 text-zinc-600" />
-                    <p className="text-sm font-medium text-zinc-300">
-                      {data.length === 0
-                        ? 'La lista de seguimiento está vacía.'
-                        : 'No se encontraron valores con los filtros actuales.'}
-                    </p>
-                    <p className="text-xs text-zinc-500">
-                      {data.length === 0
-                        ? 'Añade valores manualmente o importa un archivo CSV/Excel.'
-                        : 'Prueba a cambiar los criterios de búsqueda o el filtro de mercado/divisa.'}
-                    </p>
-                    {data.length === 0 && onAddInstrument && (
-                      <button
-                        onClick={onAddInstrument}
-                        className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-950/40"
-                      >
-                        <PlusCircle className="w-4 h-4" />
-                        Añadir Primer Valor
-                      </button>
-                    )}
-                  </div>
+                  {portfolioContext && (!portfolioContext.isInitialized || portfolioContext.isRefreshing) && data.length === 0 ? (
+                    <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
+                      <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+                      <p className="text-sm font-medium text-zinc-300">
+                        Cargando tu lista de seguimiento...
+                      </p>
+                      <p className="text-xs text-zinc-500">
+                        Sincronizando cotizaciones con el servidor...
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
+                      <Info className="w-8 h-8 text-zinc-600" />
+                      <p className="text-sm font-medium text-zinc-300">
+                        {data.length === 0
+                          ? 'La lista de seguimiento está vacía.'
+                          : 'No se encontraron valores con los filtros actuales.'}
+                      </p>
+                      <p className="text-xs text-zinc-500">
+                        {data.length === 0
+                          ? 'Añade valores manualmente o importa un archivo CSV/Excel.'
+                          : 'Prueba a cambiar los criterios de búsqueda o el filtro de mercado/divisa.'}
+                      </p>
+                      {data.length === 0 && onAddInstrument && (
+                        <button
+                          onClick={onAddInstrument}
+                          className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-950/40"
+                        >
+                          <PlusCircle className="w-4 h-4" />
+                          Añadir Primer Valor
+                        </button>
+                      )}
+                    </div>
+                  )}
                 </td>
               </tr>
             )}
