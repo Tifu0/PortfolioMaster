@@ -35,6 +35,51 @@ try:
 except Exception:
     pass
 
+# Upstream yfinance bug fix: prevent storing rate limit messages (e.g. 'Too Many Requests') as valid crumbs
+try:
+    import yfinance.data as _yd
+    _orig_get_crumb_basic = _yd.YfData._get_crumb_basic
+    _orig_get_crumb_csrf = _yd.YfData._get_crumb_csrf
+
+    def _sanitize_crumb_val(val: Any) -> Optional[str]:
+        if val is None:
+            return None
+        s = str(val)
+        if "Too Many Requests" in s or "<html>" in s or len(s) > 50 or "\n" in s:
+            return None
+        return val
+
+    def _safe_get_crumb_basic(self, timeout=30):
+        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
+            self._crumb = None
+        try:
+            res = _orig_get_crumb_basic(self, timeout=timeout)
+        except Exception:
+            self._crumb = None
+            raise
+        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
+            self._crumb = None
+            return None
+        return res
+
+    def _safe_get_crumb_csrf(self, timeout=30):
+        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
+            self._crumb = None
+        try:
+            res = _orig_get_crumb_csrf(self, timeout=timeout)
+        except Exception:
+            self._crumb = None
+            raise
+        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
+            self._crumb = None
+            return None
+        return res
+
+    _yd.YfData._get_crumb_basic = _safe_get_crumb_basic
+    _yd.YfData._get_crumb_csrf = _safe_get_crumb_csrf
+except Exception:
+    pass
+
 from .base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus, FreshnessConfig, Exchange
 from ..core.config import (
@@ -75,13 +120,25 @@ def get_resilient_session() -> requests.Session:
 
 def _create_ticker(symbol: str, session: Optional[requests.Session] = None) -> yf.Ticker:
     """Create yf.Ticker instance with resilient session if supported by callable signature."""
+    ticker = None
     try:
         sig = inspect.signature(yf.Ticker)
         if "session" in sig.parameters:
-            return yf.Ticker(symbol, session=session or get_resilient_session())
+            ticker = yf.Ticker(symbol, session=session or get_resilient_session())
     except Exception:
         pass
-    return yf.Ticker(symbol)
+    if ticker is None:
+        ticker = yf.Ticker(symbol)
+
+    # Neutralize _quote._info to prevent yfinance fallback from calling quoteSummary
+    # which triggers HTTP 401 Unauthorized / Invalid Crumb on cloud IPs (Render)
+    try:
+        if hasattr(ticker, "_quote") and hasattr(ticker._quote, "_info"):
+            ticker._quote._info = {}
+    except Exception:
+        pass
+
+    return ticker
 
 
 def _fi_get(fi, *keys) -> Optional[Any]:
@@ -99,6 +156,46 @@ def _fi_get(fi, *keys) -> Optional[Any]:
                 return val
         except Exception:
             pass
+    return None
+
+
+def resolve_company_name(symbol: str, ticker_obj: Optional[yf.Ticker] = None) -> Optional[str]:
+    """Resolve human-readable company name for a ticker without triggering 401 crumb errors."""
+    if not symbol or not str(symbol).strip():
+        return None
+    sym = str(symbol).strip()
+
+    # 1. Chart metadata via fast_info (ultra fast, provides shortName/longName, no crumb needed)
+    try:
+        t = ticker_obj or _create_ticker(sym)
+        fi = getattr(t, "fast_info", None)
+        if fi:
+            md_fn = getattr(fi, "_get_exchange_metadata", None)
+            if callable(md_fn):
+                meta = md_fn()
+                if isinstance(meta, dict):
+                    name = meta.get("longName") or meta.get("shortName")
+                    if name and str(name).strip():
+                        return str(name).strip()
+    except Exception:
+        pass
+
+    # 2. Yahoo Finance Search API (returns clean name without crumb or rate limit)
+    try:
+        search_url = f"https://query2.finance.yahoo.com/v1/finance/search?q={sym}&quotesCount=1"
+        s = get_resilient_session()
+        resp = s.get(search_url, timeout=5)
+        if resp.status_code == 200:
+            data = resp.json()
+            quotes = data.get("quotes", [])
+            if quotes and isinstance(quotes, list):
+                q = quotes[0]
+                name = q.get("longname") or q.get("shortname")
+                if name and str(name).strip():
+                    return str(name).strip()
+    except Exception:
+        pass
+
     return None
 
 
@@ -228,18 +325,39 @@ class YahooAdapter(MarketDataProvider):
 
         try:
             fi = ticker.fast_info
-            price = _fi_get(fi, "last_price", "lastPrice", "regularMarketPrice")
-            previous_close = _fi_get(
-                fi, "previous_close", "previousClose", "regularMarketPreviousClose"
-            )
-            qt = _fi_get(fi, "last_update", "lastUpdate")
-            if qt is not None:
-                if hasattr(qt, "to_pydatetime"):
-                    quote_timestamp = qt.to_pydatetime()
-                elif isinstance(qt, (int, float)):
-                    quote_timestamp = datetime.fromtimestamp(qt)
-                elif isinstance(qt, datetime):
-                    quote_timestamp = qt
+
+            # Fast path 1: Chart metadata (no crumb or cookies needed, immune to HTTP 429/401)
+            md_fn = getattr(fi, "_get_exchange_metadata", None)
+            if callable(md_fn):
+                try:
+                    meta = md_fn()
+                    if isinstance(meta, dict):
+                        price = meta.get("regularMarketPrice") or meta.get("fulldayPrice")
+                        previous_close = meta.get("chartPreviousClose")
+                        rm_time = meta.get("regularMarketTime")
+                        if rm_time:
+                            if isinstance(rm_time, datetime):
+                                quote_timestamp = rm_time
+                            elif isinstance(rm_time, (int, float)):
+                                quote_timestamp = datetime.fromtimestamp(rm_time)
+                except Exception as meta_err:
+                    self.logger.debug(f"Metadata extract failed: {meta_err}")
+
+            if price is None:
+                price = _fi_get(fi, "last_price", "lastPrice", "regularMarketPrice")
+            if previous_close is None:
+                previous_close = _fi_get(
+                    fi, "previous_close", "previousClose", "regularMarketPreviousClose"
+                )
+            if quote_timestamp is None:
+                qt = _fi_get(fi, "last_update", "lastUpdate")
+                if qt is not None:
+                    if hasattr(qt, "to_pydatetime"):
+                        quote_timestamp = qt.to_pydatetime()
+                    elif isinstance(qt, (int, float)):
+                        quote_timestamp = datetime.fromtimestamp(qt)
+                    elif isinstance(qt, datetime):
+                        quote_timestamp = qt
         except Exception as e:
             self.logger.debug(f"fast_info falló: {e}")
 

@@ -11,6 +11,7 @@ from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 import pandas as pd
+import warnings
 import yfinance as yf
 
 from portfoliomaster.core.config import get_yahoo_suffix
@@ -25,7 +26,11 @@ from portfoliomaster.db.repository import (
     upsert_quote,
 )
 from portfoliomaster.ingest.normalizer import normalize
-from portfoliomaster.providers.yahoo_adapter import YahooAdapter
+from portfoliomaster.providers.yahoo_adapter import (
+    YahooAdapter,
+    _create_ticker,
+    resolve_company_name,
+)
 from ..common import (
     _instrument_to_dict,
     _quote_to_dict,
@@ -49,12 +54,14 @@ def _fetch_start_of_year_quote(
     if not provider_symbol:
         return None
     try:
-        t = yf.Ticker(provider_symbol)
+        t = _create_ticker(provider_symbol)
         start_str = target_date.isoformat()
         end_str = (target_date + timedelta(days=10)).isoformat()
-        hist = t.history(start=start_str, end=end_str)
-        if hist.empty or "Close" not in hist:
-            hist = t.history(period="ytd")
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            hist = t.history(start=start_str, end=end_str)
+            if hist.empty or "Close" not in hist:
+                hist = t.history(period="ytd")
         if not hist.empty and "Close" in hist:
             close_series = hist["Close"].dropna()
             if not close_series.empty:
@@ -91,12 +98,14 @@ def _fetch_historical_quote_and_date(
         if target_date.month == 1 and target_date.day == 1:
             return _fetch_start_of_year_quote(provider_symbol, target_date.year)
 
-        t = yf.Ticker(provider_symbol)
+        t = _create_ticker(provider_symbol)
 
         # 1. Historical lookback window
         start_str = (target_date - timedelta(days=window_days)).isoformat()
         end_str = (target_date + timedelta(days=1)).isoformat()
-        hist = t.history(start=start_str, end=end_str)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            hist = t.history(start=start_str, end=end_str)
 
         if not hist.empty and "Close" in hist:
             valid_rows = []
@@ -225,12 +234,28 @@ def check_yahoo_ticker(
     }
 
     try:
-        t = yf.Ticker(symbol)
+        t = _create_ticker(symbol)
         price = None
-        company_name = None
+        company_name = resolve_company_name(symbol, t)
 
         fi = getattr(t, "fast_info", None)
         if fi:
+            md_fn = getattr(fi, "_get_exchange_metadata", None)
+            if callable(md_fn):
+                try:
+                    meta = md_fn()
+                    if isinstance(meta, dict):
+                        if not company_name:
+                            company_name = meta.get("longName") or meta.get("shortName")
+                        if price is None:
+                            raw_p = meta.get("regularMarketPrice") or meta.get("fulldayPrice")
+                            if raw_p is not None and not math.isnan(float(raw_p)) and float(raw_p) > 0:
+                                price = round(float(raw_p), 4)
+                        if not result.get("currency") and meta.get("currency"):
+                            result["currency"] = str(meta["currency"]).upper()
+                except Exception:
+                    pass
+
             try:
                 lp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
                 if lp is not None and not math.isnan(float(lp)) and float(lp) > 0:
@@ -245,18 +270,8 @@ def check_yahoo_ticker(
             except Exception:
                 pass
 
-        try:
-            info = getattr(t, "info", None)
-            if isinstance(info, dict):
-                company_name = info.get("shortName") or info.get("longName")
-                if price is None:
-                    raw_price = info.get("regularMarketPrice") or info.get("currentPrice") or info.get("previousClose")
-                    if raw_price is not None and not math.isnan(float(raw_price)) and float(raw_price) > 0:
-                        price = round(float(raw_price), 4)
-                if not result.get("currency") and info.get("currency"):
-                    result["currency"] = str(info["currency"]).upper()
-        except Exception:
-            pass
+        if not company_name:
+            company_name = resolve_company_name(symbol, t)
 
         if price is None:
             try:
@@ -382,13 +397,9 @@ def create_instrument_endpoint(
 
     company_name = data.company_name.strip()
     if not company_name and data.fetch_yahoo:
-        try:
-            t = yf.Ticker(provider_symbol)
-            inf = getattr(t, "info", None)
-            if isinstance(inf, dict):
-                company_name = inf.get("shortName") or inf.get("longName") or ""
-        except Exception:
-            pass
+        resolved = resolve_company_name(provider_symbol)
+        if resolved:
+            company_name = resolved
     if not company_name:
         company_name = ticker
 
