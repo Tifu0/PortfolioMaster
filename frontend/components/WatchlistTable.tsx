@@ -45,7 +45,7 @@ import {
 } from 'lucide-react';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
 import { useAuth } from '@/context/AuthContext';
-import type { Position, QuoteStatus, PortfolioMetrics, AppConfig } from '@/lib/types';
+import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import {
   fetchAnalysisPrice,
   getPositions,
@@ -327,80 +327,33 @@ function formatStackedDate(isoDate: string | null | undefined): { dayMonth: stri
 }
 
 // ========================================================================== //
-// QuoteStatusBadge — Enhanced with pulse, provider, and timestamp
+// Quote Tooltip Helper (Accessible info on hover without visual density / boxes)
 // ========================================================================== //
 
-function QuoteStatusBadge({
-  status,
-  provider,
-  fetchedAt,
-}: {
-  status: QuoteStatus | string | null;
-  provider?: string | null;
-  fetchedAt?: string | null;
-}) {
-  if (!status) return null;
-  const s = String(status).toUpperCase();
-
-  const badges: Record<string, { label: string; classes: string; title: string; pulse?: boolean }> = {
-    FRESH: {
-      label: 'Live',
-      classes: 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20',
-      title: 'Cotización en tiempo real',
-      pulse: true,
-    },
-    DELAYED: {
-      label: 'Cerrado',
-      classes: 'bg-amber-500/10 text-amber-400 border-amber-500/20',
-      title: 'Cierre de mercado / diferido 15min',
-    },
-    STALE: {
-      label: 'Vencido',
-      classes: 'bg-orange-500/10 text-orange-400 border-orange-500/20',
-      title: 'Datos desactualizados — supera el umbral de frescura',
-    },
-    UNAVAILABLE: {
-      label: 'No disponible',
-      classes: 'bg-zinc-600/10 text-zinc-400 border-zinc-600/20',
-      title: 'Sin cotización disponible para este instrumento',
-    },
-    ERROR: {
-      label: 'Error',
-      classes: 'bg-rose-500/10 text-rose-400 border-rose-500/20',
-      title: 'Error al obtener la cotización',
-    },
+function getQuoteTooltip(pos: Position): string | undefined {
+  const s = pos.quote_status ? String(pos.quote_status).toUpperCase() : null;
+  const statusMap: Record<string, string> = {
+    FRESH: 'Cotización en tiempo real',
+    DELAYED: 'Cierre de mercado / diferido 15min',
+    STALE: 'Datos desactualizados',
+    UNAVAILABLE: 'Sin cotización disponible',
+    ERROR: 'Error al obtener la cotización',
   };
 
-  const cfg = badges[s];
-  if (!cfg) return null;
-
-  const provStr = provider ? String(provider) : null;
-  const elapsed = timeAgo(fetchedAt);
-  const tooltipParts = [cfg.title];
-  if (provStr) tooltipParts.push(`Proveedor: ${provStr}`);
-  if (elapsed) tooltipParts.push(elapsed);
-
-  return (
-    <span className="inline-flex items-center gap-1.5">
-      <span
-        className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium border ${cfg.classes}`}
-        title={tooltipParts.join(' · ')}
-      >
-        {cfg.pulse && (
-          <span className="relative flex h-1.5 w-1.5">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-            <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500" />
-          </span>
-        )}
-        {cfg.label}
-      </span>
-      {provStr && (
-        <span className="px-1 py-0.5 rounded text-[9px] font-mono bg-zinc-800/60 text-zinc-500 border border-zinc-700/40">
-          {provStr}
-        </span>
-      )}
-    </span>
-  );
+  const parts: string[] = [];
+  if (s && statusMap[s]) {
+    parts.push(statusMap[s]);
+  } else if (s) {
+    parts.push(s);
+  }
+  if (pos.quote_provider) {
+    parts.push(`Proveedor: ${pos.quote_provider}`);
+  }
+  const elapsed = timeAgo(pos.quote_fetched_at);
+  if (elapsed) {
+    parts.push(elapsed);
+  }
+  return parts.length > 0 ? parts.join(' · ') : undefined;
 }
 
 // ========================================================================== //
@@ -1395,7 +1348,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'latest_price',
-        size: 160,
+        size: 140,
         minSize: 76,
         maxSize: 320,
         sortingFn: numericSortWithNulls,
@@ -1412,16 +1365,13 @@ export function WatchlistTable({
         ),
         cell: ({ row }) => {
           const pos = row.original;
+          const tooltip = getQuoteTooltip(pos);
           return (
-            <div className="flex flex-col items-end gap-0.5">
-              <span className="font-mono font-medium text-white leading-tight">
-                {formatCurrency(pos.latest_price, pos.currency)}
-              </span>
-              <QuoteStatusBadge
-                status={pos.quote_status}
-                provider={pos.quote_provider}
-                fetchedAt={pos.quote_fetched_at}
-              />
+            <div
+              className="flex items-center justify-end font-mono font-medium text-white tabular-nums leading-tight"
+              title={tooltip}
+            >
+              {formatCurrency(pos.latest_price, pos.currency)}
             </div>
           );
         },
