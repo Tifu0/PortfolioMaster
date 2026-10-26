@@ -20,9 +20,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Silence known upstream Pandas / yfinance deprecation warnings (e.g. Pandas4Warning inplace keyword)
+try:
+    import pandas as pd
+    for _w in dir(pd.errors):
+        if "Warning" in _w:
+            warnings.simplefilter("ignore", getattr(pd.errors, _w))
+except Exception:
+    pass
 warnings.filterwarnings("ignore", message=".*inplace.*")
-warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
-warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
+warnings.filterwarnings("ignore", category=FutureWarning)
+warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Ensure 'src' and root directories are discoverable in sys.path on Render/Linux deployments
 _ROOT_DIR = Path(__file__).resolve().parent.parent.parent

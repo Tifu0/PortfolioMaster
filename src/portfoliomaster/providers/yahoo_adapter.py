@@ -14,6 +14,12 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 # Silence known upstream Pandas / yfinance deprecation warnings (e.g. Pandas4Warning inplace keyword)
+try:
+    for _w in dir(pd.errors):
+        if "Warning" in _w:
+            warnings.simplefilter("ignore", getattr(pd.errors, _w))
+except Exception:
+    pass
 warnings.filterwarnings("ignore", message=".*inplace.*")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
@@ -240,7 +246,9 @@ class YahooAdapter(MarketDataProvider):
         # Fallback con history() si no tenemos precio
         if price is None:
             try:
-                hist = ticker.history(period="5d")
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    hist = ticker.history(period="5d")
                 if not hist.empty:
                     price = hist["Close"].iloc[-1]
                     if quote_timestamp is None:
@@ -410,7 +418,9 @@ class YahooAdapter(MarketDataProvider):
             # 1. Historical lookback window
             start_str = (target_date - timedelta(days=window_days)).isoformat()
             end_str = (target_date + timedelta(days=1)).isoformat()
-            hist = t.history(start=start_str, end=end_str)
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                hist = t.history(start=start_str, end=end_str)
 
             if not hist.empty and "Close" in hist:
                 valid_rows = []
@@ -446,7 +456,9 @@ class YahooAdapter(MarketDataProvider):
 
                 if price is None:
                     try:
-                        hist_recent = t.history(period="5d")
+                        with warnings.catch_warnings():
+                            warnings.simplefilter("ignore")
+                            hist_recent = t.history(period="5d")
                         if not hist_recent.empty and "Close" in hist_recent:
                             recent_series = hist_recent["Close"].dropna()
                             if not recent_series.empty:
