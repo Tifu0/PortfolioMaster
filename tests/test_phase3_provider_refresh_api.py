@@ -316,3 +316,64 @@ def test_refresh_service_global_refresh_flow(in_memory_db):
     assert quote is not None
     assert quote.price == Decimal("230.50")
     assert quote.status == "FRESH"
+
+
+def test_upsert_market_quotes_batch(in_memory_db):
+    """Verify that upsert_market_quotes_batch performs fast non-destructive bulk upserts."""
+    repo = GlobalMarketQuotesRepository(in_memory_db)
+
+    # 1. Bulk insert
+    payload = [
+        {
+            "provider_symbol": "AAPL",
+            "price": Decimal("230.50"),
+            "previous_close": Decimal("228.00"),
+            "quote_timestamp": datetime.now(timezone.utc),
+            "status": "FRESH",
+            "company_name": "Apple Inc.",
+        },
+        {
+            "provider_symbol": "MSFT",
+            "price": Decimal("450.00"),
+            "previous_close": Decimal("445.00"),
+            "quote_timestamp": datetime.now(timezone.utc),
+            "status": "FRESH",
+            "company_name": "Microsoft Corp.",
+        },
+    ]
+    quotes = repo.upsert_market_quotes_batch(payload)
+    in_memory_db.commit()
+
+    assert len(quotes) == 2
+    q_aapl = repo.get_quote("AAPL")
+    assert q_aapl is not None
+    assert q_aapl.price == Decimal("230.50")
+    assert q_aapl.company_name == "Apple Inc."
+
+    # 2. Bulk update with 1 success and 1 error (non-destructive)
+    update_payload = [
+        {
+            "provider_symbol": "AAPL",
+            "price": Decimal("235.00"),
+            "previous_close": Decimal("230.50"),
+            "status": "FRESH",
+        },
+        {
+            "provider_symbol": "MSFT",
+            "price": None,
+            "status": "ERROR",
+            "error_message": "Rate limited",
+        },
+    ]
+    repo.upsert_market_quotes_batch(update_payload)
+    in_memory_db.commit()
+
+    q_aapl_updated = repo.get_quote("AAPL")
+    assert q_aapl_updated.price == Decimal("235.00")
+
+    q_msft_updated = repo.get_quote("MSFT")
+    # MSFT existing price (450.00) MUST be preserved on error!
+    assert q_msft_updated.price == Decimal("450.00")
+    assert q_msft_updated.status == "ERROR"
+    assert q_msft_updated.error_message == "Rate limited"
+

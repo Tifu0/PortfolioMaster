@@ -74,6 +74,9 @@ export function PortfolioProvider({
 
   const { session, isLoading: isAuthLoading, isAuthConfigured } = useAuth();
   const prevSessionUserIdRef = useRef<string | null | undefined>(undefined);
+  const isRefreshingDataInFlightRef = useRef<boolean>(false);
+  const hasQueuedRefreshRef = useRef<boolean>(false);
+  const refreshPortfolioDataRef = useRef<(options?: { silent?: boolean }) => Promise<void>>(async () => {});
 
   // Seed initial data passed from server components or initial render
   const seedInitialData = useCallback(
@@ -100,7 +103,7 @@ export function PortfolioProvider({
     []
   );
 
-  // Centralized silent refresh mechanism ("Zero-F5" Architecture)
+  // Centralized silent refresh mechanism ("Zero-F5" Architecture) with Concurrency Guard
   const refreshPortfolioData = useCallback(
     async (options?: { silent?: boolean }) => {
       const isSilent = options?.silent ?? false;
@@ -114,33 +117,41 @@ export function PortfolioProvider({
         return;
       }
 
+      // Concurrency guard: coalesce concurrent/rapid invocations to avoid request storms
+      if (isRefreshingDataInFlightRef.current) {
+        hasQueuedRefreshRef.current = true;
+        return;
+      }
+      isRefreshingDataInFlightRef.current = true;
+
       if (!isSilent) {
         setIsRefreshing(true);
       }
 
       try {
+        // On silent background refreshes, only fetch positions and metrics to prevent redundant config churn
         const [posRes, metRes, cfgRes] = await Promise.allSettled([
           getPositions(),
           getMetrics(),
-          getConfig(),
+          isSilent ? Promise.resolve(null) : getConfig(),
         ]);
 
         let updatedPositions: Position[] | null = null;
         let updatedMetrics: PortfolioMetrics | null = null;
         let updatedConfig: AppConfig | null = null;
 
-        if (posRes.status === 'fulfilled') {
+        if (posRes.status === 'fulfilled' && posRes.value) {
           updatedPositions = posRes.value.positions || [];
           setPositions(updatedPositions);
           setIsInitialized(true);
         }
 
-        if (metRes.status === 'fulfilled') {
+        if (metRes.status === 'fulfilled' && metRes.value) {
           updatedMetrics = metRes.value;
           setMetrics(updatedMetrics);
         }
 
-        if (cfgRes.status === 'fulfilled') {
+        if (cfgRes.status === 'fulfilled' && cfgRes.value !== null) {
           updatedConfig = cfgRes.value;
           setConfig(updatedConfig);
         }
@@ -153,10 +164,23 @@ export function PortfolioProvider({
         if (!isSilent) {
           setIsRefreshing(false);
         }
+        isRefreshingDataInFlightRef.current = false;
+
+        // If another refresh was requested while in-flight, coalesce and run it once on next tick
+        if (hasQueuedRefreshRef.current) {
+          hasQueuedRefreshRef.current = false;
+          setTimeout(() => {
+            refreshPortfolioDataRef.current({ silent: true });
+          }, 150);
+        }
       }
     },
     [isAuthConfigured, isAuthLoading, session]
   );
+
+  useEffect(() => {
+    refreshPortfolioDataRef.current = refreshPortfolioData;
+  }, [refreshPortfolioData]);
 
   // Optimistic UI: Immediately delete an instrument and return a rollback callback
   const optimisticDelete = useCallback(
@@ -300,9 +324,11 @@ export function PortfolioProvider({
           setConfig(cfg);
         }
 
-        // If a batch finished in the backend, trigger silent portfolio reload immediately!
+        // If a batch finished in the backend, trigger silent portfolio reload only if not actively streaming via SSE
         if (counterChanged || refreshAtChanged || finishedRefreshing) {
-          await refreshPortfolioData({ silent: true });
+          if (!isRefreshingRef.current) {
+            await refreshPortfolioDataRef.current({ silent: true });
+          }
         }
       } catch {
         // Silently ignore transient network blips
@@ -321,7 +347,7 @@ export function PortfolioProvider({
       isCancelled = true;
       if (timerId) clearTimeout(timerId);
     };
-  }, [refreshPortfolioData]);
+  }, []);
 
   // Real-Time Server-Sent Events (SSE) Listener:
   // Subscribes to live batch updates (/api/refresh/stream?mode=listen) using a fetch-based stream reader.
@@ -405,11 +431,11 @@ export function PortfolioProvider({
                         total: data.total_symbols ?? 0,
                       });
                     }
-                    refreshPortfolioData({ silent: true });
+                    refreshPortfolioDataRef.current({ silent: true });
                   } else if (data.type === 'complete') {
                     setBatchProgress(null);
                     setIsRefreshing(false);
-                    refreshPortfolioData({ silent: true });
+                    refreshPortfolioDataRef.current({ silent: true });
                   } else if (data.type === 'error') {
                     setBatchProgress(null);
                     setIsRefreshing(false);
@@ -438,7 +464,7 @@ export function PortfolioProvider({
       if (reconnectTimer) clearTimeout(reconnectTimer);
       if (abortController) abortController.abort();
     };
-  }, [refreshPortfolioData, isAuthConfigured]);
+  }, [isAuthConfigured]);
 
   // Global unhandled promise rejection listener
   useEffect(() => {
@@ -486,7 +512,7 @@ export function PortfolioProvider({
       } catch (err) {
         console.debug('Background smart refresh tick completed/throttled:', err);
       } finally {
-        await refreshPortfolioData({ silent: true });
+        await refreshPortfolioDataRef.current({ silent: true });
       }
     };
 
@@ -525,12 +551,14 @@ export function PortfolioProvider({
       stopTimer();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
-  }, [refreshPortfolioData]);
+  }, []);
 
   // 2. Supabase Realtime synchronization on public.market_quotes
   useEffect(() => {
     const client = supabase;
     if (!client) return;
+
+    let debounceTimer: NodeJS.Timeout | null = null;
 
     const channel = client
       .channel('realtime:market_quotes')
@@ -538,16 +566,24 @@ export function PortfolioProvider({
         'postgres_changes',
         { event: '*', schema: 'public', table: 'market_quotes' },
         () => {
-          // Silent background revalidation without table layout shifts
-          refreshPortfolioData({ silent: true });
+          // Suppress during active batch refreshes to prevent 30-per-batch request storms!
+          // The SSE stream already handles live batch progress and final data reload.
+          if (isRefreshingRef.current) return;
+
+          // Trailing debounce: coalesce rapid row updates into a single revalidation
+          if (debounceTimer) clearTimeout(debounceTimer);
+          debounceTimer = setTimeout(() => {
+            refreshPortfolioDataRef.current({ silent: true });
+          }, 2000);
         }
       )
       .subscribe();
 
     return () => {
+      if (debounceTimer) clearTimeout(debounceTimer);
       client.removeChannel(channel);
     };
-  }, [refreshPortfolioData]);
+  }, []);
 
   const value = useMemo<PortfolioContextType>(
     () => ({

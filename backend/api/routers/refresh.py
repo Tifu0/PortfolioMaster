@@ -35,6 +35,7 @@ from .instruments import (
     resolve_missing_analysis_prices,
     resolve_missing_ytd_prices,
 )
+from .positions import invalidate_positions_cache
 from ..common import (
     _quote_to_dict,
     _to_float,
@@ -316,17 +317,18 @@ def _execute_refresh_all(
                     batch_failed = 0
 
                     try:
+                        batch_quotes_payload = []
                         for sym, quote in chunk_quotes.items():
                             status_str = quote.status.name if hasattr(quote.status, "name") else str(quote.status)
-                            quotes_repo.upsert_market_quote_safe(
-                                provider_symbol=sym,
-                                price=quote.price,
-                                previous_close=quote.previous_close,
-                                quote_timestamp=quote.quote_timestamp,
-                                status=status_str,
-                                error_message=quote.error_message,
-                                provider=quote.provider or "yahoo",
-                            )
+                            batch_quotes_payload.append({
+                                "provider_symbol": sym,
+                                "price": quote.price,
+                                "previous_close": quote.previous_close,
+                                "quote_timestamp": quote.quote_timestamp,
+                                "status": status_str,
+                                "error_message": quote.error_message,
+                                "provider": quote.provider or "yahoo",
+                            })
                             inst_list = symbol_map.get(sym, [])
                             if quote.is_valid():
                                 updated += len(inst_list) if inst_list else 1
@@ -336,7 +338,8 @@ def _execute_refresh_all(
                                 batch_failed += len(inst_list) if inst_list else 1
                             processed_count += 1
 
-                        session.commit()
+                        quotes_repo.upsert_market_quotes_batch(batch_quotes_payload)
+
                         if run_id:
                             try:
                                 run_repo.update_progress(
@@ -345,9 +348,11 @@ def _execute_refresh_all(
                                     successful=updated,
                                     failed=failed,
                                 )
-                                session.commit()
-                            except Exception:
-                                session.rollback()
+                            except Exception as ex:
+                                logger.debug("Could not update run progress: %s", ex)
+
+                        session.commit()
+                        invalidate_positions_cache()
                     except Exception as ex:
                         session.rollback()
                         logger.error(f"[Refresh] Error processing batch {batch_idx}: {ex}")
@@ -584,6 +589,7 @@ def _execute_refresh_all(
 
                     processed_count += 1
 
+                invalidate_positions_cache()
                 _state["current_batch"] = batch_idx
                 _state["total_batches"] = total_b
                 _state["processed_symbols"] = min(processed_count, stale_count)
@@ -877,6 +883,7 @@ def refresh_single_instrument(
                 except Exception as e:
                     logger.debug("Error auto-resolving YTD price for %s: %s", ticker, e)
 
+            invalidate_positions_cache(user_id=user_id)
             return {
                 "status": "ok",
                 "ticker": ticker,

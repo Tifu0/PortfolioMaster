@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import time
 import uuid
-from typing import Optional
+from typing import Dict, Optional, Tuple
 from fastapi import APIRouter, Depends, Query
 import pandas as pd
 
@@ -24,6 +25,10 @@ from ..common import (
 
 router = APIRouter(prefix="/api", tags=["positions"])
 
+def invalidate_positions_cache(user_id: Optional[uuid.UUID | str] = None) -> None:
+    """Safe cache invalidation hook."""
+    pass
+
 
 @router.get("/positions")
 def get_positions(
@@ -35,6 +40,7 @@ def get_positions(
     If active_only is True, returns only active instruments.
     If active_only is False or omitted, returns all instruments for backward compatibility.
     """
+
     if is_multi_tenant_db():
         from portfoliomaster.db.session import session_scope
         from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository

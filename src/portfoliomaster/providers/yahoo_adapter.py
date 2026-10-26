@@ -1,4 +1,5 @@
 import inspect
+import concurrent.futures
 import logging
 import math
 from datetime import datetime, date, timedelta
@@ -279,6 +280,7 @@ class YahooAdapter(MarketDataProvider):
                         group_by="ticker",
                         threads=True,
                         progress=False,
+                        session=get_resilient_session(),
                     )
                 if df is not None and not df.empty and isinstance(df.columns, pd.MultiIndex):
                     for y_sym in unique_yahoo_symbols:
@@ -320,17 +322,33 @@ class YahooAdapter(MarketDataProvider):
                     f"Vectorized yf.download failed, falling back to individual fetching: {dl_err}"
                 )
 
+        # High-performance parallel fallback for missing or unparsed symbols (e.g. international tickers)
+        missing_symbols = [
+            s for s in unique_yahoo_symbols
+            if not batch_quotes_data.get(s) or batch_quotes_data[s].get("price") is None
+        ]
+
+        if missing_symbols:
+            def _fetch_one_symbol(y_sym: str) -> tuple[str, Dict[str, Any]]:
+                try:
+                    t = _create_ticker(y_sym)
+                    return y_sym, self._extract_quote_data(t)
+                except Exception as ex:
+                    self.logger.debug(f"Error fetching quote for {y_sym}: {ex}")
+                    return y_sym, {"price": None, "previous_close": None, "quote_timestamp": None}
+
+            max_workers = min(12, len(missing_symbols))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for y_sym, data in executor.map(_fetch_one_symbol, missing_symbols):
+                    if data and data.get("price") is not None:
+                        batch_quotes_data[y_sym] = data
+
         for symbol in symbols:
             try:
                 yahoo_symbol = symbol_map[symbol]
                 data = batch_quotes_data.get(yahoo_symbol)
 
-                # Fallback to individual fast_info/history if not obtained from batch download
                 if not data or data.get("price") is None:
-                    ticker = _create_ticker(yahoo_symbol)
-                    data = self._extract_quote_data(ticker)
-
-                if data["price"] is None:
                     self.logger.warning(
                         f"Sin precio para {symbol} (Yahoo: {yahoo_symbol})"
                     )

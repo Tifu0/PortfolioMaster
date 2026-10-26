@@ -564,6 +564,97 @@ class GlobalMarketQuotesRepository:
         self.session.flush()
         return quote
 
+    def upsert_market_quotes_batch(
+        self,
+        quotes_data: List[dict],
+    ) -> List[MarketQuote]:
+        """
+        High-performance batch upsert for quotes mirroring 'upsert_market_quote_safe'.
+        Fetches all matching symbols in a single SELECT query, updates/inserts in memory,
+        and executes a single session flush to dramatically reduce network round trips.
+        """
+        if not quotes_data:
+            return []
+
+        clean_symbols = [
+            str(q["provider_symbol"]).strip().upper()
+            for q in quotes_data
+            if q.get("provider_symbol")
+        ]
+        if not clean_symbols:
+            return []
+
+        now = datetime.now(timezone.utc)
+        stmt = select(MarketQuote).where(MarketQuote.provider_symbol.in_(clean_symbols))
+        existing_map = {q.provider_symbol: q for q in self.session.scalars(stmt).all()}
+
+        results: List[MarketQuote] = []
+        for item in quotes_data:
+            canonical = str(item.get("provider_symbol", "")).strip().upper()
+            if not canonical:
+                continue
+
+            price = item.get("price")
+            previous_close = item.get("previous_close")
+            quote_timestamp = item.get("quote_timestamp")
+            status = str(item.get("status", "FRESH")).upper()
+            error_message = item.get("error_message")
+            exchange = item.get("exchange")
+            currency = item.get("currency")
+            company_name = item.get("company_name")
+            provider = item.get("provider", "yahoo")
+
+            is_valid_price = (
+                price is not None
+                and price > 0
+                and status in ("FRESH", "DELAYED", "STALE")
+            )
+
+            quote = existing_map.get(canonical)
+            if not quote:
+                quote = MarketQuote(
+                    provider_symbol=canonical,
+                    exchange=exchange or "UNKNOWN",
+                    currency=currency or "EUR",
+                    company_name=company_name,
+                    price=price if is_valid_price else None,
+                    previous_close=previous_close if (is_valid_price and previous_close and previous_close > 0) else None,
+                    quote_timestamp=quote_timestamp if is_valid_price else None,
+                    last_valid_fetched_at=now if is_valid_price else None,
+                    last_attempt_at=now,
+                    status=status,
+                    error_message=error_message,
+                    provider=provider,
+                )
+                self.session.add(quote)
+                existing_map[canonical] = quote
+            else:
+                if exchange and exchange != "UNKNOWN":
+                    quote.exchange = exchange
+                if currency:
+                    quote.currency = currency
+                if company_name and not quote.company_name:
+                    quote.company_name = company_name
+
+                if is_valid_price:
+                    quote.price = price
+                    if previous_close is not None and previous_close > 0:
+                        quote.previous_close = previous_close
+                    if quote_timestamp is not None:
+                        quote.quote_timestamp = quote_timestamp
+                    quote.last_valid_fetched_at = now
+
+                quote.last_attempt_at = now
+                quote.status = status
+                quote.error_message = error_message
+                if provider:
+                    quote.provider = provider
+
+            results.append(quote)
+
+        self.session.flush()
+        return results
+
 
 class RefreshRunRepository:
     """Repository for managing multi-worker / serverless batch executions."""

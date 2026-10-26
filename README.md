@@ -1,10 +1,20 @@
 # 📈 PortfolioMaster
 
-**PortfolioMaster** is a high-performance, local-first web application designed for tracking, managing, and analyzing your investment Watchlist. It replaces traditional spreadsheet workflows (Google Sheets / Excel) with a modern, ultra-responsive, and 100% private user experience without any cloud dependencies.
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-Vercel-emerald?style=for-the-badge&logo=vercel)](https://portfolio-master-sigma-peach.vercel.app/)
+[![API Status](https://img.shields.io/badge/Backend%20API-Render-blue?style=for-the-badge&logo=render)](https://portfoliomaster-backend.onrender.com/health)
+[![Interactive Docs](https://img.shields.io/badge/Swagger%20UI-Docs-purple?style=for-the-badge&logo=fastapi)](https://portfoliomaster-backend.onrender.com/docs)
+[![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
+
+**PortfolioMaster** is a high-performance investment Watchlist tracking and analytics platform. Supporting both **cloud multi-tenant production** (Next.js on Vercel + FastAPI on Render + Supabase PostgreSQL) and **local-first privacy** (Next.js + SQLite), it replaces traditional spreadsheet workflows (Google Sheets / Excel) with a modern, real-time, ultra-responsive dashboard.
+
+- 🌐 **Live Web Application**: [https://portfolio-master-sigma-peach.vercel.app/](https://portfolio-master-sigma-peach.vercel.app/)
+- ⚡ **Production Backend API**: [https://portfoliomaster-backend.onrender.com/](https://portfoliomaster-backend.onrender.com/)
+- 📖 **Interactive API Documentation (Swagger)**: [https://portfoliomaster-backend.onrender.com/docs](https://portfoliomaster-backend.onrender.com/docs)
 
 Built on a decoupled modern architecture:
 - **Frontend**: **Next.js 16 (React 19)**, **TypeScript**, **Tailwind CSS v4**, and **@tanstack/react-table**.
-- **Backend**: **FastAPI** REST API with **Uvicorn**, powered by **Python** core calculations, SQLite persistence, and live market quotes via **Yahoo Finance** (`yfinance`).
+- **Backend**: **FastAPI** REST API with **Uvicorn**, powered by **Python** core calculations, PostgreSQL (Supabase) / SQLite persistence, and live market quotes via **Yahoo Finance** (`yfinance`).
+
 
 ---
 
@@ -28,9 +38,11 @@ Built on a decoupled modern architecture:
 
 - **🔄 Unified Market Data & Analysis Refresh Engine**:
   - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices and start-of-year (YTD) reference prices in one unified operation.
-  - **High-Speed Vectorized Batch Fetching**: Powered by multi-threaded bulk downloads (`yf.download`) in `YahooAdapter`, reducing refresh times significantly compared to traditional individual API calls.
+  - **High-Speed Concurrent Quote Engine**: Hybrid vectorization (`yf.download`) coupled with parallel `ThreadPoolExecutor` workers using lightweight Yahoo `fast_info` + resilient browser session headers, bypassing heavy OHLCV candle downloads and crumb rate limits. 30 symbols refresh in **1.2s - 1.5s**.
+  - **Bulk Database Upsert (`upsert_market_quotes_batch`)**: Resolves existing quotes in a single SQL query (`WHERE provider_symbol IN (...)`) and flushes once, reducing remote PostgreSQL network round-trips from 60 down to 2 per batch (**95% latency reduction**).
+  - **Request-Storm Prevention & Realtime Coalescing**: Frontend in-flight concurrency guards consolidate parallel fetch triggers; Supabase Realtime row updates are debounced and suppressed during active batch refreshes to eliminate CPU starvation on cloud web services (Render).
   - **Progressive Real-Time Streaming via Server-Sent Events (SSE)** (`GET /api/refresh/stream`): A centralized pub/sub broadcaster streams batch events (`start`, `batch`, `complete`) to the client for **both manual refreshes and scheduled background loops**.
-  - **Incremental Per-Batch SQLite Commits & Live Table Updates**: Quotes are committed to SQLite after each batch (e.g. 25 symbols) and immediately rendered in the UI table in real time, rather than blocking until all 11+ batches finish.
+  - **Incremental Per-Batch Persistence & Live Table Updates**: Quotes are committed to PostgreSQL / SQLite after each batch and immediately rendered in the UI table in real time, rather than blocking until all batches finish.
   - **Zero-Flicker State Preservation**: Incremental updates in `PortfolioProvider` and `WatchlistTable` strictly preserve table state — scroll position, active search filters, column sorting, column widths, and open inline editing (`Analysis Date` or `Research Notes`) are never interrupted or reset.
   - **Zero CORS Preflight Overhead**: Optimized simple HTTP requests, Next.js proxy rewrites (`/api/:path*`), and FastAPI `CORSMiddleware` with 24-hour preflight caching (`max_age=86400`) eliminate redundant `OPTIONS` round-trips.
   - **Adaptive Sync Heartbeat**: Adaptive background sync with intelligent log filtering to keep development consoles clean and signal-focused.
@@ -228,8 +240,11 @@ npm test
 
 PortfolioMaster supports high-availability, multi-tenant cloud deployment:
 
-- **Frontend**: **Next.js 16 (App Router)** deployed to **Vercel** (`frontend` as root directory).
-- **Backend API**: **FastAPI** ASGI web service deployed to **Render** with Uvicorn.
+- **Frontend**: **Next.js 16 (App Router)** deployed to **Vercel** (`frontend` as root directory)  
+  👉 **Live App**: [https://portfolio-master-sigma-peach.vercel.app/](https://portfolio-master-sigma-peach.vercel.app/)
+- **Backend API**: **FastAPI** ASGI web service deployed to **Render** with Uvicorn  
+  👉 **API Base**: [https://portfoliomaster-backend.onrender.com/](https://portfoliomaster-backend.onrender.com/)  
+  👉 **Swagger Docs**: [https://portfoliomaster-backend.onrender.com/docs](https://portfoliomaster-backend.onrender.com/docs)
 - **Database**: **Supabase PostgreSQL** with Row-Level Security (RLS) policies and shared `market_quotes` decoupling.
 - **Authentication**: **Supabase Auth** with cryptographic JWT verification (`HS256`, audience `authenticated`).
 - **Local Development**: Isolated SQLite backend (`portfolio.db`) with automatic fallback when `DATABASE_URL` is unset.
@@ -246,7 +261,7 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
    - `DATABASE_URL`: `postgresql+psycopg://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres`
    - `SUPABASE_JWT_SECRET`: From Supabase Dashboard -> Project Settings -> API -> JWT Secret
    - `SUPABASE_URL`: `https://[REF].supabase.co`
-   - `CORS_ORIGINS`: `https://your-frontend.vercel.app`
+   - `CORS_ORIGINS`: `https://portfolio-master-sigma-peach.vercel.app`
    - `ENVIRONMENT`: `production`
 
 ### 2. Vercel Deployment (Next.js App Router)
