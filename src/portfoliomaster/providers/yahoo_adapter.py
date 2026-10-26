@@ -4,6 +4,8 @@ import logging
 import math
 from datetime import datetime, date, timedelta
 from decimal import Decimal
+import os
+import tempfile
 from typing import Dict, List, Optional, Any
 import warnings
 import pandas as pd
@@ -12,11 +14,20 @@ from requests.adapters import HTTPAdapter
 from urllib3.util import Retry
 
 # Silence known upstream Pandas / yfinance deprecation warnings (e.g. Pandas4Warning inplace keyword)
-warnings.filterwarnings("ignore", message=".*The inplace keyword.*", category=Warning)
+warnings.filterwarnings("ignore", message=".*inplace.*")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
 
 import yfinance as yf
+
+# Configure resilient TzCache location to prevent race condition [Errno 17] across threads
+try:
+    _tz_dir = os.path.join(tempfile.gettempdir(), "py-yfinance")
+    os.makedirs(_tz_dir, exist_ok=True)
+    if hasattr(yf, "set_tz_cache_location"):
+        yf.set_tz_cache_location(_tz_dir)
+except Exception:
+    pass
 
 from .base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus, FreshnessConfig, Exchange

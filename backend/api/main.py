@@ -20,7 +20,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 # Silence known upstream Pandas / yfinance deprecation warnings (e.g. Pandas4Warning inplace keyword)
-warnings.filterwarnings("ignore", message=".*The inplace keyword.*", category=Warning)
+warnings.filterwarnings("ignore", message=".*inplace.*")
 warnings.filterwarnings("ignore", category=FutureWarning, module="yfinance")
 warnings.filterwarnings("ignore", category=DeprecationWarning, module="yfinance")
 
