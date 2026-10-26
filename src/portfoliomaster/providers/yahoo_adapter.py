@@ -35,9 +35,17 @@ try:
 except Exception:
     pass
 
-# Upstream yfinance bug fix: prevent storing rate limit messages (e.g. 'Too Many Requests') as valid crumbs
+# Upstream yfinance bug fix & cloud speed accelerator:
+# 1. Prevent storing rate limit messages (e.g. 'Too Many Requests') as valid crumbs.
+# 2. Cooldown cache for rate-limited crumbs to prevent 3.5s blocking per ticker on cloud IPs (Render).
+# 3. Yahoo's Chart API (/v8/finance/chart) works 100% without a crumb, so when rate-limited (or on Render),
+#    we bypass crumb fetch instantly (0.0s instead of 3.5s per ticker).
 try:
+    import time
     import yfinance.data as _yd
+
+    _CRUMB_RATE_LIMITED_UNTIL = time.time() + 86400.0 if os.environ.get("RENDER") else 0.0
+    _orig_get_cookie_and_crumb = _yd.YfData._get_cookie_and_crumb
     _orig_get_crumb_basic = _yd.YfData._get_crumb_basic
     _orig_get_crumb_csrf = _yd.YfData._get_crumb_csrf
 
@@ -49,34 +57,32 @@ try:
             return None
         return val
 
-    def _safe_get_crumb_basic(self, timeout=30):
-        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
-            self._crumb = None
-        try:
-            res = _orig_get_crumb_basic(self, timeout=timeout)
-        except Exception:
-            self._crumb = None
-            raise
-        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
-            self._crumb = None
-            return None
-        return res
+    def _resilient_get_cookie_and_crumb(self, timeout=30):
+        global _CRUMB_RATE_LIMITED_UNTIL
+        now = time.time()
+        if now < _CRUMB_RATE_LIMITED_UNTIL:
+            return None, self._cookie_strategy
 
-    def _safe_get_crumb_csrf(self, timeout=30):
-        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
-            self._crumb = None
+        crumb_timeout = min(timeout, 2)
         try:
-            res = _orig_get_crumb_csrf(self, timeout=timeout)
-        except Exception:
+            crumb, strategy = _orig_get_cookie_and_crumb(self, timeout=crumb_timeout)
+            if crumb is not None and not _sanitize_crumb_val(crumb):
+                self._crumb = None
+                _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
+                return None, strategy
+            return crumb, strategy
+        except _yd.YFRateLimitError:
             self._crumb = None
+            _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
+            return None, self._cookie_strategy
+        except Exception as e:
+            self._crumb = None
+            if "429" in str(e) or "Too Many Requests" in str(e) or "timeout" in str(e).lower():
+                _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
+                return None, self._cookie_strategy
             raise
-        if self._crumb is not None and not _sanitize_crumb_val(self._crumb):
-            self._crumb = None
-            return None
-        return res
 
-    _yd.YfData._get_crumb_basic = _safe_get_crumb_basic
-    _yd.YfData._get_crumb_csrf = _safe_get_crumb_csrf
+    _yd.YfData._get_cookie_and_crumb = _resilient_get_cookie_and_crumb
 except Exception:
     pass
 
