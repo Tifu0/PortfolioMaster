@@ -30,32 +30,33 @@ import {
   checkYahooTicker,
 } from '@/lib/api';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { useLanguage } from '@/context/LanguageContext';
 
-const POPULAR_EXCHANGES: { label: string; value: string }[] = [
-  { label: 'AUTO (Detección automática)', value: 'AUTO' },
-  { label: 'Estados Unidos (US)', value: 'US' },
-  { label: 'España — BME (SPAIN)', value: 'SPAIN' },
-  { label: 'Francia — Euronext Paris (FRANCE)', value: 'FRANCE' },
-  { label: 'Alemania — Xetra (GERMANY)', value: 'GERMANY' },
-  { label: 'Reino Unido — LSE (UK)', value: 'UK' },
-  { label: 'Italia — Borsa Italiana (ITALY)', value: 'ITALY' },
-  { label: 'Países Bajos — Euronext Amsterdam (NETHERLANDS)', value: 'NETHERLANDS' },
-  { label: 'Suiza — SIX (SWITZERLAND)', value: 'SWITZERLAND' },
-  { label: 'Japón — Tokyo (JAPAN)', value: 'JAPAN' },
-  { label: 'Hong Kong — HKEX (HONG_KONG)', value: 'HONG_KONG' },
+const POPULAR_EXCHANGES: { label: string; labelEn: string; value: string }[] = [
+  { label: 'AUTO (Detección automática)', labelEn: 'AUTO (Automatic detection)', value: 'AUTO' },
+  { label: 'Estados Unidos (US)', labelEn: 'United States (US)', value: 'US' },
+  { label: 'España — BME (SPAIN)', labelEn: 'Spain — BME (SPAIN)', value: 'SPAIN' },
+  { label: 'Francia — Euronext Paris (FRANCE)', labelEn: 'France — Euronext Paris (FRANCE)', value: 'FRANCE' },
+  { label: 'Alemania — Xetra (GERMANY)', labelEn: 'Germany — Xetra (GERMANY)', value: 'GERMANY' },
+  { label: 'Reino Unido — LSE (UK)', labelEn: 'United Kingdom — LSE (UK)', value: 'UK' },
+  { label: 'Italia — Borsa Italiana (ITALY)', labelEn: 'Italy — Borsa Italiana (ITALY)', value: 'ITALY' },
+  { label: 'Países Bajos — Euronext Amsterdam (NETHERLANDS)', labelEn: 'Netherlands — Euronext Amsterdam (NETHERLANDS)', value: 'NETHERLANDS' },
+  { label: 'Suiza — SIX (SWITZERLAND)', labelEn: 'Switzerland — SIX (SWITZERLAND)', value: 'SWITZERLAND' },
+  { label: 'Japón — Tokyo (JAPAN)', labelEn: 'Japan — Tokyo (JAPAN)', value: 'JAPAN' },
+  { label: 'Hong Kong — HKEX (HONG_KONG)', labelEn: 'Hong Kong — HKEX (HONG_KONG)', value: 'HONG_KONG' },
 ];
 
-const POPULAR_CURRENCIES: { label: string; value: string }[] = [
-  { label: 'AUTO (Detección automática)', value: 'AUTO' },
-  { label: 'EUR — Euro (€)', value: 'EUR' },
-  { label: 'USD — Dólar estadounidense ($)', value: 'USD' },
-  { label: 'GBP — Libra esterlina (£)', value: 'GBP' },
-  { label: 'CHF — Franco suizo (CHF)', value: 'CHF' },
-  { label: 'JPY — Yen japonés (¥)', value: 'JPY' },
-  { label: 'CAD — Dólar canadiense (CAD)', value: 'CAD' },
-  { label: 'AUD — Dólar australiano (AUD)', value: 'AUD' },
-  { label: 'SEK — Corona sueca (SEK)', value: 'SEK' },
-  { label: 'NOK — Corona noruega (NOK)', value: 'NOK' },
+const POPULAR_CURRENCIES: { label: string; labelEn: string; value: string }[] = [
+  { label: 'AUTO (Detección automática)', labelEn: 'AUTO (Automatic detection)', value: 'AUTO' },
+  { label: 'EUR — Euro (€)', labelEn: 'EUR — Euro (€)', value: 'EUR' },
+  { label: 'USD — Dólar estadounidense ($)', labelEn: 'USD — US Dollar ($)', value: 'USD' },
+  { label: 'GBP — Libra esterlina (£)', labelEn: 'GBP — British Pound (£)', value: 'GBP' },
+  { label: 'CHF — Franco suizo (CHF)', labelEn: 'CHF — Swiss Franc (CHF)', value: 'CHF' },
+  { label: 'JPY — Yen japonés (¥)', labelEn: 'JPY — Japanese Yen (¥)', value: 'JPY' },
+  { label: 'CAD — Dólar canadiense (CAD)', labelEn: 'CAD — Canadian Dollar (CAD)', value: 'CAD' },
+  { label: 'AUD — Dólar australiano (AUD)', labelEn: 'AUD — Australian Dollar (AUD)', value: 'AUD' },
+  { label: 'SEK — Corona sueca (SEK)', labelEn: 'SEK — Swedish Krona (SEK)', value: 'SEK' },
+  { label: 'NOK — Corona noruega (NOK)', labelEn: 'NOK — Norwegian Krone (NOK)', value: 'NOK' },
 ];
 
 interface ManualEntryModalProps {
@@ -73,6 +74,7 @@ export function ManualEntryModal({
   onSuccess,
   onError,
 }: ManualEntryModalProps) {
+  const { language } = useLanguage();
   const portfolioContext = usePortfolioOptional();
 
   const isEditMode = Boolean(initialTickerToEdit);
@@ -656,20 +658,28 @@ export function ManualEntryModal({
             <div>
               <h2 className="text-base font-bold text-white tracking-tight">
                 {isEditMode
-                  ? `Modificar Instrumento (${originalTickerToEdit || editTicker})`
-                  : 'Añadir Nuevo Instrumento'}
+                  ? (language === 'es'
+                      ? `Modificar Instrumento (${originalTickerToEdit || editTicker})`
+                      : `Edit Instrument (${originalTickerToEdit || editTicker})`)
+                  : (language === 'es'
+                      ? 'Añadir Nuevo Instrumento'
+                      : 'Add New Instrument')}
               </h2>
               <p className="text-xs text-zinc-400">
                 {isEditMode
-                  ? 'Edita los datos del valor, actualiza su cotización o elimínalo del watchlist'
-                  : 'Introduce los datos del nuevo valor para añadirlo a tu watchlist'}
+                  ? (language === 'es'
+                      ? 'Edita los datos del valor, actualiza su cotización o elimínalo del watchlist'
+                      : 'Edit instrument details, update quotes, or remove it from the watchlist')
+                  : (language === 'es'
+                      ? 'Introduce los datos del nuevo valor para añadirlo a tu watchlist'
+                      : 'Enter details for the new instrument to add it to your watchlist')}
               </p>
             </div>
           </div>
           <button
             onClick={onClose}
-            aria-label="Cerrar modal"
-            title="Cerrar modal"
+            aria-label={language === 'es' ? "Cerrar modal" : "Close modal"}
+            title={language === 'es' ? "Cerrar modal" : "Close modal"}
             className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
           >
             <X className="w-5 h-5" />
@@ -695,17 +705,21 @@ export function ManualEntryModal({
                       onClick={handleAutoDetectForAdd}
                       disabled={checkingAddYahoo || !addTicker.trim()}
                       className="inline-flex items-center gap-1 text-[11px] text-emerald-400 hover:text-emerald-300 disabled:opacity-40 disabled:hover:text-emerald-400 transition font-medium"
-                      title="Consultar Yahoo Finance para autocompletar nombre y divisa"
+                      title={
+                        language === 'es'
+                          ? "Consultar Yahoo Finance para autocompletar nombre y divisa"
+                          : "Query Yahoo Finance to autocomplete name and currency"
+                      }
                     >
                       {checkingAddYahoo ? (
                         <>
                           <Loader2 className="w-3 h-3 animate-spin" />
-                          Consultando...
+                          {language === 'es' ? 'Consultando...' : 'Checking...'}
                         </>
                       ) : (
                         <>
                           <Search className="w-3 h-3" />
-                          Consultar en Yahoo
+                          {language === 'es' ? 'Consultar en Yahoo' : 'Check on Yahoo'}
                         </>
                       )}
                     </button>
@@ -713,13 +727,14 @@ export function ManualEntryModal({
                   <input
                     type="text"
                     required
-                    placeholder="ej. AAPL, BME:SAN, MSFT"
+                    placeholder={language === 'es' ? "ej. AAPL, BME:SAN, MSFT" : "e.g. AAPL, BME:SAN, MSFT"}
                     value={addTicker}
                     onChange={(e) => setAddTicker(e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/60 font-mono uppercase"
                   />
                   <span className="text-[10px] text-zinc-500 mt-1 block">
-                    Soporta prefijos como <code className="text-zinc-400">BME:</code>,{' '}
+                    {language === 'es' ? 'Soporta prefijos como ' : 'Supports prefixes like '}
+                    <code className="text-zinc-400">BME:</code>,{' '}
                     <code className="text-zinc-400">NASDAQ:</code>
                   </span>
                 </div>
@@ -728,7 +743,7 @@ export function ManualEntryModal({
                 <div>
                   <div className="flex items-center justify-between mb-1">
                     <label className="block text-xs font-medium text-zinc-300">
-                      Nombre de la Empresa
+                      {language === 'es' ? 'Nombre de la Empresa' : 'Company Name'}
                     </label>
                     <button
                       type="button"
@@ -742,22 +757,36 @@ export function ManualEntryModal({
                           ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
                           : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-200'
                       }`}
-                      title="Activar detección automática desde Yahoo Finance"
+                      title={
+                        language === 'es'
+                          ? "Activar detección automática desde Yahoo Finance"
+                          : "Enable automatic detection from Yahoo Finance"
+                      }
                     >
                       {addCompanyName === 'AUTO' || !addCompanyName
-                        ? '✓ Modo AUTO'
-                        : 'Poner en AUTO'}
+                        ? (language === 'es' ? '✓ Modo AUTO' : '✓ AUTO Mode')
+                        : (language === 'es' ? 'Poner en AUTO' : 'Set to AUTO')}
                     </button>
                   </div>
                   <input
                     type="text"
-                    placeholder="ej. Apple Inc. (o deja 'AUTO' para Yahoo)"
+                    placeholder={
+                      language === 'es'
+                        ? "ej. Apple Inc. (o deja 'AUTO' para Yahoo)"
+                        : "e.g. Apple Inc. (or leave 'AUTO' for Yahoo)"
+                    }
                     value={addCompanyName}
                     onChange={(e) => setAddCompanyName(e.target.value)}
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/60"
                   />
                   <span className="text-[10px] text-zinc-500 mt-1 block">
-                    Si se deja vacío o en <code className="text-zinc-400">AUTO</code>, se obtendrá de Yahoo Finance.
+                    {language === 'es'
+                      ? "Si se deja vacío o en "
+                      : "If left empty or set to "}
+                    <code className="text-zinc-400">AUTO</code>
+                    {language === 'es'
+                      ? ", se obtendrá de Yahoo Finance."
+                      : ", it will be retrieved from Yahoo Finance."}
                   </span>
                 </div>
               </div>
@@ -766,7 +795,7 @@ export function ManualEntryModal({
                 {/* Exchange */}
                 <div>
                   <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Mercado / Bolsa
+                    {language === 'es' ? 'Mercado / Bolsa' : 'Market / Exchange'}
                   </label>
                   <select
                     value={addExchange}
@@ -775,7 +804,7 @@ export function ManualEntryModal({
                   >
                     {POPULAR_EXCHANGES.map((ex) => (
                       <option key={ex.value} value={ex.value} className="bg-zinc-900">
-                        {ex.label}
+                        {language === 'es' ? ex.label : ex.labelEn}
                       </option>
                     ))}
                   </select>
@@ -783,7 +812,9 @@ export function ManualEntryModal({
 
                 {/* Currency */}
                 <div>
-                  <label className="block text-xs font-medium text-zinc-300 mb-1">Divisa</label>
+                  <label className="block text-xs font-medium text-zinc-300 mb-1">
+                    {language === 'es' ? 'Divisa' : 'Currency'}
+                  </label>
                   <select
                     value={addCurrency}
                     onChange={(e) => setAddCurrency(e.target.value)}
@@ -791,7 +822,7 @@ export function ManualEntryModal({
                   >
                     {POPULAR_CURRENCIES.map((curr) => (
                       <option key={curr.value} value={curr.value} className="bg-zinc-900">
-                        {curr.label}
+                        {language === 'es' ? curr.label : curr.labelEn}
                       </option>
                     ))}
                   </select>
@@ -802,7 +833,7 @@ export function ManualEntryModal({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
                 <div>
                   <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Precio Objetivo
+                    {language === 'es' ? 'Precio Objetivo' : 'Target Price'}
                   </label>
                   <input
                     type="number"
@@ -815,7 +846,7 @@ export function ManualEntryModal({
                 </div>
                 <div>
                   <label className="block text-xs font-medium text-zinc-300 mb-1">
-                    Fecha de Análisis
+                    {language === 'es' ? 'Fecha de Análisis' : 'Analysis Date'}
                   </label>
                   <input
                     type="date"
@@ -824,7 +855,9 @@ export function ManualEntryModal({
                     className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/60 font-mono"
                   />
                   <span className="text-[10px] text-zinc-500 mt-1 block">
-                    La cotización de referencia en esta fecha se resolverá automáticamente de Yahoo Finance.
+                    {language === 'es'
+                      ? 'La cotización de referencia en esta fecha se resolverá automáticamente de Yahoo Finance.'
+                      : 'The reference quote on this date will be automatically resolved from Yahoo Finance.'}
                   </span>
                 </div>
               </div>
@@ -832,11 +865,15 @@ export function ManualEntryModal({
               {/* Comment / Thesis */}
               <div>
                 <label className="block text-xs font-medium text-zinc-300 mb-1">
-                  Comentario / Tesis de Inversión
+                  {language === 'es' ? 'Comentario / Tesis de Inversión' : 'Comment / Investment Thesis'}
                 </label>
                 <textarea
                   rows={2}
-                  placeholder="ej. Crecimiento sostenido en servicios y recompras de acciones."
+                  placeholder={
+                    language === 'es'
+                      ? "ej. Crecimiento sostenido en servicios y recompras de acciones."
+                      : "e.g. Sustained growth in services and share buybacks."
+                  }
                   value={addComment}
                   onChange={(e) => setAddComment(e.target.value)}
                   className="w-full bg-zinc-950 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-zinc-200 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500/60 resize-none"
@@ -847,7 +884,7 @@ export function ManualEntryModal({
               <div className="pt-2 border-t border-zinc-800/80">
                 <div className="flex items-center justify-between mb-3">
                   <span className="text-xs font-semibold text-zinc-300">
-                    Fuente de la Cotización Inicial
+                    {language === 'es' ? 'Fuente de la Cotización Inicial' : 'Initial Quote Source'}
                   </span>
                   <label className="inline-flex items-center gap-2 cursor-pointer text-xs text-zinc-400">
                     <input
@@ -856,7 +893,9 @@ export function ManualEntryModal({
                       onChange={(e) => setAddFetchYahoo(e.target.checked)}
                       className="rounded bg-zinc-950 border-zinc-700 text-emerald-500 focus:ring-emerald-500/20"
                     />
-                    Consultar Yahoo Finance automáticamente
+                    {language === 'es'
+                      ? 'Consultar Yahoo Finance automáticamente'
+                      : 'Automatically fetch from Yahoo Finance'}
                   </label>
                 </div>
 
@@ -864,7 +903,7 @@ export function ManualEntryModal({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 p-3 rounded-xl bg-zinc-950/60 border border-zinc-800">
                     <div>
                       <label className="block text-xs font-medium text-zinc-300 mb-1">
-                        Último Precio Manual
+                        {language === 'es' ? 'Último Precio Manual' : 'Manual Last Price'}
                       </label>
                       <input
                         type="number"
@@ -877,7 +916,7 @@ export function ManualEntryModal({
                     </div>
                     <div>
                       <label className="block text-xs font-medium text-zinc-300 mb-1">
-                        Cierre Anterior Manual
+                        {language === 'es' ? 'Cierre Anterior Manual' : 'Manual Previous Close'}
                       </label>
                       <input
                         type="number"
@@ -899,7 +938,7 @@ export function ManualEntryModal({
                   onClick={onClose}
                   className="px-4 py-2 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors"
                 >
-                  Cancelar
+                  {language === 'es' ? 'Cancelar' : 'Cancel'}
                 </button>
                 <button
                   type="submit"
@@ -909,12 +948,12 @@ export function ManualEntryModal({
                   {loading ? (
                     <>
                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Guardando...
+                      {language === 'es' ? 'Guardando...' : 'Saving...'}
                     </>
                   ) : (
                     <>
                       <Check className="w-3.5 h-3.5" />
-                      Guardar Instrumento
+                      {language === 'es' ? 'Guardar Instrumento' : 'Save Instrument'}
                     </>
                   )}
                 </button>
@@ -927,7 +966,9 @@ export function ManualEntryModal({
             <div className="space-y-5">
               {!originalTickerToEdit && instrumentsList.length === 0 ? (
                 <div className="p-8 text-center text-zinc-400 text-xs">
-                  No hay instrumentos registrados todavía en la base de datos.
+                  {language === 'es'
+                    ? 'No hay instrumentos registrados todavía en la base de datos.'
+                    : 'No instruments registered yet in the database.'}
                 </div>
               ) : (
                 <>
@@ -935,11 +976,13 @@ export function ManualEntryModal({
                   <div className="bg-zinc-900/60 p-3.5 rounded-xl border border-zinc-800/80 space-y-2.5">
                     <div className="flex items-center justify-between">
                       <label className="block text-xs font-medium text-zinc-300">
-                        Ticker del Instrumento
+                        {language === 'es' ? 'Ticker del Instrumento' : 'Instrument Ticker'}
                       </label>
                       {originalTickerToEdit && editTicker.trim().toUpperCase() !== originalTickerToEdit.toUpperCase() && (
                         <span className="text-[10px] text-amber-400 font-medium">
-                          Cambiando ticker original ({originalTickerToEdit})
+                          {language === 'es'
+                            ? `Cambiando ticker original (${originalTickerToEdit})`
+                            : `Changing original ticker (${originalTickerToEdit})`}
                         </span>
                       )}
                     </div>
@@ -961,17 +1004,21 @@ export function ManualEntryModal({
                         onClick={handleCheckYahoo}
                         disabled={checkingYahoo || !editTicker.trim()}
                         className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-lg text-xs font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/25 hover:bg-emerald-500/20 disabled:opacity-50 transition-colors whitespace-nowrap"
-                        title="Comprobar disponibilidad del ticker en Yahoo Finance"
+                        title={
+                          language === 'es'
+                            ? "Comprobar disponibilidad del ticker en Yahoo Finance"
+                            : "Check ticker availability on Yahoo Finance"
+                        }
                       >
                         {checkingYahoo ? (
                           <>
                             <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                            Comprobando...
+                            {language === 'es' ? 'Comprobando...' : 'Checking...'}
                           </>
                         ) : (
                           <>
                             <Search className="w-3.5 h-3.5" />
-                            Comprobar en Yahoo
+                            {language === 'es' ? 'Comprobar en Yahoo' : 'Check on Yahoo'}
                           </>
                         )}
                       </button>
@@ -996,10 +1043,13 @@ export function ManualEntryModal({
                             {yahooCheckResult.available ? (
                               <div>
                                 <p className="font-semibold text-emerald-200">
-                                  Ticker válido y disponible en Yahoo Finance
+                                  {language === 'es'
+                                    ? 'Ticker válido y disponible en Yahoo Finance'
+                                    : 'Valid ticker available on Yahoo Finance'}
                                 </p>
                                 <p className="text-[11px] text-emerald-400/80 mt-0.5 font-mono">
-                                  Símbolo: {yahooCheckResult.provider_symbol}
+                                  {language === 'es' ? 'Símbolo: ' : 'Symbol: '}
+                                  {yahooCheckResult.provider_symbol}
                                   {yahooCheckResult.company_name ? ` · ${yahooCheckResult.company_name}` : ''}
                                   {yahooCheckResult.price !== undefined && yahooCheckResult.price !== null
                                     ? ` · ${yahooCheckResult.price} ${yahooCheckResult.currency || ''}`
@@ -1009,10 +1059,16 @@ export function ManualEntryModal({
                             ) : (
                               <div>
                                 <p className="font-medium text-rose-200">
-                                  No se pudo encontrar en Yahoo Finance
+                                  {language === 'es'
+                                    ? 'No se pudo encontrar en Yahoo Finance'
+                                    : 'Could not find on Yahoo Finance'}
                                 </p>
                                 <p className="text-[11px] text-rose-400/80 mt-0.5">
-                                  {yahooCheckResult.message || 'Verifica el símbolo o el sufijo de bolsa (.MC, .PA, etc.)'}
+                                  {yahooCheckResult.message || (
+                                    language === 'es'
+                                      ? 'Verifica el símbolo o el sufijo de bolsa (.MC, .PA, etc.)'
+                                      : 'Verify symbol or exchange suffix (.MC, .PA, etc.)'
+                                  )}
                                 </p>
                               </div>
                             )}
@@ -1025,17 +1081,23 @@ export function ManualEntryModal({
                             onClick={handleConfirmTickerChange}
                             disabled={syncingTickerData || loading}
                             className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-sm disabled:opacity-50 whitespace-nowrap self-end sm:self-auto cursor-pointer"
-                            title="Sobrescribir los datos y precios del formulario con los del nuevo ticker"
+                            title={
+                              language === 'es'
+                                ? "Sobrescribir los datos y precios del formulario con los del nuevo ticker"
+                                : "Overwrite form data and quotes with new ticker data"
+                            }
                           >
                             {syncingTickerData ? (
                               <>
                                 <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                Actualizando...
+                                {language === 'es' ? 'Actualizando...' : 'Updating...'}
                               </>
                             ) : (
                               <>
                                 <RefreshCw className="w-3.5 h-3.5" />
-                                Confirmar cambio y actualizar datos
+                                {language === 'es'
+                                  ? 'Confirmar cambio y actualizar datos'
+                                  : 'Confirm change and update data'} {/* Confirmar cambio y actualizar datos */}
                               </>
                             )}
                           </button>
@@ -1048,7 +1110,7 @@ export function ManualEntryModal({
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <label className="block text-xs font-medium text-zinc-300 mb-1">
-                          Nombre de la Empresa
+                          {language === 'es' ? 'Nombre de la Empresa' : 'Company Name'}
                         </label>
                         <input
                           type="text"
@@ -1059,7 +1121,7 @@ export function ManualEntryModal({
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-zinc-300 mb-1">
-                          Precio Objetivo
+                          {language === 'es' ? 'Precio Objetivo' : 'Target Price'}
                         </label>
                         <input
                           type="number"
@@ -1075,16 +1137,22 @@ export function ManualEntryModal({
                       <div>
                         <div className="flex items-center justify-between mb-1">
                           <label className="block text-xs font-medium text-zinc-300">
-                            Precio Ref. Análisis
+                            {language === 'es' ? 'Precio Ref. Análisis' : 'Analysis Ref. Price'}
                           </label>
                           <button
                             type="button"
                             onClick={handleFetchHistoricalForEdit}
                             disabled={fetchingHistorical || loading}
                             className="text-[10px] text-emerald-400 hover:text-emerald-300 underline font-mono"
-                            title="Consultar cotización de la fecha en Yahoo"
+                            title={
+                              language === 'es'
+                                ? "Consultar cotización de la fecha en Yahoo"
+                                : "Fetch quote for this date from Yahoo"
+                            }
                           >
-                            {fetchingHistorical ? 'Buscando...' : 'Obtener de Yahoo'}
+                            {fetchingHistorical
+                              ? (language === 'es' ? 'Buscando...' : 'Searching...')
+                              : (language === 'es' ? 'Obtener de Yahoo' : 'Fetch from Yahoo')}
                           </button>
                         </div>
                         <input
@@ -1100,7 +1168,7 @@ export function ManualEntryModal({
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-zinc-300 mb-1">
-                          Fecha de Análisis
+                          {language === 'es' ? 'Fecha de Análisis' : 'Analysis Date'}
                         </label>
                         <input
                           type="date"
@@ -1111,7 +1179,7 @@ export function ManualEntryModal({
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-zinc-300 mb-1">
-                          Último Precio
+                          {language === 'es' ? 'Último Precio' : 'Last Price'}
                         </label>
                         <input
                           type="number"
@@ -1123,7 +1191,7 @@ export function ManualEntryModal({
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-zinc-300 mb-1">
-                          Cierre Anterior
+                          {language === 'es' ? 'Cierre Anterior' : 'Previous Close'}
                         </label>
                         <input
                           type="number"
@@ -1139,16 +1207,22 @@ export function ManualEntryModal({
                       <div>
                         <div className="flex items-center justify-between mb-1">
                           <label className="block text-xs font-medium text-zinc-300">
-                            Precio Ref. YTD (Inicio Año)
+                            {language === 'es' ? 'Precio Ref. YTD (Inicio Año)' : 'YTD Ref. Price (Start of Year)'}
                           </label>
                           <button
                             type="button"
                             onClick={handleFetchYtdForEdit}
                             disabled={fetchingHistorical || loading}
                             className="text-[10px] text-emerald-400 hover:text-emerald-300 underline font-mono"
-                            title="Consultar cotización a inicio de año en Yahoo"
+                            title={
+                              language === 'es'
+                                ? "Consultar cotización a inicio de año en Yahoo"
+                                : "Fetch start-of-year quote from Yahoo"
+                            }
                           >
-                            {fetchingHistorical ? 'Buscando...' : 'Obtener de Yahoo'}
+                            {fetchingHistorical
+                              ? (language === 'es' ? 'Buscando...' : 'Searching...')
+                              : (language === 'es' ? 'Obtener de Yahoo' : 'Fetch from Yahoo')}
                           </button>
                         </div>
                         <input
@@ -1162,7 +1236,7 @@ export function ManualEntryModal({
                       </div>
                       <div>
                         <label className="block text-xs font-medium text-zinc-300 mb-1">
-                          Fecha YTD
+                          {language === 'es' ? 'Fecha YTD' : 'YTD Date'}
                         </label>
                         <input
                           type="date"
@@ -1175,7 +1249,7 @@ export function ManualEntryModal({
 
                     <div>
                       <label className="block text-xs font-medium text-zinc-300 mb-1">
-                        Comentario
+                        {language === 'es' ? 'Comentario' : 'Comment'}
                       </label>
                       <textarea
                         rows={2}
@@ -1192,10 +1266,17 @@ export function ManualEntryModal({
                         onClick={handleSingleYahooRefresh}
                         disabled={isSubmitting}
                         className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 hover:bg-emerald-500/20 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0 whitespace-nowrap"
-                        title="Consultar cotización en Yahoo Finance ahora"
+                        title={
+                          language === 'es'
+                            ? "Consultar cotización en Yahoo Finance ahora"
+                            : "Fetch quote from Yahoo Finance now"
+                        }
                       >
                         <RefreshCw className="w-3.5 h-3.5" />
-                        <span className="hidden sm:inline">Consultar </span>Yahoo
+                        <span className="hidden sm:inline">
+                          {language === 'es' ? 'Consultar ' : 'Fetch '}
+                        </span>
+                        Yahoo
                       </button>
 
                       <div className="flex items-center justify-end gap-2 ml-auto shrink-0">
@@ -1205,23 +1286,27 @@ export function ManualEntryModal({
                           disabled={isSubmitting}
                           className="px-3 py-1.5 rounded-xl text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition-colors disabled:opacity-50 cursor-pointer whitespace-nowrap"
                         >
-                          Cancelar
+                          {language === 'es' ? 'Cancelar' : 'Cancel'}
                         </button>
                         <button
                           type="submit"
                           disabled={isSubmitting}
                           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-semibold text-emerald-400 bg-emerald-500/10 border border-emerald-500/30 hover:bg-emerald-500/20 hover:border-emerald-500/50 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
-                          title="Guardar todos los cambios sin modificar la fecha de análisis"
+                          title={
+                            language === 'es'
+                              ? "Guardar todos los cambios sin modificar la fecha de análisis"
+                              : "Save all changes without modifying analysis date"
+                          }
                         >
                           {savingAction === 'standard' ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              Guardando...
+                              {language === 'es' ? 'Guardando...' : 'Saving...'}
                             </>
                           ) : (
                             <>
                               <Check className="w-3.5 h-3.5" />
-                              Guardar Cambios
+                              {language === 'es' ? 'Guardar Cambios' : 'Save Changes'} {/* Guardar Cambios */}
                             </>
                           )}
                         </button>
@@ -1230,17 +1315,21 @@ export function ManualEntryModal({
                           onClick={() => handleSave(true)}
                           disabled={isSubmitting}
                           className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 shadow-sm shadow-emerald-950/40 transition-colors disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer whitespace-nowrap"
-                          title="Guardar cambios y actualizar la fecha de análisis a la fecha de hoy"
+                          title={
+                            language === 'es'
+                              ? "Guardar cambios y actualizar la fecha de análisis a la fecha de hoy"
+                              : "Save changes and update analysis date to today"
+                          }
                         >
                           {savingAction === 'with_date' ? (
                             <>
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                              Actualizando...
+                              {language === 'es' ? 'Actualizando...' : 'Updating...'}
                             </>
                           ) : (
                             <>
                               <CalendarCheck className="w-3.5 h-3.5" />
-                              Guardar + Actualizar Fecha
+                              {language === 'es' ? 'Guardar + Actualizar Fecha' : 'Save + Update Date'} {/* Guardar + Actualizar Fecha */}
                             </>
                           )}
                         </button>
@@ -1254,10 +1343,12 @@ export function ManualEntryModal({
                       <div>
                         <h4 className="text-xs font-semibold text-rose-400 flex items-center gap-1.5">
                           <Trash2 className="w-3.5 h-3.5" />
-                          Eliminar Instrumento
+                          {language === 'es' ? 'Eliminar Instrumento' : 'Delete Instrument'}
                         </h4>
                         <p className="text-[11px] text-zinc-500 mt-0.5">
-                          Elimina <strong className="text-zinc-300">{originalTickerToEdit || editTicker}</strong> y todas sus cotizaciones asociadas.
+                          {language === 'es' ? 'Elimina ' : 'Delete '}
+                          <strong className="text-zinc-300">{originalTickerToEdit || editTicker}</strong>
+                          {language === 'es' ? ' y todas sus cotizaciones asociadas.' : ' and all its associated quotes.'}
                         </p>
                       </div>
 
@@ -1268,7 +1359,7 @@ export function ManualEntryModal({
                             onClick={() => setConfirmDelete(false)}
                             className="px-2.5 py-1 text-xs text-zinc-400 hover:text-zinc-200"
                           >
-                            Cancelar
+                            {language === 'es' ? 'Cancelar' : 'Cancel'}
                           </button>
                           <button
                             type="button"
@@ -1277,7 +1368,7 @@ export function ManualEntryModal({
                             className="px-3 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-500 rounded-lg transition-colors flex items-center gap-1.5"
                           >
                             {loading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : null}
-                            Confirmar Eliminación
+                            {language === 'es' ? 'Confirmar Eliminación' : 'Confirm Deletion'}
                           </button>
                         </div>
                       ) : (
@@ -1286,7 +1377,7 @@ export function ManualEntryModal({
                           onClick={() => setConfirmDelete(true)}
                           className="px-3 py-1.5 text-xs font-medium text-rose-400 border border-rose-500/30 rounded-lg hover:bg-rose-500/10 transition-colors"
                         >
-                          Eliminar
+                          {language === 'es' ? 'Eliminar' : 'Delete'}
                         </button>
                       )}
                     </div>

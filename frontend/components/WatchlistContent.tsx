@@ -12,6 +12,7 @@ import { MetricCards } from '@/components/MetricCards';
 import { WatchlistTable } from '@/components/WatchlistTable';
 import { getPositions, getMetrics, getConfig } from '@/lib/api';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { useLanguage } from '@/context/LanguageContext';
 import { Check, AlertTriangle, Info, X } from 'lucide-react';
 
 const ManualEntryModal = dynamic(
@@ -71,6 +72,7 @@ function ToastItem({ toast, onDismiss }: { toast: ToastData; onDismiss: () => vo
  */
 export function WatchlistContent({ initialPositions, initialMetrics, initialConfig }: WatchlistContentProps) {
   const portfolioContext = usePortfolioOptional();
+  const { t } = useLanguage();
 
   // Seed initial server-fetched data into portfolio provider
   const seedInitialData = portfolioContext?.seedInitialData;
@@ -294,10 +296,10 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-white">
-            Lista de Seguimiento
+            {t('mainWatchlist')}
           </h1>
           <p className="text-sm text-zinc-400 mt-1">
-            Valores registrados, cotizaciones en tiempo real y variaciones calculadas en el servidor.
+            {t('mainWatchlistSubtitle')}
           </p>
         </div>
 
@@ -315,15 +317,17 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
 
           return (
             <div
-              className={`flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
+              key={isRefreshing ? 'badge-refreshing' : 'badge-idle'}
+              translate="no"
+              className={`notranslate flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
                 isRefreshing
                   ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
                   : 'bg-zinc-900/90 border-zinc-800 text-zinc-300'
               }`}
               title={
                 isRefreshing
-                  ? 'Actualización en lote en progreso en el servidor...'
-                  : `Actualización automática cada ${appConfig.refresh_interval_seconds}s en lotes de ${appConfig.batch_size} tickers`
+                  ? t('refreshInProgress')
+                  : t('autoRefreshEvery', { seconds: appConfig.refresh_interval_seconds, size: appConfig.batch_size })
               }
             >
               {isRefreshing ? (
@@ -333,7 +337,8 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
                   </span>
                   <span className="text-amber-400 font-semibold animate-pulse">
-                    {currentBatch > 0 ? 'Actualizando lote...' : 'Iniciando actualización...'}
+                    {/* Actualizando lote... */}
+                    {currentBatch > 0 ? t('updatingBatch') : t('startingUpdate')}
                   </span>
                   <span className="text-zinc-600">·</span>
                   <span className="text-amber-300/80">
@@ -342,11 +347,11 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
                         <strong className="text-amber-200 font-semibold">
                           {currentBatch}/{totalBatches}
                         </strong>{' '}
-                        ({processed}/{total})
+                        <span>({processed}/{total})</span>
                       </>
                     ) : (
                       <>
-                        Batch{' '}
+                        <span>{t('batch')} </span>
                         <strong className="text-amber-200 font-semibold">
                           {appConfig.batch_size}
                         </strong>
@@ -361,14 +366,14 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
                   </span>
                   <span>
-                    Auto{' '}
+                    <span>{t('autoSync')} </span>
                     <strong className="text-emerald-400 font-semibold">
                       {appConfig.refresh_interval_seconds}s
                     </strong>
                   </span>
                   <span className="text-zinc-600">·</span>
                   <span className="text-zinc-400">
-                    Batch{' '}
+                    <span>{t('batch')} </span>
                     <strong className="text-zinc-200 font-semibold">
                       {appConfig.batch_size}
                     </strong>

@@ -5,8 +5,11 @@ import Link from 'next/link';
 import { BarChart3 } from 'lucide-react';
 import { HeaderNav } from './HeaderNav';
 import { UserAuthButton } from './UserAuthButton';
+import { useLanguage } from '@/context/LanguageContext';
 
 export function AppHeader() {
+  const { language, setLanguage } = useLanguage();
+
   return (
     <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
       <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -27,6 +30,34 @@ export function AppHeader() {
         </div>
 
         <div className="flex items-center gap-3">
+          {/* Language Switcher */}
+          <div className="flex items-center rounded-lg bg-zinc-900 border border-zinc-800 p-0.5 text-xs font-mono">
+            <button
+              type="button"
+              onClick={() => setLanguage('en')}
+              className={`px-2 py-0.5 rounded transition-colors ${
+                language === 'en'
+                  ? 'bg-zinc-800 text-emerald-400 font-bold shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="English"
+            >
+              EN
+            </button>
+            <button
+              type="button"
+              onClick={() => setLanguage('es')}
+              className={`px-2 py-0.5 rounded transition-colors ${
+                language === 'es'
+                  ? 'bg-zinc-800 text-emerald-400 font-bold shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+              title="Español"
+            >
+              ES
+            </button>
+          </div>
+
           <UserAuthButton />
           <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-zinc-400 font-mono">
             <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />

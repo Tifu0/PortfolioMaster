@@ -5,8 +5,11 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { BarChart3, PlusCircle, Upload, Database } from 'lucide-react';
 
+import { useLanguage } from '@/context/LanguageContext';
+
 export function HeaderNav() {
   const pathname = usePathname();
+  const { t } = useLanguage();
 
   const handleAddClick = (e: React.MouseEvent) => {
     if (pathname === '/') {
@@ -31,7 +34,7 @@ export function HeaderNav() {
         }`}
       >
         <BarChart3 className="w-4 h-4" />
-        Watchlist
+        {t('watchlist')}
       </Link>
       <Link
         href="/?add=1"
@@ -40,7 +43,7 @@ export function HeaderNav() {
         title="Add new instrument manually"
       >
         <PlusCircle className="w-4 h-4" />
-        Add Instrument
+        {t('addInstrument')}
       </Link>
       <Link
         href="/import"
@@ -51,7 +54,7 @@ export function HeaderNav() {
         }`}
       >
         <Upload className="w-4 h-4" />
-        Import
+        {t('import')}
       </Link>
       <Link
         href="/backup"
@@ -62,7 +65,7 @@ export function HeaderNav() {
         }`}
       >
         <Database className="w-4 h-4" />
-        Backup & Export
+        {t('backupExport')} {/* Backup & Export */}
       </Link>
     </div>
   );

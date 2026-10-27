@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
 import { useAuth } from '@/context/AuthContext';
+import { useLanguage } from '@/context/LanguageContext';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import {
   fetchAnalysisPrice,
@@ -522,6 +523,7 @@ export function WatchlistTable({
 }: WatchlistTableProps) {
   const portfolioContext = usePortfolioOptional();
   const { user, isAuthConfigured, openAuthModal } = useAuth();
+  const { language, t } = useLanguage();
 
   // Fallback data state used only if rendered outside PortfolioProvider
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
@@ -1137,11 +1139,13 @@ export function WatchlistTable({
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
             className="flex items-center justify-center gap-1 mx-auto hover:text-white transition-colors uppercase tracking-wider select-none text-center group/th-date text-inherit cursor-pointer"
-            title="Ordenar por fecha de análisis"
+            title={language === 'es' ? 'Ordenar por fecha de análisis' : 'Sort by analysis date'}
           >
             <div className="flex flex-col items-center leading-tight [word-break:keep-all] whitespace-normal">
-              <span>Fecha</span>
-              <span className="text-[0.9em] text-zinc-400 font-medium">Análisis</span>
+              <span>{language === 'es' ? 'Fecha' : 'Analysis'}</span>
+              <span className="text-[0.9em] text-zinc-400 font-medium">
+                {language === 'es' ? 'Análisis' : 'Date'}
+              </span>
             </div>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1304,7 +1308,9 @@ export function WatchlistTable({
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
             className="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            <span className="[word-break:keep-all] whitespace-normal">Empresa</span>
+            <span className="[word-break:keep-all] whitespace-normal">
+              {language === 'es' ? 'Empresa' : 'Company'}
+            </span>
             <ColumnSortIndicator column={column} />
           </button>
         ),
@@ -1321,7 +1327,7 @@ export function WatchlistTable({
         maxSize: 220,
         header: () => (
           <span className="uppercase tracking-wider text-inherit [word-break:keep-all] whitespace-normal">
-            Mercado
+            {language === 'es' ? 'Mercado' : 'Exchange'}
           </span>
         ),
         cell: ({ row }) => (
@@ -1337,7 +1343,7 @@ export function WatchlistTable({
         maxSize: 160,
         header: () => (
           <span className="uppercase tracking-wider text-inherit [word-break:keep-all] whitespace-normal">
-            Divisa
+            {language === 'es' ? 'Divisa' : 'Currency'}
           </span>
         ),
         cell: ({ row }) => (
@@ -1358,7 +1364,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              Último Precio
+              {language === 'es' ? 'Último Precio' : 'Last Price'}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1388,7 +1394,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              Var. Diaria
+              {language === 'es' ? 'Var. Diaria' : 'Day Var.'}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1424,7 +1430,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              Var. YTD
+              {language === 'es' ? 'Var. YTD' : 'YTD Var.'}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1453,7 +1459,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              Var. vs Análisis
+              {language === 'es' ? 'Var. vs Análisis' : 'Var. vs Analysis'}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1486,7 +1492,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              Caída a Objetivo
+              {language === 'es' ? 'Caída a Objetivo' : 'To Target'}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1515,7 +1521,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              P. Objetivo
+              {language === 'es' ? 'P. Objetivo' : 'Target Price'}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1604,6 +1610,7 @@ export function WatchlistTable({
       onEditTicker,
       expandedDescriptionTickers,
       toggleDescription,
+      language,
     ]
   );
 
@@ -1696,7 +1703,7 @@ export function WatchlistTable({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
             <input
               type="text"
-              placeholder="Buscar ticker o empresa..."
+              placeholder={language === 'es' ? 'Buscar ticker o empresa...' : 'Search ticker or company...'}
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               className="w-full bg-zinc-950/70 border border-zinc-800 rounded-lg pl-9 pr-3 py-1.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-sans h-9"
@@ -1706,13 +1713,13 @@ export function WatchlistTable({
           {/* Mercado Filter */}
           <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 h-9 shrink-0">
             <Filter className="w-3.5 h-3.5 text-zinc-400" />
-            <span className="text-xs text-zinc-400">Mercado:</span>
+            <span className="text-xs text-zinc-400">{language === 'es' ? 'Mercado:' : 'Exchange:'}</span>
             <select
               value={selectedExchange}
               onChange={(e) => setSelectedExchange(e.target.value)}
               className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer pr-1"
             >
-              <option value="ALL" className="bg-zinc-900 text-zinc-200">Todos</option>
+              <option value="ALL" className="bg-zinc-900 text-zinc-200">{language === 'es' ? 'Todos' : 'All'}</option>
               {exchanges.map((ex) => (
                 <option key={ex} value={ex} className="bg-zinc-900 text-zinc-200">
                   {ex}
@@ -1723,13 +1730,13 @@ export function WatchlistTable({
 
           {/* Divisa Filter */}
           <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 h-9 shrink-0">
-            <span className="text-xs text-zinc-400">Divisa:</span>
+            <span className="text-xs text-zinc-400">{language === 'es' ? 'Divisa:' : 'Currency:'}</span>
             <select
               value={selectedCurrency}
               onChange={(e) => setSelectedCurrency(e.target.value)}
               className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer pr-1"
             >
-              <option value="ALL" className="bg-zinc-900 text-zinc-200">Todas</option>
+              <option value="ALL" className="bg-zinc-900 text-zinc-200">{language === 'es' ? 'Todas' : 'All'}</option>
               {currencies.map((curr) => (
                 <option key={curr} value={curr} className="bg-zinc-900 text-zinc-200">
                   {curr}
@@ -1740,7 +1747,9 @@ export function WatchlistTable({
 
           {/* Counter Badge */}
           <div className="inline-flex items-center text-xs text-zinc-400 px-2.5 h-9 font-mono whitespace-nowrap shrink-0 bg-zinc-950/40 border border-zinc-800/80 rounded-lg">
-            Mostrando <span className="text-zinc-200 font-semibold mx-1">{filteredData.length}</span> de{' '}
+            {language === 'es' ? 'Mostrando' : 'Showing'}{' '}
+            <span className="text-zinc-200 font-semibold mx-1">{filteredData.length}</span>{' '}
+            {language === 'es' ? 'de' : 'of'}{' '}
             <span className="text-zinc-200 font-semibold ml-1">{data.length}</span>
           </div>
         </div>
@@ -1754,10 +1763,10 @@ export function WatchlistTable({
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
                 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-              title="Añadir un nuevo valor manualmente"
+              title={language === 'es' ? 'Añadir un nuevo valor manualmente' : 'Add new instrument manually'}
             >
               <PlusCircle className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">Añadir Valor</span>
+              <span className="hidden sm:inline">{language === 'es' ? 'Añadir Valor' : 'Add Instrument'}</span>
             </button>
           )}
 
@@ -1768,10 +1777,10 @@ export function WatchlistTable({
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
                 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-              title="Importar valores desde hojas de cálculo CSV o Excel"
+              title={language === 'es' ? 'Importar valores desde hojas de cálculo CSV o Excel' : 'Import instruments from CSV or Excel spreadsheet'}
             >
               <Upload className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">Importar</span>
+              <span className="hidden sm:inline">{language === 'es' ? 'Importar' : 'Import'}</span>
             </button>
           )}
 
@@ -1782,10 +1791,10 @@ export function WatchlistTable({
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
                 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-              title="Exportar datos a Excel, CSV, JSON o gestionar copias de seguridad"
+              title={language === 'es' ? 'Exportar datos a Excel, CSV, JSON o gestionar copias de seguridad' : 'Export data to Excel, CSV, JSON or manage backups'}
             >
               <Download className="w-4 h-4 text-blue-400" />
-              <span className="hidden sm:inline">Exportar / Copia</span>
+              <span className="hidden sm:inline">{language === 'es' ? 'Exportar / Copia' : 'Export / Backup'}</span>
             </button>
           )}
 
@@ -1810,21 +1819,21 @@ export function WatchlistTable({
                   bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
                   hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
                   disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                title="Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance"
+                title={language === 'es' ? 'Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance' : 'Refresh all quotes and analysis prices from Yahoo Finance'}
               >
                 {isAnyRefreshing ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
                     <span className="hidden sm:inline text-amber-300">
                       {currentBatch > 0 && totalBatches > 0
-                        ? `Actualizando ${currentBatch}/${totalBatches} (${processed}/${total})...`
-                        : 'Actualizando...'}
+                        ? `${language === 'es' ? 'Actualizando' : 'Updating'} ${currentBatch}/${totalBatches} (${processed}/${total})...`
+                        : `${language === 'es' ? 'Actualizando...' : 'Refreshing...'}`}
                     </span>
                   </>
                 ) : (
                   <>
                     <RefreshCw className="w-4 h-4" />
-                    <span className="hidden sm:inline">Actualizar Cotizaciones</span>
+                    <span className="hidden sm:inline">{language === 'es' ? 'Actualizar Cotizaciones' : 'Refresh Quotes'}</span>
                   </>
                 )}
               </button>
@@ -1843,12 +1852,12 @@ export function WatchlistTable({
               }`}
               title={
                 hasCustomColumnSizing
-                  ? 'Restablecer el ancho de las columnas a los valores por defecto'
-                  : 'Las columnas ya tienen su ancho por defecto'
+                  ? (language === 'es' ? 'Restablecer el ancho de las columnas a los valores por defecto' : 'Reset column widths to default values')
+                  : (language === 'es' ? 'Las columnas ya tienen su ancho por defecto' : 'Columns already have default widths')
               }
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">Restablecer Columnas</span>
+              <span className="hidden xl:inline">{language === 'es' ? 'Restablecer Columnas' : 'Reset Columns'}</span>
             </button>
           )}
 
@@ -1857,17 +1866,17 @@ export function WatchlistTable({
             <div className="relative" ref={rowHeightRef}>
               <button
                 onClick={() => setRowHeightOpen((prev) => !prev)}
-                aria-label="Ajustar altura de filas"
+                aria-label={language === 'es' ? 'Ajustar altura de filas' : 'Adjust row height'}
                 aria-expanded={rowHeightOpen}
                 className={`h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all shrink-0 border cursor-pointer ${
                   rowHeightOpen
                     ? 'bg-zinc-800 text-indigo-400 border-zinc-600 ring-1 ring-indigo-500/40 shadow-sm'
                     : 'bg-zinc-800/90 text-zinc-200 border border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm'
                 }`}
-                title="Ajustar altura y densidad vertical de las filas"
+                title={language === 'es' ? 'Ajustar altura y densidad vertical de las filas' : 'Adjust table row height and vertical density'}
               >
                 <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
-                <span>Altura · {rowHeight}px</span>
+                <span>{language === 'es' ? 'Altura' : 'Row Height'} · {rowHeight}px</span>
               </button>
 
               {rowHeightOpen && (
@@ -1882,10 +1891,10 @@ export function WatchlistTable({
                       </div>
                       <div>
                         <span className="text-xs font-semibold text-white tracking-tight">
-                          Altura de Filas
+                          {language === 'es' ? 'Altura de Filas' : 'Row Height'}
                         </span>
                         <span className="text-[10px] text-zinc-400 font-mono ml-2">
-                          {rowHeight <= 36 ? 'Compacta' : rowHeight <= 54 ? 'Estándar' : 'Espaciosa'}
+                          {rowHeight <= 36 ? (language === 'es' ? 'Compacta' : 'Compact') : rowHeight <= 54 ? (language === 'es' ? 'Estándar' : 'Standard') : (language === 'es' ? 'Espaciosa' : 'Spacious')}
                         </span>
                       </div>
                     </div>
@@ -1893,7 +1902,7 @@ export function WatchlistTable({
                       <button
                         onClick={() => handleRowHeightChange(DEFAULT_ROW_HEIGHT)}
                         className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium flex items-center gap-1 transition-colors cursor-pointer"
-                        title="Restablecer a 48px"
+                        title={language === 'es' ? 'Restablecer a 48px' : 'Reset to 48px'}
                       >
                         <RotateCcw className="w-3 h-3" />
                         <span>48px</span>
@@ -1901,7 +1910,7 @@ export function WatchlistTable({
                       <button
                         onClick={() => setRowHeightOpen(false)}
                         className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors cursor-pointer"
-                        title="Cerrar"
+                        title={language === 'es' ? 'Cerrar' : 'Close'}
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -1911,8 +1920,8 @@ export function WatchlistTable({
                   {/* Slider & Numeric Input */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-zinc-400 font-medium">Densidad vertical:</span>
-                      <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-lg px-2 py-1 focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500">
+                      <span className="text-zinc-400 font-medium">{language === 'es' ? 'Densidad vertical:' : 'Vertical density:'}</span>
+                      <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500">
                         <input
                           type="number"
                           min={MIN_ROW_HEIGHT}
@@ -1941,18 +1950,18 @@ export function WatchlistTable({
                     />
 
                     <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
-                      <span>{MIN_ROW_HEIGHT}px (Mín)</span>
-                      <span>{DEFAULT_ROW_HEIGHT}px (Defecto)</span>
-                      <span>{MAX_ROW_HEIGHT}px (Máx)</span>
+                      <span>{MIN_ROW_HEIGHT}px ({language === 'es' ? 'Mín' : 'Min'})</span>
+                      <span>{DEFAULT_ROW_HEIGHT}px ({language === 'es' ? 'Defecto' : 'Default'})</span>
+                      <span>{MAX_ROW_HEIGHT}px ({language === 'es' ? 'Máx' : 'Max'})</span>
                     </div>
                   </div>
 
                   {/* Preset Buttons */}
                   <div className="flex items-center gap-1.5">
                     {[
-                      { label: 'Compacto', val: 34 },
-                      { label: 'Estándar', val: 48 },
-                      { label: 'Espacioso', val: 64 },
+                      { label: language === 'es' ? 'Compacto' : 'Compact', val: 34 },
+                      { label: language === 'es' ? 'Estándar' : 'Standard', val: 48 },
+                      { label: language === 'es' ? 'Espacioso' : 'Spacious', val: 64 },
                     ].map((preset) => (
                       <button
                         key={preset.val}
@@ -1974,9 +1983,12 @@ export function WatchlistTable({
                       <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                       <div className="leading-relaxed">
                         <span className="font-semibold text-amber-200">
-                          Altura mínima alcanzada ({MIN_ROW_HEIGHT}px).
+                          {/* Altura mínima alcanzada */}
+                          {language === 'es' ? 'Altura mínima alcanzada' : 'Minimum row height reached'} ({MIN_ROW_HEIGHT}px).
                         </span>{' '}
-                        Valores menores están deshabilitados para evitar el solapamiento o recorte de controles interactivos, fechas y distintivos.
+                        {language === 'es'
+                          ? 'Valores menores están deshabilitados para evitar el solapamiento o recorte de controles interactivos, fechas y distintivos.'
+                          : 'Smaller values are disabled to avoid overlapping or clipping of interactive controls, dates, and badges.'}
                       </div>
                     </div>
                   )}
@@ -1985,7 +1997,7 @@ export function WatchlistTable({
                   <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-                        Vista previa en directo (2 filas)
+                        {language === 'es' ? 'Vista previa en directo (2 filas)' : 'Live preview (2 rows)'}
                       </span>
                       <span className="text-[10px] text-zinc-500 font-mono">
                         {rowHeight}px
@@ -1997,9 +2009,9 @@ export function WatchlistTable({
                         <thead className="bg-zinc-900/90 text-[10px] text-zinc-400 border-b border-zinc-800 uppercase tracking-wider">
                           <tr>
                             <th className="py-1 px-2.5 w-[34%]">Ticker</th>
-                            <th className="py-1 px-2 text-right w-[24%]">Precio</th>
+                            <th className="py-1 px-2 text-right w-[24%]">{language === 'es' ? 'Precio' : 'Price'}</th>
                             <th className="py-1 px-2 text-right w-[24%]">Var.</th>
-                            <th className="py-1 px-2 text-center w-[18%]">Acciones</th>
+                            <th className="py-1 px-2 text-center w-[18%]">{language === 'es' ? 'Acciones' : 'Actions'}</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-800/60 font-sans">
@@ -2096,10 +2108,10 @@ export function WatchlistTable({
                 bg-rose-500/5 text-zinc-500 border border-zinc-800
                 hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30
                 disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-              title="Borrar todos los datos de la base de datos"
+              title={language === 'es' ? 'Borrar todos los datos de la base de datos' : 'Wipe all data from the database'}
             >
               <Trash2 className="w-4 h-4" />
-              <span className="hidden sm:inline">Borrar BD</span>
+              <span className="hidden sm:inline">{language === 'es' ? 'Borrar BD' : 'Wipe DB'}</span>
             </button>
           )}
 
@@ -2107,14 +2119,14 @@ export function WatchlistTable({
           <div className="relative" ref={settingsRef}>
             <button
               onClick={() => setSettingsOpen((prev) => !prev)}
-              aria-label="Personalizar barra de herramientas"
+              aria-label={language === 'es' ? 'Personalizar barra de herramientas' : 'Customize toolbar'}
               aria-expanded={settingsOpen}
               className={`h-9 w-9 inline-flex items-center justify-center rounded-lg text-xs font-medium transition-all shrink-0 border cursor-pointer ${
                 settingsOpen
                   ? 'bg-zinc-800 text-emerald-400 border-zinc-600 ring-1 ring-emerald-500/40'
                   : 'bg-zinc-800/90 text-zinc-300 border border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm'
               }`}
-              title="Personalizar botones de la barra de herramientas"
+              title={language === 'es' ? 'Personalizar botones de la barra de herramientas' : 'Customize toolbar buttons'}
             >
               <SlidersHorizontal className="w-4 h-4" />
             </button>
@@ -2127,26 +2139,45 @@ export function WatchlistTable({
                   <div className="flex items-center gap-2">
                     <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
                     <span className="text-xs font-semibold text-white tracking-tight">
-                      Personalizar Barra
+                      {language === 'es' ? 'Personalizar Barra' : 'Customize Toolbar'}
                     </span>
                   </div>
                   <button
                     onClick={() => setSettingsOpen(false)}
                     className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors cursor-pointer"
-                    title="Cerrar"
+                    title={language === 'es' ? 'Cerrar' : 'Close'}
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
                 <p className="text-[11px] text-zinc-400 mt-2 mb-2 leading-relaxed">
-                  Activa o desactiva las acciones visibles en la barra principal:
+                  {language === 'es'
+                    ? 'Activa o desactiva las acciones visibles en la barra principal:'
+                    : 'Toggle visible action buttons in the main toolbar:'}
                 </p>
 
                 <div className="space-y-1">
                   {TOOLBAR_ITEMS.map((item) => {
                     const isEnabled = toolbarConfig[item.key];
                     const Icon = item.icon;
+                    const itemLabel =
+                      language === 'es'
+                        ? item.label
+                        : item.key === 'updateQuotes'
+                        ? 'Refresh Quotes'
+                        : item.key === 'addInstrument'
+                        ? 'Add Instrument'
+                        : item.key === 'restoreColumns'
+                        ? 'Reset Columns'
+                        : item.key === 'rowHeight'
+                        ? 'Row Height'
+                        : item.key === 'exportBackup'
+                        ? 'Export / Backup'
+                        : item.key === 'importValues'
+                        ? 'Import Values'
+                        : 'Wipe Database';
+
                     return (
                       <div
                         key={item.key}
@@ -2156,7 +2187,7 @@ export function WatchlistTable({
                         <div className="flex items-center gap-2.5 min-w-0 pr-2">
                           <Icon className={`w-3.5 h-3.5 shrink-0 ${item.iconColor}`} />
                           <span className="text-xs text-zinc-300 group-hover:text-white font-medium truncate">
-                            {item.label}
+                            {itemLabel}
                           </span>
                         </div>
                         <div
@@ -2179,10 +2210,10 @@ export function WatchlistTable({
                   <button
                     onClick={handleResetToolbarConfig}
                     className="text-[11px] text-zinc-400 hover:text-emerald-400 font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title="Restablecer visibilidad a los valores originales"
+                    title={language === 'es' ? 'Restablecer visibilidad a los valores originales' : 'Reset toolbar visibility to default values'}
                   >
                     <RotateCcw className="w-3 h-3" />
-                    <span>Restablecer por defecto</span>
+                    <span>{language === 'es' ? 'Restablecer por defecto' : 'Reset to defaults'}</span>
                   </button>
                   <span className="text-[10px] text-zinc-600 font-mono">localStorage</span>
                 </div>
@@ -2340,17 +2371,21 @@ export function WatchlistTable({
                               onChange={(e) =>
                                 handleCommentChange(ticker, e.target.value)
                               }
-                              placeholder={`Escribe aquí la descripción, notas o tesis de inversión de ${row.original.company_name}...`}
+                              placeholder={
+                                language === 'es'
+                                  ? `Escribe aquí la descripción, notas o tesis de inversión de ${row.original.company_name}...`
+                                  : `Write description, notes, or investment thesis for ${row.original.company_name}...`
+                              }
                               rows={3}
                               className="w-full bg-zinc-900/90 border border-zinc-800 rounded-lg p-3 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-sans leading-relaxed resize-y"
                             />
 
                             <div className="flex items-center justify-between text-xs pt-0.5">
                               <span className="text-zinc-500 text-[11px] font-mono">
-                                {currentComment.length} caracteres
+                                {currentComment.length} {language === 'es' ? 'caracteres' : 'characters'}
                                 {hasUnsavedChanges && (
                                   <span className="ml-2 text-amber-400">
-                                    • Cambios sin guardar
+                                    • {language === 'es' ? 'Cambios sin guardar' : 'Unsaved changes'}
                                   </span>
                                 )}
                               </span>
@@ -2359,7 +2394,7 @@ export function WatchlistTable({
                                   onClick={() => toggleDescription(ticker)}
                                   className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition"
                                 >
-                                  Cerrar
+                                  {language === 'es' ? 'Cerrar' : 'Close'}
                                 </button>
                                 <button
                                   onClick={() => handleSaveComment(row.original)}
@@ -2369,12 +2404,12 @@ export function WatchlistTable({
                                   {savingCommentTicker === ticker ? (
                                     <>
                                       <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                      Guardando...
+                                      {language === 'es' ? 'Guardando...' : 'Saving...'}
                                     </>
                                   ) : (
                                     <>
                                       <Check className="w-3.5 h-3.5" />
-                                      Guardar Descripción
+                                      {language === 'es' ? 'Guardar Descripción' : 'Save Description'}
                                     </>
                                   )}
                                 </button>
@@ -2399,27 +2434,29 @@ export function WatchlistTable({
                         <LogIn className="w-6 h-6" />
                       </div>
                       <p className="text-sm font-semibold text-white">
-                        Inicia sesión para ver tu cartera
+                        {language === 'es' ? 'Inicia sesión para ver tu cartera' : 'Sign in to view your portfolio'}
                       </p>
                       <p className="text-xs text-zinc-400 text-center leading-relaxed">
-                        Accede con tu cuenta para visualizar tus posiciones, cotizaciones en tiempo real y métricas financieras.
+                        {language === 'es'
+                          ? 'Accede con tu cuenta para visualizar tus posiciones, cotizaciones en tiempo real y métricas financieras.'
+                          : 'Log in with your account to view your positions, real-time quotes, and financial metrics.'}
                       </p>
                       <button
                         onClick={() => openAuthModal()}
                         className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-zinc-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-lg shadow-emerald-950/40"
                       >
                         <LogIn className="w-4 h-4" />
-                        Iniciar Sesión
+                        {language === 'es' ? 'Iniciar Sesión' : 'Sign In'}
                       </button>
                     </div>
                   ) : portfolioContext && (!portfolioContext.isInitialized || portfolioContext.isRefreshing) && data.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
                       <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
                       <p className="text-sm font-medium text-zinc-300">
-                        Cargando tu lista de seguimiento...
+                        {language === 'es' ? 'Cargando tu lista de seguimiento...' : 'Loading your watchlist...'}
                       </p>
                       <p className="text-xs text-zinc-500">
-                        Sincronizando cotizaciones con el servidor...
+                        {language === 'es' ? 'Sincronizando cotizaciones con el servidor...' : 'Syncing quotes with server...'}
                       </p>
                     </div>
                   ) : (
@@ -2427,13 +2464,13 @@ export function WatchlistTable({
                       <Info className="w-8 h-8 text-zinc-600" />
                       <p className="text-sm font-medium text-zinc-300">
                         {data.length === 0
-                          ? 'La lista de seguimiento está vacía.'
-                          : 'No se encontraron valores con los filtros actuales.'}
+                          ? (language === 'es' ? 'La lista de seguimiento está vacía.' : 'The watchlist is empty.')
+                          : (language === 'es' ? 'No se encontraron valores con los filtros actuales.' : 'No instruments found with current filters.')}
                       </p>
                       <p className="text-xs text-zinc-500">
                         {data.length === 0
-                          ? 'Añade valores manualmente o importa un archivo CSV/Excel.'
-                          : 'Prueba a cambiar los criterios de búsqueda o el filtro de mercado/divisa.'}
+                          ? (language === 'es' ? 'Añade valores manualmente o importa un archivo CSV/Excel.' : 'Add instruments manually or import a CSV/Excel file.')
+                          : (language === 'es' ? 'Prueba a cambiar los criterios de búsqueda o el filtro de mercado/divisa.' : 'Try changing your search criteria or the market/currency filter.')}
                       </p>
                       {data.length === 0 && onAddInstrument && (
                         <button
@@ -2441,7 +2478,7 @@ export function WatchlistTable({
                           className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-950/40"
                         >
                           <PlusCircle className="w-4 h-4" />
-                          Añadir Primer Valor
+                          {language === 'es' ? 'Añadir Primer Valor' : 'Add First Instrument'}
                         </button>
                       )}
                     </div>
@@ -2463,7 +2500,7 @@ export function WatchlistTable({
                 tabIndex={0}
                 role="button"
                 className="group cursor-pointer border-t-2 border-dashed border-zinc-800/80 bg-zinc-950/30 hover:bg-emerald-500/[0.07] hover:border-emerald-500/30 transition-all select-none focus:outline-none focus:bg-emerald-500/[0.09]"
-                title="Añadir un nuevo valor manualmente al watchlist"
+                title={language === 'es' ? "Añadir un nuevo valor manualmente al watchlist" : "Add a new instrument manually to the watchlist"}
               >
                 <td
                   colSpan={columns.length}
@@ -2474,10 +2511,12 @@ export function WatchlistTable({
                       <PlusCircle className="w-3.5 h-3.5" />
                     </span>
                     <span className="text-xs font-semibold text-emerald-400 group-hover:text-emerald-300 transition-colors">
-                      Añadir un nuevo valor
+                      {language === 'es' ? 'Añadir un nuevo valor' : 'Add new instrument'}
                     </span>
                     <span className="hidden sm:inline text-[11px] text-zinc-500 group-hover:text-zinc-400 transition-colors">
-                      — Haz clic aquí para registrar un instrumento o cotización manualmente
+                      {language === 'es'
+                        ? '— Haz clic aquí para registrar un instrumento o cotización manualmente'
+                        : '— Click here to manually register an instrument or quote'}
                     </span>
                   </div>
                 </td>
@@ -2492,7 +2531,9 @@ export function WatchlistTable({
         <div className="absolute inset-0 bg-zinc-950/20 rounded-xl flex items-center justify-center pointer-events-none z-10">
           <div className="flex items-center gap-3 bg-zinc-900/95 border border-zinc-700 rounded-xl px-5 py-3 shadow-2xl">
             <Loader2 className="w-5 h-5 animate-spin text-emerald-400" />
-            <span className="text-sm text-zinc-200 font-medium">Actualizando Yahoo Finance...</span>
+            <span className="text-sm text-zinc-200 font-medium">
+              {language === 'es' ? 'Actualizando Yahoo Finance...' : 'Updating Yahoo Finance...'}
+            </span>
           </div>
         </div>
       )}

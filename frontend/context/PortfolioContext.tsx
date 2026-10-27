@@ -327,6 +327,7 @@ export function PortfolioProvider({
         // If a batch finished in the backend, trigger silent portfolio reload only if not actively streaming via SSE
         if (counterChanged || refreshAtChanged || finishedRefreshing) {
           if (!isRefreshingRef.current) {
+            // Background reload: refreshPortfolioData({ silent: true })
             await refreshPortfolioDataRef.current({ silent: true });
           }
         }
