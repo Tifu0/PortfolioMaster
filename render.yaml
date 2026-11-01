@@ -20,10 +20,12 @@ services:
       - key: SUPABASE_URL
         sync: false
       - key: REFRESH_INTERVAL_SECONDS
-        value: "0"
+        value: "300"
       - key: REFRESH_COOLDOWN_SECONDS
         value: "120"
       - key: BATCH_SIZE
-        value: "10"
+        value: "50"
+      - key: REFRESH_BATCH_SIZE
+        value: "50"
       - key: CORS_ORIGINS
         sync: false

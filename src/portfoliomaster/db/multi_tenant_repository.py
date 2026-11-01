@@ -7,12 +7,13 @@ from globally shared market quotes.
 
 from __future__ import annotations
 
+import threading
 import uuid
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from typing import Dict, List, Optional, Set, Tuple
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from .schema import MarketQuote, RefreshRun, UserInstrument
@@ -58,6 +59,50 @@ def _parse_bool(v: object) -> bool:
         return v
     val_str = str(v).strip().lower()
     return val_str not in ("false", "0", "no", "f", "off")
+
+
+# In-memory quote delta tracker to eliminate redundant database writes
+# Tracks {canonical_symbol: (price, previous_close, status)}
+_LAST_KNOWN_QUOTES: Dict[str, Tuple[Optional[Decimal], Optional[Decimal], str]] = {}
+_DELTA_CACHE_LOCK = threading.Lock()
+
+
+def clear_quote_delta_cache() -> None:
+    """Clear the in-memory quote cache (useful for tests or forced full refreshes)."""
+    with _DELTA_CACHE_LOCK:
+        _LAST_KNOWN_QUOTES.clear()
+
+
+def filter_unchanged_quotes(quotes_data: List[dict]) -> List[dict]:
+    """Filter out quotes whose price, previous_close, and status are identical to last known state.
+
+    Prevents unnecessary writes to Supabase PostgreSQL when market prices have not moved
+    (e.g. after-hours, weekends, closed exchanges, or unchanged stocks).
+    """
+    filtered = []
+    with _DELTA_CACHE_LOCK:
+        for item in quotes_data:
+            canonical = str(item.get("provider_symbol", "")).strip().upper()
+            if not canonical:
+                continue
+            raw_price = item.get("price")
+            price = Decimal(str(raw_price)) if raw_price is not None and str(raw_price) != "" else None
+            raw_prev = item.get("previous_close")
+            prev_close = Decimal(str(raw_prev)) if raw_prev is not None and str(raw_prev) != "" else None
+            status = str(item.get("status", "FRESH")).upper()
+
+            last = _LAST_KNOWN_QUOTES.get(canonical)
+            if last is not None:
+                last_price, last_prev, last_status = last
+                if last_price == price and last_prev == prev_close and last_status == status:
+                    # Unchanged: skip DB write!
+                    continue
+
+            # Update cache and mark for persistence
+            _LAST_KNOWN_QUOTES[canonical] = (price, prev_close, status)
+            filtered.append(item)
+    return filtered
+
 
 
 class MultiTenantWatchlistRepository:
@@ -567,42 +612,44 @@ class GlobalMarketQuotesRepository:
     def upsert_market_quotes_batch(
         self,
         quotes_data: List[dict],
+        filter_deltas: bool = False,
     ) -> List[MarketQuote]:
-        """
-        High-performance batch upsert for quotes mirroring 'upsert_market_quote_safe'.
-        Fetches all matching symbols in a single SELECT query, updates/inserts in memory,
-        and executes a single session flush to dramatically reduce network round trips.
+        """High-performance zero-read batch upsert for quotes using native ON CONFLICT.
+
+        Eliminates network pre-SELECTs and ORM merge overhead. Executes a single
+        native SQL statement with ON CONFLICT (provider_symbol) DO UPDATE SET.
+        Preserves existing valid price, previous_close, and quote_timestamp on error.
         """
         if not quotes_data:
             return []
 
-        clean_symbols = [
-            str(q["provider_symbol"]).strip().upper()
-            for q in quotes_data
-            if q.get("provider_symbol")
-        ]
-        if not clean_symbols:
+        to_process = filter_unchanged_quotes(quotes_data) if filter_deltas else quotes_data
+        if not to_process:
             return []
 
         now = datetime.now(timezone.utc)
-        stmt = select(MarketQuote).where(MarketQuote.provider_symbol.in_(clean_symbols))
-        existing_map = {q.provider_symbol: q for q in self.session.scalars(stmt).all()}
-
+        clean_params = []
         results: List[MarketQuote] = []
-        for item in quotes_data:
+
+        for item in to_process:
             canonical = str(item.get("provider_symbol", "")).strip().upper()
             if not canonical:
                 continue
 
-            price = item.get("price")
-            previous_close = item.get("previous_close")
-            quote_timestamp = item.get("quote_timestamp")
+            raw_price = item.get("price")
+            price = Decimal(str(raw_price)) if raw_price is not None and str(raw_price) != "" else None
+            raw_prev = item.get("previous_close")
+            prev_close = (
+                Decimal(str(raw_prev))
+                if raw_prev is not None and str(raw_prev) != "" and Decimal(str(raw_prev)) > 0
+                else None
+            )
             status = str(item.get("status", "FRESH")).upper()
             error_message = item.get("error_message")
-            exchange = item.get("exchange")
-            currency = item.get("currency")
-            company_name = item.get("company_name")
-            provider = item.get("provider", "yahoo")
+            exchange = item.get("exchange") or "UNKNOWN"
+            currency = item.get("currency") or "EUR"
+            company_name = item.get("company_name") or ""
+            provider = item.get("provider") or "yahoo"
 
             is_valid_price = (
                 price is not None
@@ -610,49 +657,87 @@ class GlobalMarketQuotesRepository:
                 and status in ("FRESH", "DELAYED", "STALE")
             )
 
-            quote = existing_map.get(canonical)
-            if not quote:
-                quote = MarketQuote(
+            q_ts = item.get("quote_timestamp")
+
+            clean_params.append({
+                "provider_symbol": canonical,
+                "exchange": exchange,
+                "currency": currency,
+                "company_name": company_name,
+                "provider": provider,
+                "price": price if is_valid_price else None,
+                "previous_close": prev_close if is_valid_price else None,
+                "quote_timestamp": q_ts if is_valid_price else None,
+                "last_valid_fetched_at": now if is_valid_price else None,
+                "last_attempt_at": now,
+                "status": status,
+                "error_message": error_message,
+                "created_at": now,
+            })
+
+            results.append(
+                MarketQuote(
                     provider_symbol=canonical,
-                    exchange=exchange or "UNKNOWN",
-                    currency=currency or "EUR",
+                    exchange=exchange,
+                    currency=currency,
                     company_name=company_name,
+                    provider=provider,
                     price=price if is_valid_price else None,
-                    previous_close=previous_close if (is_valid_price and previous_close and previous_close > 0) else None,
-                    quote_timestamp=quote_timestamp if is_valid_price else None,
-                    last_valid_fetched_at=now if is_valid_price else None,
-                    last_attempt_at=now,
+                    previous_close=prev_close if is_valid_price else None,
+                    quote_timestamp=q_ts if is_valid_price else None,
                     status=status,
                     error_message=error_message,
-                    provider=provider,
                 )
-                self.session.add(quote)
-                existing_map[canonical] = quote
-            else:
-                if exchange and exchange != "UNKNOWN":
-                    quote.exchange = exchange
-                if currency:
-                    quote.currency = currency
-                if company_name and not quote.company_name:
-                    quote.company_name = company_name
+            )
 
-                if is_valid_price:
-                    quote.price = price
-                    if previous_close is not None and previous_close > 0:
-                        quote.previous_close = previous_close
-                    if quote_timestamp is not None:
-                        quote.quote_timestamp = quote_timestamp
-                    quote.last_valid_fetched_at = now
+        if not clean_params:
+            return []
 
-                quote.last_attempt_at = now
-                quote.status = status
-                quote.error_message = error_message
-                if provider:
-                    quote.provider = provider
+        upsert_sql = text("""
+            INSERT INTO market_quotes (
+                provider_symbol, exchange, currency, company_name, provider,
+                price, previous_close, quote_timestamp, last_valid_fetched_at,
+                last_attempt_at, status, error_message, created_at
+            ) VALUES (
+                :provider_symbol, :exchange, :currency, :company_name, :provider,
+                :price, :previous_close, :quote_timestamp, :last_valid_fetched_at,
+                :last_attempt_at, :status, :error_message, :created_at
+            )
+            ON CONFLICT (provider_symbol) DO UPDATE SET
+                exchange = CASE 
+                    WHEN EXCLUDED.exchange IS NOT NULL AND EXCLUDED.exchange != 'UNKNOWN' THEN EXCLUDED.exchange 
+                    ELSE market_quotes.exchange 
+                END,
+                currency = COALESCE(EXCLUDED.currency, market_quotes.currency),
+                company_name = CASE 
+                    WHEN (market_quotes.company_name IS NULL OR market_quotes.company_name = '') AND EXCLUDED.company_name IS NOT NULL AND EXCLUDED.company_name != '' THEN EXCLUDED.company_name 
+                    ELSE market_quotes.company_name 
+                END,
+                provider = COALESCE(EXCLUDED.provider, market_quotes.provider),
+                price = CASE 
+                    WHEN EXCLUDED.price IS NOT NULL AND EXCLUDED.price > 0 THEN EXCLUDED.price 
+                    ELSE market_quotes.price 
+                END,
+                previous_close = CASE 
+                    WHEN EXCLUDED.price IS NOT NULL AND EXCLUDED.price > 0 AND EXCLUDED.previous_close IS NOT NULL AND EXCLUDED.previous_close > 0 THEN EXCLUDED.previous_close 
+                    ELSE market_quotes.previous_close 
+                END,
+                quote_timestamp = CASE 
+                    WHEN EXCLUDED.price IS NOT NULL AND EXCLUDED.price > 0 AND EXCLUDED.quote_timestamp IS NOT NULL THEN EXCLUDED.quote_timestamp 
+                    ELSE market_quotes.quote_timestamp 
+                END,
+                last_valid_fetched_at = CASE 
+                    WHEN EXCLUDED.price IS NOT NULL AND EXCLUDED.price > 0 THEN EXCLUDED.last_valid_fetched_at 
+                    ELSE market_quotes.last_valid_fetched_at 
+                END,
+                last_attempt_at = EXCLUDED.last_attempt_at,
+                status = EXCLUDED.status,
+                error_message = EXCLUDED.error_message
+        """)
 
-            results.append(quote)
-
+        self.session.execute(upsert_sql, clean_params)
         self.session.flush()
+        self.session.expire_all()
         return results
 
 

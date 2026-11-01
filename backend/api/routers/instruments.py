@@ -38,6 +38,7 @@ from ..common import (
     get_current_user_id,
     is_multi_tenant_db,
 )
+from .positions import invalidate_positions_cache
 from ..schemas import InstrumentCreate, InstrumentUpdate
 
 logger = logging.getLogger(__name__)
@@ -508,6 +509,7 @@ def create_instrument_endpoint(
                     inst_created.start_of_year_date = dt_ytd
 
             session.commit()
+            invalidate_positions_cache(user_id)
             return {"status": "ok", "instrument": _instrument_to_dict(inst_created), "quote": quote_info}
 
     existing = get_instrument_by_ticker(ticker)
@@ -586,6 +588,7 @@ def create_instrument_endpoint(
             update_instrument_by_id(persisted)
 
     final_inst = get_instrument_by_ticker(ticker)
+    invalidate_positions_cache()
     return {
         "status": "ok",
         "instrument": _instrument_to_dict(final_inst or persisted),
@@ -713,6 +716,7 @@ def update_instrument_endpoint(
                     session.add(mq)
 
             session.commit()
+            invalidate_positions_cache(user_id)
             return {
                 "status": "ok",
                 "instrument": _instrument_to_dict(updated),
@@ -835,6 +839,7 @@ def update_instrument_endpoint(
         except Exception as e:
             logger.debug(f"Could not fetch quote on rename: {e}")
 
+    invalidate_positions_cache()
     return {"status": "ok", "instrument": _instrument_to_dict(inst)}
 
 
@@ -853,12 +858,14 @@ def delete_instrument_endpoint(
             deleted = repo.delete_instrument(ticker)
             if not deleted:
                 raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
+            invalidate_positions_cache(user_id)
             return {"status": "deleted", "deleted": ticker, "ticker": ticker}
 
     inst = get_instrument_by_ticker(ticker)
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
     delete_instrument(ticker)
+    invalidate_positions_cache()
     return {"status": "deleted", "deleted": ticker, "ticker": ticker}
 
 
@@ -905,6 +912,7 @@ def fetch_analysis_price_endpoint(
             inst.analysis_date = actual_dt
             session.commit()
 
+            invalidate_positions_cache(user_id)
             return {
                 "status": "ok",
                 "ticker": inst.user_ticker,
@@ -941,6 +949,7 @@ def fetch_analysis_price_endpoint(
     inst.analysis_reference_price = Decimal(str(price))
     inst.analysis_date = actual_dt
     update_instrument_by_id(inst)
+    invalidate_positions_cache()
 
     return {
         "status": "ok",
@@ -983,6 +992,7 @@ def fetch_ytd_price_endpoint(
             inst.start_of_year_date = actual_dt
             session.commit()
 
+            invalidate_positions_cache(user_id)
             return {
                 "status": "ok",
                 "ticker": inst.user_ticker,
@@ -1009,6 +1019,7 @@ def fetch_ytd_price_endpoint(
     inst.start_of_year_price = Decimal(str(price))
     inst.start_of_year_date = actual_dt
     update_instrument_by_id(inst)
+    invalidate_positions_cache()
 
     return {
         "status": "ok",
@@ -1072,6 +1083,7 @@ def resolve_missing_analysis_prices(
                 else:
                     failed += 1
             session.commit()
+            invalidate_positions_cache(user_id)
             return {
                 "status": "ok",
                 "updated": updated,
@@ -1099,6 +1111,7 @@ def resolve_missing_analysis_prices(
         else:
             failed += 1
 
+    invalidate_positions_cache()
     return {
         "status": "ok",
         "updated": updated,
@@ -1137,6 +1150,7 @@ def resolve_missing_ytd_prices(
                 else:
                     failed += 1
             session.commit()
+            invalidate_positions_cache(user_id)
             return {
                 "status": "ok",
                 "updated": updated,
@@ -1161,6 +1175,7 @@ def resolve_missing_ytd_prices(
         else:
             failed += 1
 
+    invalidate_positions_cache()
     return {
         "status": "ok",
         "updated": updated,

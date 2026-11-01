@@ -14,6 +14,7 @@ router = APIRouter(tags=["config"])
 
 
 @router.get("/")
+@router.head("/")
 def root():
     """Healthcheck and API information endpoint for watchlistTracker (WT)."""
     return {
@@ -25,9 +26,13 @@ def root():
 
 
 @router.get("/health")
+@router.head("/health")
 @router.get("/healthcheck")
+@router.head("/healthcheck")
 @router.get("/api/health")
+@router.head("/api/health")
 @router.get("/api/healthcheck")
+@router.head("/api/healthcheck")
 def health_check():
     """Public liveness & database readiness check without revealing credentials."""
     from portfoliomaster.db.session import session_scope

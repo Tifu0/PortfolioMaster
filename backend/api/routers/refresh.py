@@ -83,6 +83,12 @@ _sse_subscribers: set[queue.Queue] = set()
 _sse_lock = threading.Lock()
 
 
+def _get_active_sse_subscribers_count() -> int:
+    """Return the number of connected SSE subscriber queues."""
+    with _sse_lock:
+        return len(_sse_subscribers)
+
+
 def _broadcast_refresh_event(payload: dict) -> None:
     """Thread-safe event broadcast to all connected SSE clients."""
     with _sse_lock:
@@ -162,8 +168,13 @@ def _execute_refresh_all(
             from portfoliomaster.db.multi_tenant_repository import (
                 GlobalMarketQuotesRepository,
                 RefreshRunRepository,
+                clear_quote_delta_cache,
+                filter_unchanged_quotes,
             )
             from sqlalchemy import select
+
+            if force:
+                clear_quote_delta_cache()
 
             with session_scope() as session:
                 instruments = list(
@@ -338,7 +349,9 @@ def _execute_refresh_all(
                                 batch_failed += len(inst_list) if inst_list else 1
                             processed_count += 1
 
-                        quotes_repo.upsert_market_quotes_batch(batch_quotes_payload)
+                        deltas_to_write = filter_unchanged_quotes(batch_quotes_payload)
+                        if deltas_to_write:
+                            quotes_repo.upsert_market_quotes_batch(deltas_to_write)
 
                         if run_id:
                             try:
@@ -364,6 +377,16 @@ def _execute_refresh_all(
                     _state["total_symbols"] = stale_count
                     _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
 
+                    quotes_delta_payload = {}
+                    for sym, quote in chunk_quotes.items():
+                        if quote.is_valid():
+                            quotes_delta_payload[sym] = {
+                                "price": _to_float(quote.price),
+                                "previous_close": _to_float(quote.previous_close),
+                                "status": quote.status.name if hasattr(quote.status, "name") else str(quote.status),
+                                "quote_timestamp": quote.quote_timestamp.isoformat() if quote.quote_timestamp else None,
+                            }
+
                     batch_payload = {
                         "type": "batch",
                         "batch_index": batch_idx,
@@ -374,6 +397,7 @@ def _execute_refresh_all(
                         "failed": failed,
                         "batch_updated": batch_updated,
                         "batch_failed": batch_failed,
+                        "quotes": quotes_delta_payload,
                     }
                     _broadcast_refresh_event(batch_payload)
                     if on_batch_progress:
@@ -405,6 +429,7 @@ def _execute_refresh_all(
                     "stale_count": stale_count,
                 }
                 _update_state_on_completion(result, total_symbols)
+                invalidate_positions_cache()
 
                 complete_payload = {
                     "type": "complete",
@@ -596,6 +621,16 @@ def _execute_refresh_all(
                 _state["total_symbols"] = stale_count
                 _state["refresh_counter"] = _state.get("refresh_counter", 0) + 1
 
+                quotes_delta_payload = {}
+                for sym, quote in chunk_quotes.items():
+                    if quote.is_valid():
+                        quotes_delta_payload[sym] = {
+                            "price": _to_float(quote.price),
+                            "previous_close": _to_float(quote.previous_close),
+                            "status": quote.status.name if hasattr(quote.status, "name") else str(quote.status),
+                            "quote_timestamp": quote.quote_timestamp.isoformat() if quote.quote_timestamp else None,
+                        }
+
                 batch_payload = {
                     "type": "batch",
                     "batch_index": batch_idx,
@@ -606,6 +641,7 @@ def _execute_refresh_all(
                     "failed": failed,
                     "batch_updated": batch_updated,
                     "batch_failed": batch_failed,
+                    "quotes": quotes_delta_payload,
                 }
                 _broadcast_refresh_event(batch_payload)
                 if on_batch_progress:
@@ -643,6 +679,7 @@ def _execute_refresh_all(
                 logger.warning("Could not auto-resolve missing YTD prices: %s", e)
 
             _update_state_on_completion(result, total_symbols)
+            invalidate_positions_cache()
 
             complete_payload = {
                 "type": "complete",
@@ -963,6 +1000,7 @@ def refresh_single_instrument(
         except Exception as e:
             logger.debug(f"Error auto-resolving YTD price for {ticker}: {e}")
 
+    invalidate_positions_cache()
     saved_quote = get_quote_by_instrument_id(inst.id)
     return {
         "status": "ok",

@@ -19,6 +19,7 @@ from portfoliomaster.backup.sqlite_backup import create_automatic_safety_backup
 from portfoliomaster.core.models import Exchange, Instrument
 from portfoliomaster.db.repository import upsert_instrument
 from portfoliomaster.ingest.import_session import import_spreadsheet
+from .positions import invalidate_positions_cache
 from ..common import _instrument_to_dict, get_current_user_id, is_multi_tenant_db
 from ..schemas import ImportConfirmRequest
 
@@ -118,6 +119,7 @@ def import_confirm(
                 repo = MultiTenantWatchlistRepository(session, user_id)
                 count = repo.import_or_restore_user_watchlist(instruments_payload, replace_all=False)
                 session.commit()
+            invalidate_positions_cache(user_id)
             return {"status": "ok", "committed": count, "errors": []}
         except Exception as e:
             logger.exception("Error committing instruments in multi-tenant mode: %s", e)
@@ -199,6 +201,7 @@ def import_confirm(
         except Exception as e:
             commit_errors.append(f"Error importing '{inst_dict.get('user_ticker', '?')}': {e}")
 
+    invalidate_positions_cache()
     return {"status": "ok", "committed": committed, "errors": commit_errors}
 
 

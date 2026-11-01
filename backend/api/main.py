@@ -91,6 +91,18 @@ async def background_refresh_loop():
             )
             await asyncio.sleep(interval)
 
+            # Idle client check: pause automatic background refreshes if no client activity in 15 minutes
+            from .activity import is_scheduler_idle
+            from .routers.refresh import _get_active_sse_subscribers_count
+            idle_timeout = float(os.environ.get("IDLE_TIMEOUT_SECONDS", "900"))
+            if is_scheduler_idle(idle_timeout_seconds=idle_timeout, active_subscribers_count=_get_active_sse_subscribers_count()):
+                logger.info(
+                    f"[AutoRefresh] All clients idle (>{idle_timeout:.0f}s inactive, 0 SSE subscribers). "
+                    "Pausing automatic background refresh to conserve database egress."
+                )
+                await asyncio.sleep(60)
+                continue
+
             has_instruments = False
             if is_multi_tenant_db():
                 from portfoliomaster.db.session import session_scope
@@ -204,6 +216,21 @@ app.add_middleware(
     allow_headers=["Authorization", "Content-Type", "Accept", "X-Requested-With"],
     max_age=86400,
 )
+
+
+@app.middleware("http")
+async def track_activity_middleware(request: Request, call_next):
+    """Track client activity on non-internal HTTP requests to wake up or keep the background scheduler active.
+
+    Explicitly excludes Render healthchecks (/health, /, /healthcheck), OPTIONS preflights, and documentation probes.
+    """
+    from .activity import record_client_activity, should_ignore_request_for_activity
+
+    if not should_ignore_request_for_activity(request.url.path, request.method):
+        record_client_activity()
+
+    return await call_next(request)
+
 
 # Mount domain routers
 app.include_router(config_router)

@@ -34,13 +34,15 @@ Built on a decoupled modern architecture:
 
 - **📈 Portfolio Metric Cards & Header Status**:
   - Live summary statistics displayed at the top: Total active positions, Top gainer, Top loser, and Average daily change.
-  - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 60s · Batch 25`); during an active refresh, it switches to live batch progress (e.g. `Iniciando actualización...` then `Actualizando lote... · 6/11 (150/275)`).
+  - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 300s · Batch 50`); during an active refresh, it switches to live batch progress.
 
 - **🔄 Unified Market Data & Analysis Refresh Engine**:
   - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices and start-of-year (YTD) reference prices in one unified operation.
   - **High-Speed Concurrent Quote Engine**: Hybrid vectorization (`yf.download`) coupled with parallel `ThreadPoolExecutor` workers using lightweight Yahoo `fast_info` + resilient browser session headers, bypassing heavy OHLCV candle downloads and crumb rate limits. 30 symbols refresh in **1.2s - 1.5s**.
-  - **Bulk Database Upsert (`upsert_market_quotes_batch`)**: Resolves existing quotes in a single SQL query (`WHERE provider_symbol IN (...)`) and flushes once, reducing remote PostgreSQL network round-trips from 60 down to 2 per batch (**95% latency reduction**).
-  - **Request-Storm Prevention & Realtime Coalescing**: Frontend in-flight concurrency guards consolidate parallel fetch triggers; Supabase Realtime row updates are debounced and suppressed during active batch refreshes to eliminate CPU starvation on cloud web services (Render).
+  - **Zero-Read Bulk Database Upsert (`upsert_market_quotes_batch`)**: Native SQL `INSERT ... ON CONFLICT (provider_symbol) DO UPDATE SET ...` without pre-SELECT or `RETURNING *`, compatible with both PostgreSQL and SQLite >= 3.24. An in-memory delta filter skips unchanged quotes entirely, eliminating redundant database writes during off-hours or closed markets.
+  - **In-Memory Read Cache with ETag / HTTP 304**: `GET /api/positions` and `GET /api/metrics` are served from a thread-safe in-memory cache (60s TTL) with SHA-256 ETag generation. Matching `If-None-Match` headers return zero-body HTTP 304 responses, saving egress bandwidth. The cache is invalidated automatically on any data mutation (quote refresh, instrument CRUD, import, backup restore).
+  - **Idle-Aware Background Refresh Scheduler**: Background quote refreshes automatically pause after 15 minutes of client inactivity (configurable via `IDLE_TIMEOUT_SECONDS`). Render healthchecks (`/health`, `/`), CORS preflights (`OPTIONS`), documentation probes (`/docs`), and `HEAD` requests are excluded from activity tracking. Instant wake-up on the next real user request.
+  - **Request-Storm Prevention & SSE Delta Merging**: Frontend in-flight concurrency guards consolidate parallel fetch triggers; SSE `batch` events carry quote deltas directly in the payload for in-memory React state merging, triggering a full network `GET /api/positions` only once on the final `complete` event instead of after every intermediate batch.
   - **Progressive Real-Time Streaming via Server-Sent Events (SSE)** (`GET /api/refresh/stream`): A centralized pub/sub broadcaster streams batch events (`start`, `batch`, `complete`) to the client for **both manual refreshes and scheduled background loops**.
   - **Incremental Per-Batch Persistence & Live Table Updates**: Quotes are committed to PostgreSQL / SQLite after each batch and immediately rendered in the UI table in real time, rather than blocking until all batches finish.
   - **Zero-Flicker State Preservation**: Incremental updates in `PortfolioProvider` and `WatchlistTable` strictly preserve table state — scroll position, active search filters, column sorting, column widths, and open inline editing (`Analysis Date` or `Research Notes`) are never interrupted or reset.
@@ -120,7 +122,7 @@ npm run dev
 ### ⚙️ Environment Configuration (`.env`)
 
 > [!NOTE]
-> Having a `.env` file is **completely optional**. PortfolioMaster works out-of-the-box without `.env` using robust built-in defaults (`PORTFOLIOMASTER_DB_PATH="portfolio.db"`, `REFRESH_INTERVAL_SECONDS=300`, `REFRESH_BATCH_SIZE=10`, and frontend `API_BASE_URL="http://localhost:8000"`).
+> Having a `.env` file is **completely optional**. PortfolioMaster works out-of-the-box without `.env` using robust built-in defaults (`PORTFOLIOMASTER_DB_PATH="portfolio.db"`, `REFRESH_INTERVAL_SECONDS=300`, `REFRESH_BATCH_SIZE=50`, and frontend `API_BASE_URL="http://localhost:8000"`).
 
 You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example))
 
@@ -134,10 +136,13 @@ Refresh interval and batch size are dynamically exposed to the frontend via `/ap
 PortfolioMaster/
 ├── backend/
 │   ├── api/
-│   │   └── main.py             # FastAPI application and REST endpoints
+│   │   ├── main.py             # FastAPI application and REST endpoints
+│   │   └── activity.py         # Client activity tracking and idle-aware scheduler gating
 │   └── tests/
 │       ├── test_api.py         # Backend API integration tests
-│       └── test_backup_api.py  # Backup & Export API integration tests
+│       ├── test_backup_api.py  # Backup & Export API integration tests
+│       ├── test_idle_refresh.py # Idle scheduler and healthcheck exclusion tests
+│       └── test_positions_cache.py # In-memory cache, ETag, and HTTP 304 tests
 │
 ├── frontend/                   # Next.js web application (App Router)
 │   ├── app/                    # Routes, layouts, loading skeletons, and error handling
@@ -151,7 +156,7 @@ PortfolioMaster/
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
 │   ├── core/                   # Financial formulas, calculations, models, and configuration
-│   ├── db/                     # SQLite persistence layer (connection and repository CRUD)
+│   ├── db/                     # SQLite & PostgreSQL persistence (connection, repository, delta-aware upsert)
 │   ├── ingest/                 # Spreadsheet parser, normalizer, and validator
 │   ├── providers/              # Market data providers (Yahoo Finance adapter & mock)
 │   └── refresh/                # Batch quote runner with fault tolerance
@@ -173,6 +178,7 @@ The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
 
 | Method | Endpoint | Description |
 |---|---|---|
+| `GET` | `/health` | Liveness & database readiness probe (excluded from activity tracking; aliases: `/healthcheck`, `/api/health`, `/api/healthcheck`) |
 | `GET` | `/api/positions` | List active instruments with quotes and calculated financial returns (Daily, YTD, vs. Analysis, Decline to Target) |
 | `GET` | `/api/metrics` | Portfolio summary metrics (total count, top gainer, top loser, average variation) |
 | `GET` | `/api/instruments` | Raw list of all registered instruments |
@@ -210,7 +216,7 @@ Both backend and frontend contain automated test suites.
 Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
 
 1. **Standard Execution (Offline / Fast - Default):**
-   Runs all unit and integration tests using mocks (80 tests):
+   Runs all unit and integration tests using mocks (159 tests):
    ```bash
    venv\Scripts\python -u -m pytest
    ```
@@ -258,11 +264,14 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
    - **Start Command**: `uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT`
    - **Health Check Path**: `/health`
 3. Set Environment Variables:
-   - `DATABASE_URL`: `postgresql+psycopg://postgres:[PASSWORD]@db.[REF].supabase.co:5432/postgres`
+   - `DATABASE_URL`: `postgresql+psycopg://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.co:6543/postgres?sslmode=require` (Supavisor Transaction Pooler on port 6543)
    - `SUPABASE_JWT_SECRET`: From Supabase Dashboard -> Project Settings -> API -> JWT Secret
    - `SUPABASE_URL`: `https://[REF].supabase.co`
    - `CORS_ORIGINS`: `https://portfolio-master-sigma-peach.vercel.app`
    - `ENVIRONMENT`: `production`
+   - `REFRESH_INTERVAL_SECONDS`: `300` (5-minute production interval; set to `0` to disable auto-refresh)
+   - `BATCH_SIZE` / `REFRESH_BATCH_SIZE`: `50` (halves database round-trips vs. default 25)
+   - `IDLE_TIMEOUT_SECONDS`: `900` (pause background refreshes after 15 min of client inactivity)
 
 ### 2. Vercel Deployment (Next.js App Router)
 1. Import repository on Vercel.
@@ -290,7 +299,6 @@ python scripts/migrate_sqlite_to_web.py --sqlite portfolio.db --user-id <TARGET-
 # 3. Rollback (if ever needed to cleanly purge migrated user records)
 python scripts/migrate_sqlite_to_web.py --rollback --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..."
 ```
-
 ---
 
 ## 🔒 Privacy & Architecture Modes

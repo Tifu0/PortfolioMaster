@@ -26,6 +26,7 @@ from portfoliomaster.backup.sqlite_backup import (
 )
 from portfoliomaster.db.repository import wipe_database
 from ..common import get_current_user_id, is_multi_tenant_db
+from .positions import invalidate_positions_cache
 
 logger = logging.getLogger(__name__)
 
@@ -47,6 +48,7 @@ def wipe_db(
         with session_scope() as session:
             session.execute(delete(UserInstrument).where(UserInstrument.user_id == user_id))
             session.commit()
+        invalidate_positions_cache(user_id)
         return {"status": "ok", "detail": "Tenant instruments wiped successfully"}
 
     try:
@@ -54,6 +56,7 @@ def wipe_db(
     except Exception as e:
         logger.warning(f"Could not create safety backup before wipe: {e}")
     wipe_database()
+    invalidate_positions_cache()
     return {"status": "ok", "detail": "Database wiped successfully"}
 
 
@@ -149,6 +152,7 @@ async def restore_backup(
                 with session_scope() as session:
                     repo = MultiTenantWatchlistRepository(session, user_id)
                     restored_count = repo.import_or_restore_user_watchlist(validated_items, replace_all=True)
+                invalidate_positions_cache(user_id)
                 return {
                     "status": "ok",
                     "restored_count": restored_count,
@@ -162,6 +166,7 @@ async def restore_backup(
 
         try:
             result = restore_from_json(payload)
+            invalidate_positions_cache()
             return result
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -185,6 +190,7 @@ async def restore_backup(
             if not is_valid:
                 raise HTTPException(status_code=400, detail=err or "Invalid or corrupted SQLite file")
             result = restore_sqlite_backup(tmp_path)
+            invalidate_positions_cache()
             return result
         except HTTPException:
             raise
@@ -234,6 +240,7 @@ def restore_local_backup_endpoint(
         )
     try:
         result = restore_automatic_backup(filename)
+        invalidate_positions_cache()
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

@@ -108,15 +108,43 @@ async function handleResponse<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
+let _cachedPositions: PositionsResponse | null = null;
+let _cachedPositionsEtag: string | null = null;
+
+let _cachedMetrics: PortfolioMetrics | null = null;
+let _cachedMetricsEtag: string | null = null;
+
+export function clearApiClientCache(): void {
+  _cachedPositions = null;
+  _cachedPositionsEtag = null;
+  _cachedMetrics = null;
+  _cachedMetricsEtag = null;
+}
+
 /**
  * 1. GET /api/positions
  * Fetches the full watchlist with quotes and server-computed derived columns.
+ * Supports HTTP 304 Not Modified via ETag to avoid redundant database/bandwidth egress.
  */
 export async function getPositions(cache: RequestCache = 'no-store'): Promise<PositionsResponse> {
+  const headers: Record<string, string> = {};
+  if (!isServer && _cachedPositionsEtag && cache !== 'reload') {
+    headers['If-None-Match'] = _cachedPositionsEtag;
+  }
   const res = await authFetch(`${API_BASE_URL}/api/positions`, {
     cache,
+    headers,
   });
-  return handleResponse<PositionsResponse>(res);
+  if (res.status === 304 && _cachedPositions) {
+    return _cachedPositions;
+  }
+  const data = await handleResponse<PositionsResponse>(res);
+  const etag = res.headers.get('ETag');
+  if (etag) {
+    _cachedPositionsEtag = etag;
+    _cachedPositions = data;
+  }
+  return data;
 }
 
 /**
@@ -318,12 +346,27 @@ export async function wipeDatabase(): Promise<GenericStatusResponse> {
 /**
  * 12. GET /api/metrics
  * Fetches portfolio summary metrics (positions count, best/worst performer, average daily change).
+ * Supports HTTP 304 Not Modified via ETag to avoid redundant database/bandwidth egress.
  */
 export async function getMetrics(cache: RequestCache = 'no-store'): Promise<PortfolioMetrics> {
+  const headers: Record<string, string> = {};
+  if (!isServer && _cachedMetricsEtag && cache !== 'reload') {
+    headers['If-None-Match'] = _cachedMetricsEtag;
+  }
   const res = await authFetch(`${API_BASE_URL}/api/metrics`, {
     cache,
+    headers,
   });
-  return handleResponse<PortfolioMetrics>(res);
+  if (res.status === 304 && _cachedMetrics) {
+    return _cachedMetrics;
+  }
+  const data = await handleResponse<PortfolioMetrics>(res);
+  const etag = res.headers.get('ETag');
+  if (etag) {
+    _cachedMetricsEtag = etag;
+    _cachedMetrics = data;
+  }
+  return data;
 }
 
 /**

@@ -30,8 +30,8 @@ DISPLAY_DECIMAL_PLACES: int = 2
 DEFAULT_DELAY_SECONDS: float = 60.0
 DEFAULT_STALENESS_SECONDS: float = 2 * 24 * 60 * 60  # 48 hours
 
-# Batch runner tuning. Start conservative and measure before increasing.
-DEFAULT_BATCH_SIZE: int = 10
+# Batch runner tuning. Set to 50 to minimize database round-trips and egress.
+DEFAULT_BATCH_SIZE: int = 50
 MAX_BATCH_SIZE: int = 100
 MAX_RETRIES: int = 2
 BASE_BACKOFF_SECONDS: float = 0.5

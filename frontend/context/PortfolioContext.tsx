@@ -11,7 +11,7 @@ import React, {
 } from 'react';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { getPositions, getMetrics, getConfig, refreshAll } from '@/lib/api';
-import { supabase, getAuthToken } from '@/lib/supabase';
+import { getAuthToken } from '@/lib/supabase';
 import { useAuth } from '@/context/AuthContext';
 
 export interface PortfolioContextType {
@@ -432,10 +432,46 @@ export function PortfolioProvider({
                         total: data.total_symbols ?? 0,
                       });
                     }
-                    refreshPortfolioDataRef.current({ silent: true });
+                    // CRITICAL EGRESS FIX: Eliminate per-batch re-fetch storm!
+                    // Merge quote deltas directly into local state in memory instead of executing full-table DB joins on every batch tick.
+                    if (data.quotes && typeof data.quotes === 'object') {
+                      setPositions((prevPositions) => {
+                        let changed = false;
+                        const next = prevPositions.map((pos) => {
+                          const sym = (pos.provider_symbol || pos.user_ticker || '').trim().toUpperCase();
+                          const delta = data.quotes[sym];
+                          if (delta && delta.price !== undefined && delta.price !== null) {
+                            changed = true;
+                            const newPrice = Number(delta.price);
+                            const prevClose =
+                              delta.previous_close !== undefined && delta.previous_close !== null
+                                ? Number(delta.previous_close)
+                                : pos.previous_close;
+                            let dv = pos.daily_variation;
+                            let dvValid = pos.daily_variation_valid;
+                            if (prevClose && prevClose > 0 && newPrice > 0) {
+                              dv = Number((((newPrice - prevClose) / prevClose) * 100).toFixed(2));
+                              dvValid = true;
+                            }
+                            return {
+                              ...pos,
+                              latest_price: newPrice,
+                              previous_close: prevClose,
+                              daily_variation: dv,
+                              daily_variation_valid: dvValid,
+                              quote_status: delta.status || pos.quote_status,
+                              quote_fetched_at: delta.quote_timestamp || new Date().toISOString(),
+                            };
+                          }
+                          return pos;
+                        });
+                        return changed ? next : prevPositions;
+                      });
+                    }
                   } else if (data.type === 'complete') {
                     setBatchProgress(null);
                     setIsRefreshing(false);
+                    // Fetch authoritative positions & metrics ONCE at completion of all batches
                     refreshPortfolioDataRef.current({ silent: true });
                   } else if (data.type === 'error') {
                     setBatchProgress(null);
@@ -551,38 +587,6 @@ export function PortfolioProvider({
     return () => {
       stopTimer();
       document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
-  }, []);
-
-  // 2. Supabase Realtime synchronization on public.market_quotes
-  useEffect(() => {
-    const client = supabase;
-    if (!client) return;
-
-    let debounceTimer: NodeJS.Timeout | null = null;
-
-    const channel = client
-      .channel('realtime:market_quotes')
-      .on(
-        'postgres_changes',
-        { event: '*', schema: 'public', table: 'market_quotes' },
-        () => {
-          // Suppress during active batch refreshes to prevent 30-per-batch request storms!
-          // The SSE stream already handles live batch progress and final data reload.
-          if (isRefreshingRef.current) return;
-
-          // Trailing debounce: coalesce rapid row updates into a single revalidation
-          if (debounceTimer) clearTimeout(debounceTimer);
-          debounceTimer = setTimeout(() => {
-            refreshPortfolioDataRef.current({ silent: true });
-          }, 2000);
-        }
-      )
-      .subscribe();
-
-    return () => {
-      if (debounceTimer) clearTimeout(debounceTimer);
-      client.removeChannel(channel);
     };
   }, []);
 
