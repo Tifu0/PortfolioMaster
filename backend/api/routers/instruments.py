@@ -12,7 +12,6 @@ from typing import Any, Callable, Optional
 from fastapi import APIRouter, Depends, HTTPException
 import pandas as pd
 import warnings
-import yfinance as yf
 
 from portfoliomaster.core.config import get_yahoo_suffix
 from portfoliomaster.core.models import Exchange, Instrument, Quote, QuoteStatus

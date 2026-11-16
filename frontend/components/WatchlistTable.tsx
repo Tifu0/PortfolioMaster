@@ -523,7 +523,7 @@ export function WatchlistTable({
 }: WatchlistTableProps) {
   const portfolioContext = usePortfolioOptional();
   const { user, isAuthConfigured, openAuthModal } = useAuth();
-  const { language, t } = useLanguage();
+  const { language } = useLanguage();
 
   // Fallback data state used only if rendered outside PortfolioProvider
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);

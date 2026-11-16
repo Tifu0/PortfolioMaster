@@ -18,7 +18,7 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from portfoliomaster.db.schema import Base
-from portfoliomaster.db.session import get_database_url
+from portfoliomaster.db.session import get_database_url, normalize_database_url, psycopg_connect_args
 
 try:
     config = context.config
@@ -49,7 +49,7 @@ def get_url(cfg=None) -> str:
         if ini_url and ini_url.strip():
             clean_ini = ini_url.strip()
             if not clean_ini.startswith("driver://") and "user:pass@localhost" not in clean_ini:
-                return clean_ini
+                return normalize_database_url(clean_ini)
 
     return get_database_url()
 
@@ -74,20 +74,11 @@ def run_migrations_online() -> None:
     url = get_url()
     configuration["sqlalchemy.url"] = url
 
-    connect_args = {}
-    try:
-        from sqlalchemy.engine.url import make_url
-        parsed = make_url(url)
-        if parsed.get_backend_name() == "postgresql" and parsed.get_driver_name() != "psycopg2" and "+psycopg2" not in url:
-            connect_args["prepare_threshold"] = None
-    except Exception:
-        pass
-
     connectable = engine_from_config(
         configuration,
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
-        connect_args=connect_args,
+        connect_args=psycopg_connect_args(url),
     )
 
     with connectable.connect() as connection:

@@ -5,6 +5,7 @@ import React, {
   use,
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -264,6 +265,7 @@ export function PortfolioProvider({
   const lastKnownCounterRef = useRef<number | undefined>(undefined);
   const wasRefreshingRef = useRef<boolean>(false);
   const isSyncingRef = useRef<boolean>(false);
+  const getIsRefreshing = useEffectEvent(() => isRefreshing);
 
   // Active sync heartbeat: checks /api/config on mount and adaptively polls
   // (fast 2s polling only when backend is actively refreshing; quiet 30s when idle)
@@ -326,7 +328,7 @@ export function PortfolioProvider({
 
         // If a batch finished in the backend, trigger silent portfolio reload only if not actively streaming via SSE
         if (counterChanged || refreshAtChanged || finishedRefreshing) {
-          if (!isRefreshingRef.current) {
+          if (!getIsRefreshing()) {
             // Background reload: refreshPortfolioData({ silent: true })
             await refreshPortfolioDataRef.current({ silent: true });
           }
@@ -513,13 +515,8 @@ export function PortfolioProvider({
     return () => window.removeEventListener('unhandledrejection', handleUnhandledRejection);
   }, []);
 
-  // Keep live refs for timer callbacks
+  // Track the most recent refresh for timer callbacks.
   const lastRefreshTimestampRef = useRef<number>(0);
-  const isRefreshingRef = useRef<boolean>(isRefreshing);
-
-  useEffect(() => {
-    isRefreshingRef.current = isRefreshing;
-  }, [isRefreshing]);
 
   useEffect(() => {
     if (lastRefreshTimestampRef.current === 0) {
@@ -541,7 +538,7 @@ export function PortfolioProvider({
     let intervalId: NodeJS.Timeout | null = null;
 
     const triggerSmartRefresh = async () => {
-      if (document.visibilityState !== 'visible' || isRefreshingRef.current) {
+      if (document.visibilityState !== 'visible' || getIsRefreshing()) {
         return;
       }
       try {

@@ -3,8 +3,7 @@
 from typing import Dict, List
 from .base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus
-from datetime import datetime
-from decimal import Decimal
+
 
 class MockProvider(MarketDataProvider):
     """A deterministic mock provider for testing."""

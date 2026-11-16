@@ -8,7 +8,6 @@ from typing import Generator, Optional
 
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
-from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
 
 from .schema import Base
@@ -26,6 +25,21 @@ def is_production() -> bool:
     )
 
 
+def normalize_database_url(url: str) -> str:
+    """Select Psycopg 3 for generic and legacy PostgreSQL URLs."""
+    scheme, separator, target = url.partition("://")
+    if separator and scheme in ("postgres", "postgresql", "postgresql+psycopg2"):
+        return f"postgresql+psycopg://{target}"
+    return url
+
+
+def psycopg_connect_args(url: str) -> dict[str, None]:
+    """Disable prepared statements for compatibility with transaction poolers."""
+    if url.startswith("postgresql+psycopg://"):
+        return {"prepare_threshold": None}
+    return {}
+
+
 def get_database_url() -> str:
     """Retrieve normalized database URL from environment or fallback to SQLite for local dev.
     
@@ -34,10 +48,7 @@ def get_database_url() -> str:
     raw_url = os.environ.get("DATABASE_URL")
     url = raw_url.strip() if raw_url else ""
     if url and not url.startswith("driver://") and url != "driver://user:pass@localhost/dbname":
-        # Normalize postgres:// to postgresql:// for SQLAlchemy compatibility
-        if url.startswith("postgres://"):
-            url = url.replace("postgres://", "postgresql://", 1)
-        return url
+        return normalize_database_url(url)
 
     if is_production():
         raise RuntimeError(
@@ -56,41 +67,18 @@ def get_database_url() -> str:
 def get_engine(db_url: Optional[str] = None, echo: bool = False) -> Engine:
     """Get or create singleton SQLAlchemy Engine with driver-safe connect_args."""
     global _ENGINE
-    url = db_url or get_database_url()
+    url = normalize_database_url(db_url) if db_url else get_database_url()
     
     # Always create new engine if custom URL is provided or if none exists
     if db_url or _ENGINE is None:
-        connect_args: dict = {}
-        try:
-            parsed_url = make_url(url)
-            backend = parsed_url.get_backend_name()
-            driver = parsed_url.get_driver_name()
-        except Exception:
-            backend = "sqlite" if url.startswith("sqlite") else "postgresql"
-            driver = "psycopg2" if "+psycopg2" in url else "psycopg"
-
-        if backend == "sqlite":
-            connect_args["check_same_thread"] = False
-        elif backend == "postgresql":
-            # For PostgreSQL:
-            # When using psycopg 3 (the default in SQLAlchemy 2.0 when psycopg is installed, or explicit +psycopg),
-            # disable prepare_threshold for Supabase / PgBouncer / Supavisor connection poolers (port 6543 / Render).
-            # In transaction pooling mode, prepared statements (_pg3_0) cause:
-            #   psycopg.errors.InvalidSqlStatementName: prepared statement "_pg3_0" does not exist
-            # Psycopg 2 does not support prepare_threshold and would error if passed.
-            if driver == "psycopg2" or "+psycopg2" in url:
-                pass
-            else:
-                connect_args["prepare_threshold"] = None
-        else:
-            pass
-
+        is_sqlite = url.startswith("sqlite")
+        connect_args = {"check_same_thread": False} if is_sqlite else psycopg_connect_args(url)
         engine_kwargs: dict = {
             "echo": echo,
             "connect_args": connect_args,
             "future": True,
         }
-        if not url.startswith("sqlite"):
+        if not is_sqlite:
             # Resilient connection pooling for Render & Supabase:
             # - pool_pre_ping: Tests connections with a ping query before checkout, purging broken sockets.
             # - pool_recycle: Recycles connections every 300s (5m) to stay ahead of cloud NAT / proxy timeouts.

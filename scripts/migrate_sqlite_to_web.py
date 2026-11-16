@@ -41,6 +41,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from portfoliomaster.core.config import get_yahoo_suffix
 from portfoliomaster.db.schema import Base, MarketQuote, UserInstrument, utc_now
+from portfoliomaster.db.session import normalize_database_url, psycopg_connect_args
 from portfoliomaster.ingest.normalizer import normalize
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -490,23 +491,11 @@ def migrate_instruments(
     )
 
 
-def _get_migration_connect_args(url: str) -> dict:
-    """Return driver-safe connect args for database connections."""
-    connect_args = {}
-    try:
-        from sqlalchemy.engine.url import make_url
-        parsed = make_url(url)
-        if parsed.get_backend_name() == "postgresql" and parsed.get_driver_name() != "psycopg2" and "+psycopg2" not in url:
-            connect_args["prepare_threshold"] = None
-    except Exception:
-        pass
-    return connect_args
-
-
 def rollback_user_migration(user_id: uuid.UUID, db_url: Optional[str] = None) -> int:
     """Safely roll back migrated user instruments for a given user_id."""
     resolved_db_url = db_url or os.getenv("DATABASE_URL") or os.getenv("PORTFOLIOMASTER_DB_URL") or "sqlite:///./portfolio_web.db"
-    engine = create_engine(resolved_db_url, connect_args=_get_migration_connect_args(resolved_db_url))
+    url = normalize_database_url(resolved_db_url)
+    engine = create_engine(url, connect_args=psycopg_connect_args(url))
     from sqlalchemy import delete
     session_factory = sessionmaker(bind=engine)
     with session_factory() as session:
@@ -562,7 +551,8 @@ def run_migration(
 
     from sqlalchemy import inspect, text
     try:
-        engine = create_engine(resolved_db_url, connect_args=_get_migration_connect_args(resolved_db_url))
+        url = normalize_database_url(resolved_db_url)
+        engine = create_engine(url, connect_args=psycopg_connect_args(url))
         with engine.connect() as conn:
             conn.execute(text("SELECT 1"))
     except Exception as e:
@@ -646,7 +636,7 @@ def main():
         "--db-url",
         type=str,
         default=None,
-        help="Target database URL (e.g. postgresql+psycopg2://user:pass@host:5432/db)",
+        help="Target database URL (e.g. postgresql+psycopg://user:pass@host:5432/db)",
     )
     parser.add_argument(
         "--dry-run",

@@ -1,9 +1,31 @@
 'use client';
 
-import React, { createContext, useContext, useEffect, useState, useMemo, useCallback } from 'react';
+import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useSyncExternalStore } from 'react';
 import { translations, type Language, type TranslationKey } from '@/lib/translations';
 
 const LANGUAGE_STORAGE_KEY = 'portfoliomaster_language';
+
+function getDefaultLanguage(): Language {
+  return 'en';
+}
+
+function readSavedLanguage(): Language {
+  try {
+    const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
+    if (saved === 'en' || saved === 'es') return saved;
+  } catch {
+    // Storage may be unavailable in the browser.
+  }
+  return getDefaultLanguage();
+}
+
+function subscribeToLanguageStorage(onChange: () => void): () => void {
+  const onStorage = (event: StorageEvent) => {
+    if (event.key === LANGUAGE_STORAGE_KEY || event.key === null) onChange();
+  };
+  window.addEventListener('storage', onStorage);
+  return () => window.removeEventListener('storage', onStorage);
+}
 
 interface LanguageContextType {
   language: Language;
@@ -14,20 +36,9 @@ interface LanguageContextType {
 const LanguageContext = createContext<LanguageContextType | null>(null);
 
 export function LanguageProvider({ children }: { children: React.ReactNode }) {
-  // Default language is English ('en')
-  const [language, setLanguageState] = useState<Language>('en');
-
-  // Load saved preference on client mount
-  useEffect(() => {
-    try {
-      const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
-      if (saved === 'en' || saved === 'es') {
-        setLanguageState(saved);
-      }
-    } catch {
-      // Ignore localStorage errors (private browsing, etc.)
-    }
-  }, []);
+  const savedLanguage = useSyncExternalStore(subscribeToLanguageStorage, readSavedLanguage, getDefaultLanguage);
+  const [selectedLanguage, setSelectedLanguage] = useState<Language | null>(null);
+  const language = selectedLanguage ?? savedLanguage;
 
   // Sync document.documentElement.lang
   useEffect(() => {
@@ -37,7 +48,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
   }, [language]);
 
   const setLanguage = useCallback((newLang: Language) => {
-    setLanguageState(newLang);
+    setSelectedLanguage(newLang);
     try {
       localStorage.setItem(LANGUAGE_STORAGE_KEY, newLang);
     } catch {

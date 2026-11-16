@@ -2,7 +2,7 @@
 
 // 'use client' is required for Next.js App Router error boundaries (error.tsx).
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect } from 'react';
 import { AlertTriangle, RefreshCw, Home } from 'lucide-react';
 import Link from 'next/link';
 import { useLanguage } from '@/context/LanguageContext';

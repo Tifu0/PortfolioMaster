@@ -205,9 +205,3 @@ def is_target_reached(
     result.target_reached = price <= target
     result.target_reached_valid = True
     return result
-
-
-def _is_valid_price(value: Number) -> bool:
-    """A price is valid when it converts to a positive finite number."""
-    d = _to_decimal(value)
-    return d is not None and d > 0

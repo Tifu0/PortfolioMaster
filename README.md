@@ -213,6 +213,12 @@ Both backend and frontend contain automated test suites.
 
 ### Backend & Core Tests (Python)
 
+Install the development requirements before running the Python suite. This also installs the runtime requirements.
+
+```bash
+pip install -r requirements-dev.txt
+```
+
 Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
 
 1. **Standard Execution (Offline / Fast - Default):**

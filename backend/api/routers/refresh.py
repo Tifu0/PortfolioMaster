@@ -11,7 +11,7 @@ import threading
 import uuid
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Any, Callable, Dict, List, Optional, TypedDict
+from typing import Callable, Dict, List, Optional, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
@@ -839,7 +839,6 @@ def refresh_single_instrument(
 
     if is_multi_tenant_db():
         from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.schema import UserInstrument, MarketQuote
         from portfoliomaster.db.multi_tenant_repository import (
             MultiTenantWatchlistRepository,
             GlobalMarketQuotesRepository,

@@ -13,7 +13,7 @@ import jwt
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from portfoliomaster.core.models import Instrument, Quote, QuoteStatus
+from portfoliomaster.core.models import QuoteStatus
 from portfoliomaster.db.session import get_database_url
 
 logger = logging.getLogger(__name__)
