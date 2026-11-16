@@ -107,7 +107,7 @@ def download_backup(
 
 
 @router.post("/backup/restore")
-async def restore_backup(
+def restore_backup(
     file: UploadFile = File(...),
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
@@ -118,7 +118,7 @@ async def restore_backup(
     if not file.filename:
         raise HTTPException(status_code=400, detail="No file provided")
 
-    contents = await file.read()
+    contents = file.file.read(MAX_BACKUP_BYTES + 1)
     if len(contents) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty")
 
@@ -181,11 +181,11 @@ async def restore_backup(
                 detail="Raw SQLite .db upload is disabled in PostgreSQL multi-tenant mode. Please upload a .json backup file.",
             )
 
-        with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
-            tmp.write(contents)
-            tmp_path = tmp.name
-
+        tmp_path = None
         try:
+            with tempfile.NamedTemporaryFile(suffix=".db", delete=False) as tmp:
+                tmp_path = tmp.name
+                tmp.write(contents)
             is_valid, err = validate_sqlite_backup(tmp_path)
             if not is_valid:
                 raise HTTPException(status_code=400, detail=err or "Invalid or corrupted SQLite file")
@@ -197,9 +197,10 @@ async def restore_backup(
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Error restoring database: {e}")
+            logger.error("[BackupRestore] SQLite restore failed: %s", e)
+            raise HTTPException(status_code=500, detail="Database restore failed.") from e
         finally:
-            if os.path.exists(tmp_path):
+            if tmp_path is not None:
                 try:
                     os.remove(tmp_path)
                 except OSError:

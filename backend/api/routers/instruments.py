@@ -438,6 +438,19 @@ def create_instrument_endpoint(
         from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
         from portfoliomaster.db.schema import MarketQuote
 
+        manual_price = data.manual_price if data.manual_price and data.manual_price > 0 else None
+        fetched_quote = None
+        if data.fetch_yahoo:
+            if manual_price is None:
+                from .refresh import _get_yahoo_adapter
+
+                fetched_quote = _get_yahoo_adapter().fetch([provider_symbol]).get(provider_symbol)
+            if soy_price_dec is None:
+                year_start_quote = _fetch_start_of_year_quote(provider_symbol)
+                if year_start_quote:
+                    ytd_price, soy_dt = year_start_quote
+                    soy_price_dec = Decimal(str(ytd_price))
+
         with session_scope() as session:
             repo = MultiTenantWatchlistRepository(session, user_id)
             existing = repo.get_instrument_by_ticker(ticker)
@@ -463,7 +476,7 @@ def create_instrument_endpoint(
             )
 
             quote_info = None
-            if data.manual_price is not None and data.manual_price > 0:
+            if manual_price is not None or fetched_quote is not None:
                 mq = session.get(MarketQuote, provider_symbol)
                 if not mq:
                     mq = MarketQuote(
@@ -473,43 +486,23 @@ def create_instrument_endpoint(
                         company_name=company_name,
                     )
                     session.add(mq)
-                mq.price = Decimal(str(data.manual_price))
-                if data.manual_previous_close and data.manual_previous_close > 0:
-                    mq.previous_close = Decimal(str(data.manual_previous_close))
-                mq.status = "FRESH"
+                if manual_price is not None:
+                    mq.price = Decimal(str(manual_price))
+                    if data.manual_previous_close and data.manual_previous_close > 0:
+                        mq.previous_close = Decimal(str(data.manual_previous_close))
+                    mq.status = "FRESH"
+                    quote_info = {"source": "manual", "price": manual_price}
+                elif fetched_quote is not None:
+                    mq.price = fetched_quote.price
+                    mq.previous_close = fetched_quote.previous_close
+                    mq.status = fetched_quote.status.name if hasattr(fetched_quote.status, "name") else str(fetched_quote.status)
+                    quote_info = {"source": "yahoo", "price": _to_float(fetched_quote.price)}
                 mq.last_valid_fetched_at = datetime.now(timezone.utc)
-                quote_info = {"source": "manual", "price": data.manual_price}
-            elif data.fetch_yahoo:
-                from .refresh import _get_yahoo_adapter
-                adapter = _get_yahoo_adapter()
-                quotes = adapter.fetch([provider_symbol])
-                if provider_symbol in quotes:
-                    q_fetched = quotes[provider_symbol]
-                    mq = session.get(MarketQuote, provider_symbol)
-                    if not mq:
-                        mq = MarketQuote(
-                            provider_symbol=provider_symbol,
-                            exchange=inst_created.exchange,
-                            currency=inst_created.currency,
-                            company_name=company_name,
-                        )
-                        session.add(mq)
-                    mq.price = q_fetched.price
-                    mq.previous_close = q_fetched.previous_close
-                    mq.status = q_fetched.status.name if hasattr(q_fetched.status, "name") else str(q_fetched.status)
-                    mq.last_valid_fetched_at = datetime.now(timezone.utc)
-                    quote_info = {"source": "yahoo", "price": _to_float(q_fetched.price)}
 
-            if data.fetch_yahoo and not inst_created.start_of_year_price:
-                res_ytd = _fetch_start_of_year_quote(provider_symbol)
-                if res_ytd:
-                    p_ytd, dt_ytd = res_ytd
-                    inst_created.start_of_year_price = Decimal(str(p_ytd))
-                    inst_created.start_of_year_date = dt_ytd
+            instrument = _instrument_to_dict(inst_created)
 
-            session.commit()
-            invalidate_positions_cache(user_id)
-            return {"status": "ok", "instrument": _instrument_to_dict(inst_created), "quote": quote_info}
+        invalidate_positions_cache(user_id)
+        return {"status": "ok", "instrument": instrument, "quote": quote_info}
 
     existing = get_instrument_by_ticker(ticker)
     if existing:

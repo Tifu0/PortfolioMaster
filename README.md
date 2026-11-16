@@ -97,8 +97,8 @@ venv\Scripts\activate    # On Windows (or 'source venv/bin/activate' on Linux/ma
 # Install dependencies
 pip install -r requirements.txt
 
-# Start FastAPI server
-uvicorn backend.api.main:app --reload --port 8000
+# Configure authentication in .env before starting the backend
+uvicorn backend.api.main:app --reload --port 8000 --env-file .env
 ```
 - **API Server**: [http://localhost:8000](http://localhost:8000)
 - **Interactive API Documentation (Swagger UI)**: [http://localhost:8000/docs](http://localhost:8000/docs)
@@ -122,7 +122,7 @@ npm run dev
 ### ⚙️ Environment Configuration (`.env`)
 
 > [!NOTE]
-> Having a `.env` file is **completely optional**. PortfolioMaster works out-of-the-box without `.env` using robust built-in defaults (`PORTFOLIOMASTER_DB_PATH="portfolio.db"`, `REFRESH_INTERVAL_SECONDS=300`, `REFRESH_BATCH_SIZE=50`, and frontend `API_BASE_URL="http://localhost:8000"`).
+> The backend requires explicit authentication configuration. Set a valid `SUPABASE_JWT_SECRET` of at least 32 bytes for HS256, or set `SUPABASE_URL` alone for asymmetric signing keys. Use process environment variables or a local `.env` file.
 
 You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example))
 
@@ -258,7 +258,7 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
   👉 **API Base**: [https://portfoliomaster-backend.onrender.com/](https://portfoliomaster-backend.onrender.com/)  
   👉 **Swagger Docs**: [https://portfoliomaster-backend.onrender.com/docs](https://portfoliomaster-backend.onrender.com/docs)
 - **Database**: **Supabase PostgreSQL** with Row-Level Security (RLS) policies and shared `market_quotes` decoupling.
-- **Authentication**: **Supabase Auth** with cryptographic JWT verification (`HS256`, audience `authenticated`).
+- **Authentication**: **Supabase Auth** with cryptographic JWT verification (`HS256`, `RS256`, or `ES256`; audience `authenticated`).
 - **Local Development**: Isolated SQLite backend (`portfolio.db`) with automatic fallback when `DATABASE_URL` is unset.
 
 ### 1. Render Deployment (FastAPI Web Service)
@@ -271,7 +271,7 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
    - **Health Check Path**: `/health`
 3. Set Environment Variables:
    - `DATABASE_URL`: `postgresql+psycopg://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.co:6543/postgres?sslmode=require` (Supavisor Transaction Pooler on port 6543)
-   - `SUPABASE_JWT_SECRET`: From Supabase Dashboard -> Project Settings -> API -> JWT Secret
+   - `SUPABASE_JWT_SECRET`: Legacy signing secret from the Supabase project, required for HS256. For asymmetric signing, set `SUPABASE_URL` and leave the secret unset.
    - `SUPABASE_URL`: `https://[REF].supabase.co`
    - `CORS_ORIGINS`: `https://portfolio-master-sigma-peach.vercel.app`
    - `ENVIRONMENT`: `production`

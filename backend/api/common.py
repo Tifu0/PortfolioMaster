@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 import logging
 import math
 import os
+import re
 import uuid
 from typing import Any, Optional
 
@@ -14,7 +15,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from portfoliomaster.core.models import QuoteStatus
-from portfoliomaster.db.session import get_database_url
+from portfoliomaster.db.session import get_database_url, is_production
 
 logger = logging.getLogger(__name__)
 
@@ -44,30 +45,50 @@ def get_jwks_client(supabase_url: str) -> jwt.PyJWKClient:
     return _JWKS_CLIENT
 
 
-def _get_jwt_secret() -> str:
-    """Retrieve Supabase JWT secret from environment or fail closed."""
+def _configured_jwt_secret() -> str | None:
+    """Validate the configured HS256 key without including its value in errors."""
     secret = os.environ.get("SUPABASE_JWT_SECRET")
-    if secret:
-        return secret
+    if os.environ.get("ENVIRONMENT") == "test" and not is_production():
+        return secret or os.environ.get("TEST_JWT_SECRET") or None
+    if not secret:
+        return None
 
-    is_prod = (
-        os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod")
-        or os.environ.get("RENDER", "").lower() == "true"
-        or os.environ.get("NODE_ENV", "").lower() == "production"
-    )
-    if is_prod:
-        logger.error("[Auth] SUPABASE_JWT_SECRET is required in production for HS256 tokens but missing.")
+    normalized = secret.casefold().replace("_", "-")
+    if (
+        len(secret.encode("utf-8")) < 32
+        or secret != secret.strip()
+        or normalized.startswith((
+            "test-", "dev-", "default-", "static-", "change-me", "changeme",
+            "replace-me", "your-", "super-secret-jwt-token-",
+        ))
+        or re.fullmatch(r"(.{1,16})\1+", normalized)
+    ):
+        raise ValueError("SUPABASE_JWT_SECRET must be at least 32 bytes and must not be a default or placeholder.")
+    return secret
+
+
+def validate_auth_configuration() -> None:
+    """Require an HS256 key or a Supabase project URL for JWKS verification."""
+    if _configured_jwt_secret() is None and not os.environ.get("SUPABASE_URL", "").strip():
+        raise ValueError("Configure SUPABASE_JWT_SECRET for HS256 or SUPABASE_URL for asymmetric JWTs.")
+
+
+def _get_jwt_secret() -> str:
+    """Fail closed before decoding an HS256 token if its key is unusable."""
+    try:
+        secret = _configured_jwt_secret()
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication configuration error: invalid SUPABASE_JWT_SECRET.",
+        ) from exc
+
+    if secret is None:
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail="Authentication configuration error: SUPABASE_JWT_SECRET not set.",
         )
-
-    # In local testing and development only, provide a deterministic test secret
-    test_secret = os.environ.get("TEST_JWT_SECRET") or os.environ.get("DEV_JWT_SECRET")
-    if test_secret:
-        return test_secret
-
-    return "test-supabase-jwt-secret-for-testing-purposes-only-32b"
+    return secret
 
 
 def get_current_user(

@@ -64,7 +64,7 @@ from .routers.refresh import (
     router as refresh_router,
 )
 
-from .common import is_multi_tenant_db
+from .common import is_multi_tenant_db, validate_auth_configuration
 
 logging.basicConfig(
     level=logging.INFO,
@@ -141,6 +141,7 @@ async def background_refresh_loop():
 @asynccontextmanager
 async def lifespan(application: FastAPI):
     """Initialise database on startup and run background refresh worker."""
+    validate_auth_configuration()
     if is_multi_tenant_db():
         from portfoliomaster.db.session import session_scope
         from sqlalchemy import text
@@ -232,6 +233,20 @@ async def track_activity_middleware(request: Request, call_next):
     return await call_next(request)
 
 
+def add_security_headers(request: Request, response: Response) -> Response:
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    # Render terminates external TLS at its load balancer.
+    if request.url.scheme == "https" or os.environ.get("RENDER", "").lower() == "true":
+        response.headers["Strict-Transport-Security"] = "max-age=31536000"
+    return response
+
+
+@app.middleware("http")
+async def security_headers_middleware(request: Request, call_next):
+    return add_security_headers(request, await call_next(request))
+
+
 # Mount domain routers
 app.include_router(config_router)
 app.include_router(positions_router)
@@ -283,7 +298,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     else:
         detail_message = f"Internal Server Error: {exc_name}: {str(exc)}"
 
-    return JSONResponse(
+    response = JSONResponse(
         status_code=500,
         content={
             "type": "about:blank",
@@ -293,6 +308,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
             "instance": request.url.path,
         },
     )
+    return add_security_headers(request, response)
 
 
 @app.get("/favicon.ico", include_in_schema=False)
