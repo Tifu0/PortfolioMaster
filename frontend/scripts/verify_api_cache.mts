@@ -1,6 +1,8 @@
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import nextConfig from '../next.config';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -25,13 +27,9 @@ if (!apiContent.includes("checkYahooTicker(ticker: string") || !apiContent.inclu
 }
 console.log("✅ checkYahooTicker explicitly uses cache: 'no-store'");
 
-// 3. Verify next.config.ts has cacheComponents enabled
-const nextConfigPath = path.join(rootDir, 'next.config.ts');
-const nextConfigContent = fs.readFileSync(nextConfigPath, 'utf8');
-if (!nextConfigContent.includes("cacheComponents: true")) {
-  console.error("❌ next.config.ts must have cacheComponents: true enabled");
-  process.exit(1);
-}
-console.log("✅ next.config.ts has cacheComponents: true enabled");
+// 3. Verify the application uses the default Next.js caching configuration.
+assert.equal(Object.hasOwn(nextConfig, 'cacheComponents'), false, 'cacheComponents must be omitted');
+assert.equal(Object.hasOwn(nextConfig, 'partialPrefetching'), false, 'partialPrefetching must be omitted');
+console.log('✅ Next.js caching opt-ins are omitted');
 
 console.log('API cache verification complete! ✅');

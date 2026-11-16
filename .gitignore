@@ -70,6 +70,3 @@ backups/
 
 # supabase sql
 SQL_supabase.txt
-
-#docs 
-docs/ 
