@@ -1,6 +1,11 @@
+import assert from 'node:assert/strict';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
 import * as api from '../lib/api';
 import type { BackupItem, BackupListResponse, RestoreResponse } from '../lib/types';
 import { BackupExportModal } from '../components/BackupExportModal';
+import { ToastProvider } from '../components/ui/Toast';
 
 console.log('Testing Backup & Export API Client, Types & Components...');
 
@@ -54,5 +59,22 @@ if (typeof BackupExportModal !== 'function') {
   process.exit(1);
 }
 console.log('✅ BackupExportModal component verified');
+
+const router = {
+  bfcacheId: 'backup-verification',
+  back() {}, forward() {}, refresh() {}, hmrRefresh() {}, push() {}, replace() {}, prefetch() {},
+};
+const modalCallbacks = { onClose() {}, onSuccess() {}, onError() {}, onDataRestored() {} };
+const renderModal = (isOpen: boolean) => renderToStaticMarkup(createElement(
+  AppRouterContext.Provider,
+  { value: router },
+  createElement(ToastProvider, null, createElement(BackupExportModal, { isOpen, ...modalCallbacks })),
+));
+assert.equal(renderModal(false), '');
+const dialog = renderModal(true);
+assert.ok(/role="dialog"[^>]*aria-label="Backup &amp; Export Center"/.test(dialog), 'The dialog needs an accessible name');
+assert.match(dialog, /Download CSV/);
+assert.match(dialog, /Restore &amp; Backups/);
+console.log('✅ Backup modal renders an accessible dialog with shared export controls');
 
 console.log('Backup & Export verification complete! ✅');

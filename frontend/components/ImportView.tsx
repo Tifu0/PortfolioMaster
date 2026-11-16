@@ -23,11 +23,14 @@ import {
 } from 'lucide-react';
 import { previewImport, confirmImport } from '@/lib/api';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { useLanguage } from '@/context/LanguageContext';
+import { formatCurrency } from '@/lib/formatters';
 import type { ImportPreviewResponse, Instrument } from '@/lib/types';
 
 export function ImportView() {
   const portfolioContext = usePortfolioOptional();
   const router = useRouter();
+  const { language } = useLanguage();
 
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -489,10 +492,10 @@ export function ImportView() {
                           {inst.currency}
                         </td>
                         <td className="py-2.5 px-4 text-right font-mono text-zinc-300">
-                          {inst.analysis_reference_price ? Number(inst.analysis_reference_price).toFixed(2) : '—'}
+                          {formatCurrency(inst.analysis_reference_price, inst.currency, language)}
                         </td>
                         <td className="py-2.5 px-4 text-right font-mono text-zinc-300">
-                          {inst.target_price ? Number(inst.target_price).toFixed(2) : '—'}
+                          {formatCurrency(inst.target_price, inst.currency, language)}
                         </td>
                         <td className="py-2.5 px-4 text-zinc-400 truncate max-w-xs" title={inst.comment}>
                           {inst.comment || '—'}

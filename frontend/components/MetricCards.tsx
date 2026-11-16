@@ -1,3 +1,5 @@
+'use client';
+
 import React from 'react';
 import {
   Layers,
@@ -8,6 +10,8 @@ import {
   ArrowDownRight,
   Minus,
 } from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
+import { formatCurrency } from '@/lib/formatters';
 import type { PortfolioMetrics, Position } from '@/lib/types';
 
 interface MetricCardsProps {
@@ -15,47 +19,16 @@ interface MetricCardsProps {
   positions?: Position[];
 }
 
-const metricCurrencyFormatters = new Map<string, Intl.NumberFormat>();
-
-function formatCurrency(price: number | null | undefined, currency: string): string {
-  if (price === null || price === undefined || isNaN(price)) {
-    return '—';
-  }
-  const curr = currency && currency.length === 3 ? currency.toUpperCase() : 'EUR';
-  let formatter = metricCurrencyFormatters.get(curr);
-  if (!formatter) {
-    try {
-      formatter = new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: curr,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    } catch {
-      formatter = new Intl.NumberFormat('en-US', {
-        style: 'currency',
-        currency: 'EUR',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    }
-    metricCurrencyFormatters.set(curr, formatter);
-  }
-  try {
-    return formatter.format(price);
-  } catch {
-    return `${price.toFixed(2)} ${currency}`;
-  }
-}
-
 /**
- * MetricCards: Server Component presenting high-level portfolio KPIs:
+ * MetricCards: Client component presenting high-level portfolio KPIs:
  * 1. Total Positions & Active Quotes
  * 2. Best Performer of the Day (Top Gainer)
  * 3. Worst Performer of the Day (Top Loser)
  * 4. Average Daily Variation & Market Sentiment
  */
 export function MetricCards({ metrics: providedMetrics, positions }: MetricCardsProps) {
+  const { language } = useLanguage();
+
   // If backend metrics are provided, use them. Otherwise, compute fallback from positions array.
   const metrics: PortfolioMetrics = React.useMemo(() => {
     if (providedMetrics) {
@@ -207,7 +180,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
                 {metrics.best_performer.company_name}
               </span>
               <span className="font-mono text-zinc-300 font-medium shrink-0">
-                {formatCurrency(metrics.best_performer.latest_price, metrics.best_performer.currency)}
+                {formatCurrency(metrics.best_performer.latest_price, metrics.best_performer.currency, language)}
               </span>
             </div>
           </>
@@ -247,7 +220,7 @@ export function MetricCards({ metrics: providedMetrics, positions }: MetricCards
                 {metrics.worst_performer.company_name}
               </span>
               <span className="font-mono text-zinc-300 font-medium shrink-0">
-                {formatCurrency(metrics.worst_performer.latest_price, metrics.worst_performer.currency)}
+                {formatCurrency(metrics.worst_performer.latest_price, metrics.worst_performer.currency, language)}
               </span>
             </div>
           </>

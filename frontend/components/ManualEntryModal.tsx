@@ -31,6 +31,7 @@ import {
 } from '@/lib/api';
 import { usePortfolioOptional } from '@/context/PortfolioContext';
 import { useLanguage } from '@/context/LanguageContext';
+import { formatCurrency } from '@/lib/formatters';
 
 const POPULAR_EXCHANGES: { label: string; labelEn: string; value: string }[] = [
   { label: 'AUTO (Detección automática)', labelEn: 'AUTO (Automatic detection)', value: 'AUTO' },
@@ -359,7 +360,7 @@ export function ManualEntryModal({
       setYahooCheckResult(res);
       if (res.available) {
         onSuccess?.(
-          `Ticker ${ticker} disponible en Yahoo Finance (${res.currency || ''} ${res.price ?? ''})`
+          `Ticker ${ticker} disponible en Yahoo Finance (${formatCurrency(res.price, res.currency, language)})`
         );
         if (res.price !== undefined && res.price !== null && !editLatestPrice) {
           setEditLatestPrice(String(res.price));
@@ -545,7 +546,7 @@ export function ManualEntryModal({
         setEditAnalysisPrice(String(res.analysis_reference_price));
         if (res.analysis_date) setEditAnalysisDate(res.analysis_date);
         setIsAnalysisPriceManuallyEdited(false);
-        onSuccess?.(`Cotización en fecha de análisis obtenida de Yahoo: ${res.analysis_reference_price}`);
+        onSuccess?.(`Cotización en fecha de análisis obtenida de Yahoo: ${formatCurrency(res.analysis_reference_price, editCurrency, language)}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -564,7 +565,7 @@ export function ManualEntryModal({
       if (res.status === 'ok') {
         setEditStartOfYearPrice(String(res.start_of_year_price));
         if (res.start_of_year_date) setEditStartOfYearDate(res.start_of_year_date);
-        onSuccess?.(`Cotización inicio de año (YTD) obtenida de Yahoo: ${res.start_of_year_price}`);
+        onSuccess?.(`Cotización inicio de año (YTD) obtenida de Yahoo: ${formatCurrency(res.start_of_year_price, editCurrency, language)}`);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1052,7 +1053,7 @@ export function ManualEntryModal({
                                   {yahooCheckResult.provider_symbol}
                                   {yahooCheckResult.company_name ? ` · ${yahooCheckResult.company_name}` : ''}
                                   {yahooCheckResult.price !== undefined && yahooCheckResult.price !== null
-                                    ? ` · ${yahooCheckResult.price} ${yahooCheckResult.currency || ''}`
+                                    ? ` · ${formatCurrency(yahooCheckResult.price, yahooCheckResult.currency, language)}`
                                     : ''}
                                 </p>
                               </div>

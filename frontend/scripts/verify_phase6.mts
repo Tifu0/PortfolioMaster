@@ -1,4 +1,6 @@
+import assert from 'node:assert/strict';
 import * as api from '../lib/api';
+import { formatCurrency } from '../lib/formatters';
 import type {
   RefreshBatchResponse,
   RefreshSingleResponse,
@@ -8,6 +10,17 @@ import { WatchlistTable } from '../components/WatchlistTable';
 import { WatchlistContent } from '../components/WatchlistContent';
 
 console.log('Testing Phase 6 Quote Refresh, Status & Database Actions...');
+
+assert.equal(formatCurrency(12345.67, 'usd', 'en'), '$12,345.67');
+assert.equal(formatCurrency(12345.67, 'USD', 'es'), '12.345,67\u00a0US$');
+assert.equal(formatCurrency(12345.67, 'EUR', 'es'), '12.345,67\u00a0€');
+assert.equal(formatCurrency(0, 'JPY', 'en'), '¥0.00');
+assert.equal(formatCurrency(12.5, null, 'es'), '12,50');
+assert.equal(formatCurrency(12.5, 'GBX', 'en'), 'GBX\u00a012.50');
+for (const value of [null, undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+  assert.equal(formatCurrency(value, 'USD', 'en'), '—');
+}
+console.log('✅ Currency formatting follows the active language and preserves instrument currency');
 
 // ── 1. Verify API functions exist ──────────────────────────────────────── //
 

@@ -46,6 +46,8 @@ import {
 import { usePortfolioOptional } from '@/context/PortfolioContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLanguage } from '@/context/LanguageContext';
+import { useToast } from '@/components/ui/Toast';
+import { formatCurrency } from '@/lib/formatters';
 import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import {
   fetchAnalysisPrice,
@@ -265,39 +267,6 @@ function formatDeclineToTarget(
   };
 }
 
-const tableCurrencyFormatters = new Map<string, Intl.NumberFormat>();
-
-function formatCurrency(price: number | null | undefined, currency: string): string {
-  if (price === null || price === undefined || isNaN(price)) {
-    return '—';
-  }
-  const curr = currency && currency.length === 3 ? currency.toUpperCase() : 'EUR';
-  let formatter = tableCurrencyFormatters.get(curr);
-  if (!formatter) {
-    try {
-      formatter = new Intl.NumberFormat('es-ES', {
-        style: 'currency',
-        currency: curr,
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    } catch {
-      formatter = new Intl.NumberFormat('es-ES', {
-        style: 'currency',
-        currency: 'EUR',
-        minimumFractionDigits: 2,
-        maximumFractionDigits: 2,
-      });
-    }
-    tableCurrencyFormatters.set(curr, formatter);
-  }
-  try {
-    return formatter.format(price);
-  } catch {
-    return `${price.toFixed(2)} ${currency}`;
-  }
-}
-
 function timeAgo(isoDate: string | null | undefined): string {
   if (!isoDate) return '';
   try {
@@ -400,46 +369,6 @@ function numericSortWithNulls(
 }
 
 // ========================================================================== //
-// Toast Notification
-// ========================================================================== //
-
-interface ToastData {
-  id: number;
-  type: 'success' | 'error' | 'info';
-  message: string;
-}
-
-function Toast({ toast, onDismiss }: { toast: ToastData; onDismiss: () => void }) {
-  const colors = {
-    success: 'bg-emerald-500/10 border-emerald-500/20 text-emerald-300',
-    error: 'bg-rose-500/10 border-rose-500/20 text-rose-300',
-    info: 'bg-blue-500/10 border-blue-500/20 text-blue-300',
-  };
-  const icons = {
-    success: <Check className="w-4 h-4 text-emerald-400 shrink-0" />,
-    error: <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />,
-    info: <Info className="w-4 h-4 text-blue-400 shrink-0" />,
-  };
-
-  React.useEffect(() => {
-    const timer = setTimeout(onDismiss, 5000);
-    return () => clearTimeout(timer);
-  }, [onDismiss]);
-
-  return (
-    <div
-      className={`flex items-center gap-3 px-4 py-3 rounded-xl border text-xs shadow-lg backdrop-blur animate-in slide-in-from-top-2 ${colors[toast.type]}`}
-    >
-      {icons[toast.type]}
-      <span className="flex-1">{toast.message}</span>
-      <button onClick={onDismiss} className="hover:opacity-70 transition-opacity">
-        <X className="w-3.5 h-3.5" />
-      </button>
-    </div>
-  );
-}
-
-// ========================================================================== //
 // Wipe Database Confirmation Modal
 // ========================================================================== //
 
@@ -524,6 +453,7 @@ export function WatchlistTable({
   const portfolioContext = usePortfolioOptional();
   const { user, isAuthConfigured, openAuthModal } = useAuth();
   const { language } = useLanguage();
+  const addToast = useToast();
 
   // Fallback data state used only if rendered outside PortfolioProvider
   const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
@@ -681,19 +611,6 @@ export function WatchlistTable({
       }
       return next;
     });
-  }, []);
-
-  // Toasts
-  const [toasts, setToasts] = useState<ToastData[]>([]);
-  const toastIdRef = useRef(0);
-
-  const addToast = useCallback((type: ToastData['type'], message: string) => {
-    const id = ++toastIdRef.current;
-    setToasts((prev) => [...prev, { id, type, message }]);
-  }, []);
-
-  const dismissToast = useCallback((id: number) => {
-    setToasts((prev) => prev.filter((t) => t.id !== id));
   }, []);
 
   const handleResetToolbarConfig = useCallback(() => {
@@ -877,26 +794,10 @@ export function WatchlistTable({
     }
   }, [refreshPortfolioData, setData, onDataChange]);
 
-  const handleDataRestored = useCallback(async () => {
-    if (refreshPortfolioData) {
-      await refreshPortfolioData({ silent: true });
-      return;
-    }
-    try {
-      const [posRes, metRes] = await Promise.allSettled([getPositions(), getMetrics()]);
-      const newPos = posRes.status === 'fulfilled' ? posRes.value.positions || [] : [];
-      const newMet = metRes.status === 'fulfilled' ? metRes.value : null;
-      setData(newPos);
-      onDataChange?.(newPos, newMet);
-    } catch (err) {
-      console.error('Error refreshing data after restore:', err);
-    }
-  }, [refreshPortfolioData, setData, onDataChange]);
-
   // ── Inline Analysis Date Save & Yahoo Price Recalculation ──────────── //
 
   const handleSaveDate = useCallback(
-    async (ticker: string, newDate: string, originalDate: string | null) => {
+    async (ticker: string, newDate: string, originalDate: string | null, currency: string) => {
       const cleanNewDate = newDate.trim() || null;
       const cleanOriginalDate = originalDate?.trim() || null;
 
@@ -930,7 +831,7 @@ export function WatchlistTable({
             const histRes = await fetchAnalysisPrice(ticker, cleanNewDate);
             addToast(
               'success',
-              `${ticker}: fecha de análisis actualizada (${cleanNewDate}) y precio histórico obtenido (${formatCurrency(histRes.analysis_reference_price, 'EUR')})`
+              `${ticker}: fecha de análisis actualizada (${cleanNewDate}) y precio histórico obtenido (${formatCurrency(histRes.analysis_reference_price, currency, language)})`
             );
           } catch (priceErr) {
             const priceMsg = priceErr instanceof Error ? priceErr.message : String(priceErr);
@@ -964,7 +865,7 @@ export function WatchlistTable({
         });
       }
     },
-    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData, data, setData]
+    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData, data, setData, language]
   );
 
   // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
@@ -1177,7 +1078,7 @@ export function WatchlistTable({
                   onKeyDown={(e) => {
                     if (e.key === 'Enter') {
                       e.preventDefault();
-                      handleSaveDate(ticker, editingDateValue, pos.analysis_date);
+                      handleSaveDate(ticker, editingDateValue, pos.analysis_date, pos.currency);
                     } else if (e.key === 'Escape') {
                       e.preventDefault();
                       handleCancelEditingDate();
@@ -1185,7 +1086,7 @@ export function WatchlistTable({
                   }}
                   onBlur={() => {
                     if (editingDateValue !== (pos.analysis_date || '')) {
-                      handleSaveDate(ticker, editingDateValue, pos.analysis_date);
+                      handleSaveDate(ticker, editingDateValue, pos.analysis_date, pos.currency);
                     } else {
                       handleCancelEditingDate();
                     }
@@ -1264,7 +1165,7 @@ export function WatchlistTable({
             return (
               <div
                 className="inline-flex flex-col px-2 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/50 shadow-[0_0_12px_rgba(16,185,129,0.35)] transition-all"
-                title={`¡Precio objetivo alcanzado! Cotización (${pos.latest_price} ${pos.currency}) ≤ Objetivo (${pos.target_price} ${pos.currency})`}
+                title={`¡Precio objetivo alcanzado! Cotización (${formatCurrency(pos.latest_price, pos.currency, language)}) ≤ Objetivo (${formatCurrency(pos.target_price, pos.currency, language)})`}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="relative flex h-2 w-2">
@@ -1377,7 +1278,7 @@ export function WatchlistTable({
               className="flex items-center justify-end font-mono font-medium text-white tabular-nums leading-tight"
               title={tooltip}
             >
-              {formatCurrency(pos.latest_price, pos.currency)}
+              {formatCurrency(pos.latest_price, pos.currency, language)}
             </div>
           );
         },
@@ -1528,7 +1429,7 @@ export function WatchlistTable({
         ),
         cell: ({ row }) => (
           <div className="flex justify-end font-mono text-zinc-300">
-            {formatCurrency(row.original.target_price, row.original.currency)}
+            {formatCurrency(row.original.target_price, row.original.currency, language)}
           </div>
         ),
       },
@@ -1668,15 +1569,6 @@ export function WatchlistTable({
 
   return (
     <div className="flex flex-col gap-4 relative">
-      {/* Toast Layer */}
-      {toasts.length > 0 && (
-        <div className="fixed top-20 right-4 z-[200] flex flex-col gap-2 max-w-sm w-full pointer-events-auto">
-          {toasts.map((t) => (
-            <Toast key={t.id} toast={t} onDismiss={() => dismissToast(t.id)} />
-          ))}
-        </div>
-      )}
-
       {/* Wipe Database Modal */}
       <WipeDatabaseModal
         open={wipeModalOpen}
@@ -1689,9 +1581,7 @@ export function WatchlistTable({
       <BackupExportModal
         isOpen={backupModalOpen}
         onClose={() => setBackupModalOpen(false)}
-        onSuccess={(msg) => addToast('success', msg)}
-        onError={(msg) => addToast('error', msg)}
-        onDataRestored={handleDataRestored}
+        onDataRestored={portfolioContext ? undefined : reloadData}
       />
 
       {/* Search, Filters & Action Buttons Bar */}

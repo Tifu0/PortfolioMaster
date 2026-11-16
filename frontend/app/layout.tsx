@@ -6,6 +6,7 @@ import { PortfolioProvider } from "@/context/PortfolioContext";
 import { LanguageProvider } from "@/context/LanguageContext";
 import { AuthModal } from "@/components/AuthModal";
 import { DomPatchGuard } from "@/components/DomPatchGuard";
+import { ToastProvider } from "@/components/ui/Toast";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -37,12 +38,14 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="min-h-full flex flex-col notranslate">
         <DomPatchGuard />
         <LanguageProvider>
-          <AuthProvider>
-            <PortfolioProvider>
-              {children}
-              <AuthModal />
-            </PortfolioProvider>
-          </AuthProvider>
+          <ToastProvider>
+            <AuthProvider>
+              <PortfolioProvider>
+                {children}
+                <AuthModal />
+              </PortfolioProvider>
+            </AuthProvider>
+          </ToastProvider>
         </LanguageProvider>
       </body>
     </html>

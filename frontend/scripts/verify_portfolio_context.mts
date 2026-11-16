@@ -51,7 +51,7 @@ const componentsToCheck = [
   { file: 'components/ManualEntryModal.tsx', expected: ['usePortfolio', 'optimisticDelete', 'refreshPortfolioData'] },
   { file: 'components/ImportView.tsx', expected: ['usePortfolio', 'refreshPortfolioData'] },
   { file: 'components/BackupExportView.tsx', expected: ['usePortfolio', 'refreshPortfolioData'] },
-  { file: 'components/BackupExportModal.tsx', expected: ['usePortfolio', 'refreshPortfolioData'] },
+  { file: 'components/BackupExportModal.tsx', expected: ['<BackupExportView', 'mode="modal"'] },
 ];
 
 for (const { file, expected } of componentsToCheck) {
