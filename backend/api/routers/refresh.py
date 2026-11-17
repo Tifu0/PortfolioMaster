@@ -91,6 +91,12 @@ def _get_active_sse_subscribers_count() -> int:
 
 def _broadcast_refresh_event(payload: dict) -> None:
     """Thread-safe event broadcast to all connected SSE clients."""
+    if payload.get("type") == "complete":
+        payload = {
+            **payload,
+            "last_refresh_at": _state["last_refresh_at"],
+            "refresh_counter": _state["refresh_counter"],
+        }
     with _sse_lock:
         subscribers = list(_sse_subscribers)
     for q in subscribers:
@@ -782,27 +788,30 @@ async def refresh_stream(
         with _sse_lock:
             _sse_subscribers.add(q)
 
-        # Yield connection confirmation immediately to unbuffer HTTP stream
-        yield f"data: {json.dumps({'type': 'connected'})}\n\n"
-
-        if _state.get("is_refreshing"):
-            cur_b = _state.get("current_batch", 0)
-            tot_b = _state.get("total_batches", 0)
-            proc = _state.get("processed_symbols", 0)
-            tot_s = _state.get("total_symbols", 0)
-            init_payload = {
-                "type": "batch" if cur_b > 0 else "start",
-                "batch_index": cur_b,
-                "total_batches": tot_b,
-                "processed_symbols": proc,
-                "total_symbols": tot_s,
-            }
-            yield f"data: {json.dumps(init_payload)}\n\n"
-
-        if not is_listen_mode and not _state.get("is_refreshing"):
-            threading.Thread(target=_execute_refresh_all, kwargs={"force": force}, daemon=True).start()
-
         try:
+            snapshot = _state.copy()
+            connected = {
+                "type": "connected",
+                "is_refreshing": snapshot["is_refreshing"],
+                "last_refresh_at": snapshot["last_refresh_at"],
+                "refresh_counter": snapshot["refresh_counter"],
+            }
+            yield f"data: {json.dumps(connected)}\n\n"
+
+            if snapshot["is_refreshing"]:
+                current_batch = snapshot["current_batch"]
+                progress = {
+                    "type": "batch" if current_batch > 0 else "start",
+                    "batch_index": current_batch,
+                    "total_batches": snapshot["total_batches"],
+                    "processed_symbols": snapshot["processed_symbols"],
+                    "total_symbols": snapshot["total_symbols"],
+                }
+                yield f"data: {json.dumps(progress)}\n\n"
+
+            if not is_listen_mode and not _state.get("is_refreshing"):
+                threading.Thread(target=_execute_refresh_all, kwargs={"force": force}, daemon=True).start()
+
             while True:
                 try:
                     item = await asyncio.to_thread(q.get, timeout=1.0)

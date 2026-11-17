@@ -1,25 +1,12 @@
 'use client';
 
-import React, {
-  createContext,
-  useContext,
-  useEffect,
-  useState,
-  useCallback,
-  ReactNode,
-} from 'react';
-import {
-  supabase,
-  signInWithEmail,
-  signUpWithEmail,
-  signOut as supabaseSignOut,
-  Session,
-  User,
-} from '@/lib/supabase';
+import { createContext, use, useCallback, useEffect, useEffectEvent, useMemo, useRef, useState, type ReactNode } from 'react';
+import { useRouter } from 'next/navigation';
+import { clearApiClientCache } from '@/lib/api';
+import { isAuthConfigured, supabaseUrl, type AuthUser } from '@/lib/supabase';
 
 export interface AuthContextType {
-  user: User | null;
-  session: Session | null;
+  user: AuthUser | null;
   isLoading: boolean;
   isAuthConfigured: boolean;
   isAuthModalOpen: boolean;
@@ -31,69 +18,35 @@ export interface AuthContextType {
   signOut: () => Promise<void>;
 }
 
+type AuthAction = { action: 'signIn' | 'signUp'; email: string; password: string } | { action: 'signOut' };
+type AuthResult = { user: AuthUser | null; needsConfirmation?: boolean; error?: string };
+
 const AuthContext = createContext<AuthContextType | null>(null);
 
-export function AuthProvider({ children }: { children: ReactNode }) {
-  const [user, setUser] = useState<User | null>(null);
-  const [session, setSession] = useState<Session | null>(null);
-  const isAuthConfigured = Boolean(supabase);
-  const [isLoading, setIsLoading] = useState<boolean>(isAuthConfigured);
-  const [isAuthModalOpen, setIsAuthModalOpen] = useState<boolean>(false);
+async function requestAuth(action: AuthAction): Promise<AuthResult> {
+  const response = await fetch('/api/auth', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(action),
+  });
+  const result: AuthResult = await response.json();
+  if (!response.ok) throw new Error(result.error || 'Authentication request failed.');
+  return result;
+}
+
+export function AuthProvider({ children, initialUser = null }: { children: ReactNode; initialUser?: AuthUser | null }) {
+  const router = useRouter();
+  const [previousInitialUser, setPreviousInitialUser] = useState(initialUser);
+  const [user, setUser] = useState(initialUser);
+  const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
   const [authMessage, setAuthMessage] = useState<string | null>(null);
+  const authChannel = useRef<BroadcastChannel | null>(null);
 
-  // Initialize session on mount
-  useEffect(() => {
-    if (!supabase) {
-      return;
-    }
-
-    let isMounted = true;
-
-    // 1. Fetch existing session
-    supabase.auth.getSession().then(({ data: { session: initialSession } }) => {
-      if (!isMounted) return;
-      setSession(initialSession);
-      setUser(initialSession?.user ?? null);
-      setIsLoading(false);
-    }).catch((err) => {
-      console.warn('[Auth] Failed to load initial session:', err);
-      if (isMounted) setIsLoading(false);
-    });
-
-    // 2. Listen to active auth-state changes & token refreshes
-    const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      (_event, currentSession) => {
-        if (!isMounted) return;
-        setSession(currentSession);
-        setUser(currentSession?.user ?? null);
-        setIsLoading(false);
-
-        if (_event === 'SIGNED_IN') {
-          setIsAuthModalOpen(false);
-          setAuthMessage(null);
-        } else if (_event === 'SIGNED_OUT') {
-          setSession(null);
-          setUser(null);
-        }
-      }
-    );
-
-    // 3. Listen to global auth-required signal from API client 401s
-    const handleAuthRequired = (e: Event) => {
-      const customEvent = e as CustomEvent<{ message?: string }>;
-      const msg = customEvent.detail?.message || 'Identifícate para acceder a tu portafolio personal.';
-      setAuthMessage(msg);
-      setIsAuthModalOpen(true);
-    };
-
-    window.addEventListener('portfoliomaster:auth-required', handleAuthRequired);
-
-    return () => {
-      isMounted = false;
-      subscription.unsubscribe();
-      window.removeEventListener('portfoliomaster:auth-required', handleAuthRequired);
-    };
-  }, []);
+  if (previousInitialUser?.id !== initialUser?.id || previousInitialUser?.email !== initialUser?.email) {
+    setPreviousInitialUser(initialUser);
+    setUser(initialUser);
+  }
 
   const openAuthModal = useCallback((message?: string) => {
     setAuthMessage(message || null);
@@ -105,77 +58,88 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAuthMessage(null);
   }, []);
 
-  const signIn = useCallback(async (email: string, password: string) => {
+  const updateUser = useCallback((nextUser: AuthUser | null, broadcast = false) => {
+    clearApiClientCache();
+    setUser(nextUser);
+    if (broadcast) authChannel.current?.postMessage('session-changed');
+    router.refresh();
+  }, [router]);
+
+  const handleAuthRequired = useEffectEvent((event: Event) => {
+    if (user) updateUser(null);
+    const { detail } = event as CustomEvent<{ message?: string }>;
+    openAuthModal(detail?.message || 'Identifícate para acceder a tu portafolio personal.');
+  });
+
+  const handleRemoteSessionChange = useEffectEvent((event: MessageEvent) => {
+    if (event.data !== 'session-changed') return;
+    clearApiClientCache();
+    setUser(null);
+    window.location.reload();
+  });
+
+  useEffect(() => {
+    if (!isAuthConfigured || !supabaseUrl) return;
+
+    // Remove credentials left by the previous browser SDK without reading them.
     try {
-      const { data, error } = await signInWithEmail(email, password);
-      if (error) {
-        return { error };
-      }
-      setSession(data.session);
-      setUser(data.user);
-      setIsAuthModalOpen(false);
-      setAuthMessage(null);
-      return { error: null };
-    } catch (err: unknown) {
-      return { error: err instanceof Error ? err : new Error(String(err)) };
+      const project = new URL(supabaseUrl).hostname.split('.')[0];
+      const legacyKey = `sb-${project}-auth-token`;
+      localStorage.removeItem(legacyKey);
+      localStorage.removeItem(`${legacyKey}-code-verifier`);
+    } catch {
+      // Storage may be disabled by browser policy.
     }
+
+    const listener = (event: Event) => handleAuthRequired(event);
+    window.addEventListener('portfoliomaster:auth-required', listener);
+    const channel = typeof BroadcastChannel === 'undefined' ? null : new BroadcastChannel('portfoliomaster:auth');
+    if (channel) {
+      channel.onmessage = (event) => handleRemoteSessionChange(event);
+      authChannel.current = channel;
+    }
+    return () => {
+      channel?.close();
+      authChannel.current = null;
+      window.removeEventListener('portfoliomaster:auth-required', listener);
+    };
   }, []);
 
-  const signUp = useCallback(async (email: string, password: string) => {
+  const authenticate = useCallback(async (action: 'signIn' | 'signUp', email: string, password: string) => {
     try {
-      const { data, error } = await signUpWithEmail(email, password);
-      if (error) {
-        return { error };
+      const { user: authenticatedUser, needsConfirmation } = await requestAuth({ action, email, password });
+      if (authenticatedUser) {
+        closeAuthModal();
+        updateUser(authenticatedUser, true);
       }
-      // If email confirmation is disabled, user & session are returned immediately
-      if (data.session) {
-        setSession(data.session);
-        setUser(data.user);
-        setIsAuthModalOpen(false);
-        setAuthMessage(null);
-        return { error: null, needsConfirmation: false };
-      }
-      return { error: null, needsConfirmation: true };
-    } catch (err: unknown) {
-      return { error: err instanceof Error ? err : new Error(String(err)) };
+      return { error: null, needsConfirmation };
+    } catch (error) {
+      return { error: error instanceof Error ? error : new Error(String(error)) };
     }
-  }, []);
+  }, [closeAuthModal, updateUser]);
+
+  const signIn = useCallback((email: string, password: string) => authenticate('signIn', email, password), [authenticate]);
+  const signUp = useCallback((email: string, password: string) => authenticate('signUp', email, password), [authenticate]);
 
   const signOut = useCallback(async () => {
     try {
-      await supabaseSignOut();
-      setSession(null);
-      setUser(null);
-    } catch (err) {
-      console.warn('[Auth] SignOut error:', err);
+      await requestAuth({ action: 'signOut' });
+      updateUser(null, true);
+    } catch (error) {
+      console.warn('[Auth] Sign-out request failed:', error);
     }
-  }, []);
+  }, [updateUser]);
 
-  return (
-    <AuthContext.Provider
-      value={{
-        user,
-        session,
-        isLoading,
-        isAuthConfigured,
-        isAuthModalOpen,
-        authMessage,
-        openAuthModal,
-        closeAuthModal,
-        signIn,
-        signUp,
-        signOut,
-      }}
-    >
-      {children}
-    </AuthContext.Provider>
-  );
+  const value = useMemo(() => ({
+    user, isLoading: false, isAuthConfigured, isAuthModalOpen, authMessage,
+    openAuthModal, closeAuthModal, signIn, signUp, signOut,
+  }), [user, isAuthModalOpen, authMessage, openAuthModal, closeAuthModal, signIn, signUp, signOut]);
+
+  return <AuthContext value={value}>{children}</AuthContext>;
 }
 
 export function useAuth(): AuthContextType {
-  const context = useContext(AuthContext);
-  if (!context) {
-    throw new Error('useAuth must be used within an AuthProvider');
-  }
+  const context = use(AuthContext);
+  if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
 }

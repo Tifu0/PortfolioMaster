@@ -46,7 +46,7 @@ Built on a decoupled modern architecture:
   - **Progressive Real-Time Streaming via Server-Sent Events (SSE)** (`GET /api/refresh/stream`): A centralized pub/sub broadcaster streams batch events (`start`, `batch`, `complete`) to the client for **both manual refreshes and scheduled background loops**.
   - **Incremental Per-Batch Persistence & Live Table Updates**: Quotes are committed to PostgreSQL / SQLite after each batch and immediately rendered in the UI table in real time, rather than blocking until all batches finish.
   - **Zero-Flicker State Preservation**: Incremental updates in `PortfolioProvider` and `WatchlistTable` strictly preserve table state — scroll position, active search filters, column sorting, column widths, and open inline editing (`Analysis Date` or `Research Notes`) are never interrupted or reset.
-  - **Zero CORS Preflight Overhead**: Optimized simple HTTP requests, Next.js proxy rewrites (`/api/:path*`), and FastAPI `CORSMiddleware` with 24-hour preflight caching (`max_age=86400`) eliminate redundant `OPTIONS` round-trips.
+  - **Same-Origin API**: Next.js serves browser requests under `/api/*` and sends the Supabase bearer token to FastAPI from a Secure, HttpOnly session cookie. The watchlist reads the same session on the server to render the signed-in portfolio in the initial document.
   - **Adaptive Sync Heartbeat**: Adaptive background sync with intelligent log filtering to keep development consoles clean and signal-focused.
   
 - **📥 CSV & Excel Spreadsheet Import**:
@@ -126,6 +126,8 @@ npm run dev
 
 You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example))
 
+For authenticated browser sessions, set `API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in the frontend environment. Add the frontend's `/auth/callback` URL to the Supabase Auth redirect allowlist for email confirmation. Users with legacy browser-storage sessions sign in again to create a cookie session.
+
 Refresh interval and batch size are dynamically exposed to the frontend via `/api/config` and displayed in the real-time status badge at the top-right of the dashboard.
 
 ---
@@ -151,7 +153,7 @@ PortfolioMaster/
 │   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
 │   ├── public/                 # Static assets, llms.txt, robots.txt
 │   ├── scripts/                # Automated verification and test scripts
-│   └── next.config.ts          # Next.js config with same-origin/api rewrites to the FastAPI backend
+│   └── next.config.ts          # Next.js application configuration
 │
 ├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
 │   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)

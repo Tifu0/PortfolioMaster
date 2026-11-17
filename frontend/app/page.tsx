@@ -1,125 +1,52 @@
-import React, { Suspense } from 'react';
-import { getPositions, getMetrics, getConfig } from '@/lib/api';
-import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
-import { WatchlistContent } from '@/components/WatchlistContent';
+import { getPositions, getMetrics, getConfig, ApiError } from '@/lib/api';
+import { isAuthConfigured } from '@/lib/supabase';
+import { getServerAuth } from '@/lib/supabase/server';
 import { AppHeader } from '@/components/AppHeader';
+import { WatchlistContent } from '@/components/WatchlistContent';
+import { PortfolioProvider } from '@/context/PortfolioContext';
 import { AlertCircle } from 'lucide-react';
 
-function WatchlistSkeleton() {
-  return (
-    <div className="flex flex-col gap-6 animate-pulse">
-      {/* Header section skeleton */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-        <div>
-          <div className="h-7 w-56 bg-zinc-800 rounded-lg mb-2" />
-          <div className="h-4 w-96 max-w-full bg-zinc-800/60 rounded" />
-        </div>
-        <div className="h-8 w-36 bg-zinc-800/60 rounded-full self-start sm:self-auto" />
-      </div>
-
-      {/* 4 Skeleton Metric Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {[0, 1, 2, 3].map((i) => (
-          <div
-            key={i}
-            className="h-32 rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-5 flex flex-col justify-between"
-          >
-            <div className="flex items-center justify-between">
-              <div className="h-3 w-24 bg-zinc-800 rounded" />
-              <div className="w-8 h-8 rounded-lg bg-zinc-800" />
-            </div>
-            <div className="h-8 w-20 bg-zinc-800 rounded" />
-            <div className="h-3 w-full bg-zinc-800/60 rounded" />
-          </div>
-        ))}
-      </div>
-
-      {/* Table Skeletons */}
-      <div className="flex flex-col gap-4">
-        <div className="h-14 bg-zinc-900/80 border border-zinc-800 rounded-xl w-full" />
-        <div className="h-96 bg-zinc-900/40 border border-zinc-800 rounded-xl w-full flex items-center justify-center">
-          <span className="text-xs font-mono text-zinc-500">Cargando cotizaciones y métricas...</span>
-        </div>
-      </div>
-    </div>
-  );
-}
+export const dynamic = 'force-dynamic';
 
 async function WatchlistDataLoader() {
-  let positions: Position[] = [];
-  let metrics: PortfolioMetrics | null = null;
-  let config: AppConfig | null = null;
-  let fetchError: string | null = null;
-
-  try {
-    const [posResult, metricsResult, configResult] = await Promise.allSettled([
-      getPositions(),
-      getMetrics(),
-      getConfig(),
-    ]);
-
-    if (posResult.status === 'fulfilled') {
-      positions = posResult.value.positions || [];
-    } else {
-      const err = posResult.reason;
-      fetchError = err instanceof Error ? err.message : String(err);
-    }
-
-    if (metricsResult.status === 'fulfilled') {
-      metrics = metricsResult.value;
-    }
-
-    if (configResult.status === 'fulfilled') {
-      config = configResult.value;
-    }
-  } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : String(err);
-    fetchError = msg;
-    positions = [];
-  }
-
-  // An auth requirement during unauthenticated SSR is expected in multi-tenant mode, not a network connection failure.
-  const isAuthNotice =
-    fetchError &&
-    (fetchError.includes('Authentication required') ||
-      fetchError.includes('Bearer token') ||
-      fetchError.includes('401'));
-  const connectionError = isAuthNotice ? null : fetchError;
+  const { user, accessToken } = await getServerAuth();
+  const canLoadPortfolio = !isAuthConfigured || Boolean(accessToken);
+  const [positions, metrics, config] = await Promise.allSettled([
+    canLoadPortfolio ? getPositions('no-store', accessToken ?? undefined) : Promise.resolve(null),
+    canLoadPortfolio ? getMetrics('no-store', accessToken ?? undefined) : Promise.resolve(null),
+    getConfig(),
+  ]);
+  const connectionError = positions.status === 'rejected' &&
+    !(positions.reason instanceof ApiError && positions.reason.status === 401);
 
   return (
     <div className="flex flex-col gap-6">
       {connectionError && (
-        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 text-xs flex items-center gap-3">
-          <AlertCircle className="w-4 h-4 shrink-0 text-amber-400" />
-          <span>
-            Aviso de conexión: No se pudo conectar con el backend ({connectionError}).
-            Comprueba la variable de entorno <code className="bg-amber-500/20 px-1 py-0.5 rounded font-mono">NEXT_PUBLIC_API_URL</code> y que el servicio FastAPI esté activo.
-          </span>
+        <div role="alert" className="flex items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-xs text-amber-300">
+          <AlertCircle className="size-4 shrink-0" />
+          <span>No se pudo cargar la cartera. Comprueba la conexión con el backend.</span>
         </div>
       )}
 
-      {/* Phase 6: WatchlistContent wraps MetricCards + WatchlistTable with shared reactive state */}
-      <WatchlistContent
-        initialPositions={positions}
-        initialMetrics={metrics}
-        initialConfig={config}
-      />
+      <PortfolioProvider
+        serverUserId={user?.id ?? null}
+        initialPositions={positions.status === 'fulfilled' ? positions.value?.positions ?? [] : []}
+        initialMetrics={metrics.status === 'fulfilled' ? metrics.value : null}
+        initialConfig={config.status === 'fulfilled' ? config.value : null}
+        initialDataReady={positions.status === 'fulfilled' && metrics.status === 'fulfilled'}
+      >
+        <WatchlistContent />
+      </PortfolioProvider>
     </div>
   );
 }
 
 export default function WatchlistPage() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col">
-      {/* Top Navigation Bar */}
+    <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
       <AppHeader />
-
-      {/* Main Content Area */}
-      <main className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
-        {/* Suspense streaming data loader */}
-        <Suspense fallback={<WatchlistSkeleton />}>
-          <WatchlistDataLoader />
-        </Suspense>
+      <main className="mx-auto flex w-full max-w-[1680px] flex-1 flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+        <WatchlistDataLoader />
       </main>
     </div>
   );

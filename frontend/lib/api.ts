@@ -22,8 +22,6 @@ import type {
   BackupListResponse,
   RestoreResponse,
 } from './types';
-import { getAuthToken } from './supabase';
-
 const isServer = typeof window === 'undefined';
 
 /**
@@ -38,23 +36,17 @@ export const API_BASE_URL = isServer
   : '';
 
 /**
- * Authenticated fetch wrapper that injects Supabase Bearer JWT token on all outgoing API calls.
+ * Browser calls authenticate with same-origin HttpOnly cookies. Server callers can set a verified Bearer token.
  * Dispatches 'portfoliomaster:auth-required' event on 401 Unauthorized to trigger the auth flow.
  */
 export async function authFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const headers = new Headers(init?.headers);
-  if (!headers.has('Authorization')) {
-    const token = await getAuthToken();
-    if (token) {
-      headers.set('Authorization', `Bearer ${token}`);
-    }
-  }
+  const requestGeneration = cacheGeneration;
   const response = await fetch(input, {
     ...init,
-    headers,
+    credentials: 'same-origin',
   });
 
-  if (response.status === 401 && typeof window !== 'undefined') {
+  if (response.status === 401 && !isServer && requestGeneration === cacheGeneration) {
     window.dispatchEvent(
       new CustomEvent('portfoliomaster:auth-required', {
         detail: { message: 'Tu sesión ha expirado o requiere autenticación. Por favor, identifícate.' },
@@ -110,11 +102,13 @@ async function handleResponse<T>(res: Response): Promise<T> {
 
 let _cachedPositions: PositionsResponse | null = null;
 let _cachedPositionsEtag: string | null = null;
+let cacheGeneration = 0;
 
 let _cachedMetrics: PortfolioMetrics | null = null;
 let _cachedMetricsEtag: string | null = null;
 
 export function clearApiClientCache(): void {
+  cacheGeneration += 1;
   _cachedPositions = null;
   _cachedPositionsEtag = null;
   _cachedMetrics = null;
@@ -126,23 +120,26 @@ export function clearApiClientCache(): void {
  * Fetches the full watchlist with quotes and server-computed derived columns.
  * Supports HTTP 304 Not Modified via ETag to avoid redundant database/bandwidth egress.
  */
-export async function getPositions(cache: RequestCache = 'no-store'): Promise<PositionsResponse> {
+export async function getPositions(cache: RequestCache = 'no-store', accessToken?: string | null): Promise<PositionsResponse> {
   const headers: Record<string, string> = {};
+  const generation = cacheGeneration;
+  const cachedPositions = isServer ? null : _cachedPositions;
+  if (isServer && accessToken) headers.Authorization = `Bearer ${accessToken}`;
   if (!isServer && _cachedPositionsEtag && cache !== 'reload') {
     headers['If-None-Match'] = _cachedPositionsEtag;
   }
   const res = await authFetch(`${API_BASE_URL}/api/positions`, {
-    cache,
+    cache: isServer ? 'no-store' : cache,
     headers,
   });
-  if (res.status === 304 && _cachedPositions) {
-    return _cachedPositions;
+  if (res.status === 304 && cachedPositions) {
+    return cachedPositions;
   }
   const data = await handleResponse<PositionsResponse>(res);
   const etag = res.headers.get('ETag');
-  if (etag) {
+  if (!isServer && generation === cacheGeneration) {
     _cachedPositionsEtag = etag;
-    _cachedPositions = data;
+    _cachedPositions = etag ? data : null;
   }
   return data;
 }
@@ -240,7 +237,9 @@ export async function refreshAll(): Promise<RefreshBatchResponse> {
 export async function streamRefresh(
   onProgress?: (event: RefreshProgressEvent) => void
 ): Promise<RefreshBatchResponse> {
-  const res = await authFetch(`${API_BASE_URL}/api/refresh/stream?trigger=1`);
+  const res = await authFetch(`${API_BASE_URL}/api/refresh/stream?trigger=1`, {
+    headers: { 'X-Portfolio-Mutation': '1' },
+  });
   if (!res.ok) {
     throw new ApiError(`Stream refresh failed: ${res.statusText}`, res.status);
   }
@@ -348,23 +347,26 @@ export async function wipeDatabase(): Promise<GenericStatusResponse> {
  * Fetches portfolio summary metrics (positions count, best/worst performer, average daily change).
  * Supports HTTP 304 Not Modified via ETag to avoid redundant database/bandwidth egress.
  */
-export async function getMetrics(cache: RequestCache = 'no-store'): Promise<PortfolioMetrics> {
+export async function getMetrics(cache: RequestCache = 'no-store', accessToken?: string | null): Promise<PortfolioMetrics> {
   const headers: Record<string, string> = {};
+  const generation = cacheGeneration;
+  const cachedMetrics = isServer ? null : _cachedMetrics;
+  if (isServer && accessToken) headers.Authorization = `Bearer ${accessToken}`;
   if (!isServer && _cachedMetricsEtag && cache !== 'reload') {
     headers['If-None-Match'] = _cachedMetricsEtag;
   }
   const res = await authFetch(`${API_BASE_URL}/api/metrics`, {
-    cache,
+    cache: isServer ? 'no-store' : cache,
     headers,
   });
-  if (res.status === 304 && _cachedMetrics) {
-    return _cachedMetrics;
+  if (res.status === 304 && cachedMetrics) {
+    return cachedMetrics;
   }
   const data = await handleResponse<PortfolioMetrics>(res);
   const etag = res.headers.get('ETag');
-  if (etag) {
+  if (!isServer && generation === cacheGeneration) {
     _cachedMetricsEtag = etag;
-    _cachedMetrics = data;
+    _cachedMetrics = etag ? data : null;
   }
   return data;
 }
@@ -469,9 +471,10 @@ export async function checkYahooTicker(ticker: string, currency?: string): Promi
  * 16. GET /api/config
  * Retrieves backend runtime configuration (refresh interval, batch size, last refresh status).
  */
-export async function getConfig(): Promise<AppConfig> {
+export async function getConfig(signal?: AbortSignal): Promise<AppConfig> {
   const res = await fetch(`${API_BASE_URL}/api/config`, {
     cache: 'no-store',
+    signal,
   });
   return handleResponse<AppConfig>(res);
 }

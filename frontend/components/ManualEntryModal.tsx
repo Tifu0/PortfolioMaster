@@ -29,7 +29,7 @@ import {
   fetchYtdPrice,
   checkYahooTicker,
 } from '@/lib/api';
-import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { usePortfolioDataOptional } from '@/context/PortfolioContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { formatCurrency } from '@/lib/formatters';
 
@@ -76,7 +76,7 @@ export function ManualEntryModal({
   onError,
 }: ManualEntryModalProps) {
   const { language } = useLanguage();
-  const portfolioContext = usePortfolioOptional();
+  const portfolioContext = usePortfolioDataOptional();
 
   const isEditMode = Boolean(initialTickerToEdit);
   const [loading, setLoading] = useState(false);

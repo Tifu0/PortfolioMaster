@@ -19,14 +19,13 @@ const content = fs.readFileSync(contextPath, 'utf8');
 // Check required exports
 const requiredTerms = [
   'PortfolioProvider',
-  'usePortfolio',
+  'usePortfolioData',
+  'PortfolioDataContext',
   'refreshPortfolioData',
   'optimisticDelete',
   'optimisticUpdatePosition',
   'positions',
   'metrics',
-  'config',
-  'isRefreshing',
 ];
 
 for (const term of requiredTerms) {
@@ -36,21 +35,26 @@ for (const term of requiredTerms) {
   }
 }
 
-// Check layout integration
-const layoutPath = path.join(rootDir, 'app', 'layout.tsx');
-const layoutContent = fs.readFileSync(layoutPath, 'utf8');
-if (!layoutContent.includes('PortfolioProvider')) {
-  console.error('❌ app/layout.tsx must wrap children in PortfolioProvider');
+// Check that the watchlist provider receives the verified server snapshot.
+const pagePath = path.join(rootDir, 'app', 'page.tsx');
+const page = fs.readFileSync(pagePath, 'utf8');
+if (!page.includes('<PortfolioProvider') || !page.includes('getServerAuth()') || !page.includes('initialDataReady=')) {
+  console.error('❌ app/page.tsx must seed the portfolio provider from authenticated SSR');
+  process.exit(1);
+}
+const refreshContext = fs.readFileSync(path.join(rootDir, 'context', 'PortfolioRefreshContext.tsx'), 'utf8');
+if (!refreshContext.includes('PortfolioRefreshContext') || !refreshContext.includes('startRefreshSync')) {
+  console.error('❌ Refresh progress needs its own SSE context');
   process.exit(1);
 }
 
 // Verify component integrations
 const componentsToCheck = [
-  { file: 'components/WatchlistContent.tsx', expected: ['usePortfolio', 'seedInitialData', 'refreshPortfolioData'] },
-  { file: 'components/WatchlistTable.tsx', expected: ['usePortfolio', 'refreshPortfolioData', 'optimisticUpdatePosition'] },
-  { file: 'components/ManualEntryModal.tsx', expected: ['usePortfolio', 'optimisticDelete', 'refreshPortfolioData'] },
-  { file: 'components/ImportView.tsx', expected: ['usePortfolio', 'refreshPortfolioData'] },
-  { file: 'components/BackupExportView.tsx', expected: ['usePortfolio', 'refreshPortfolioData'] },
+  { file: 'components/WatchlistContent.tsx', expected: ['usePortfolioData', '<WatchlistRefreshBadge'] },
+  { file: 'components/WatchlistTable.tsx', expected: ['usePortfolioDataOptional', 'refreshPortfolioData', 'optimisticUpdatePosition'] },
+  { file: 'components/ManualEntryModal.tsx', expected: ['usePortfolioDataOptional', 'optimisticDelete', 'refreshPortfolioData'] },
+  { file: 'components/ImportView.tsx', expected: ['usePortfolioDataOptional', 'refreshPortfolioData'] },
+  { file: 'components/BackupExportView.tsx', expected: ['usePortfolioDataOptional', 'refreshPortfolioData'] },
   { file: 'components/BackupExportModal.tsx', expected: ['<BackupExportView', 'mode="modal"'] },
 ];
 
@@ -69,5 +73,5 @@ for (const { file, expected } of componentsToCheck) {
   }
 }
 
-console.log('✅ PortfolioContext and layout integration verified successfully!');
+console.log('✅ Authenticated server snapshot and independent portfolio contexts verified');
 console.log('✅ All components (WatchlistContent, WatchlistTable, ManualEntryModal, ImportView, BackupExportView, BackupExportModal) verified!');

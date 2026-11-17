@@ -14,7 +14,7 @@ const apiPath = path.join(rootDir, 'lib', 'api.ts');
 const apiContent = fs.readFileSync(apiPath, 'utf8');
 
 // 1. Verify getConfig has cache: 'no-store'
-if (!apiContent.includes("getConfig(): Promise<AppConfig>") || !apiContent.includes("fetch(`${API_BASE_URL}/api/config`, {\n    cache: 'no-store'")) {
+if (!apiContent.includes("getConfig(signal?: AbortSignal): Promise<AppConfig>") || !apiContent.includes("fetch(`${API_BASE_URL}/api/config`, {\n    cache: 'no-store'")) {
   console.error("❌ getConfig must explicitly specify cache: 'no-store'");
   process.exit(1);
 }

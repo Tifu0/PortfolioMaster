@@ -1,34 +1,12 @@
 import type { NextConfig } from "next";
 
+if (process.env.VERCEL === '1' && !(process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL)) {
+  throw new Error('Configure API_BASE_URL in Vercel so Next.js can reach the FastAPI backend.');
+}
+
 const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports: ['lucide-react', '@tanstack/react-table'],
-  },
-  async rewrites() {
-    const rawBackend = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL;
-    const isVercel = process.env.VERCEL === "1";
-    const isProduction = process.env.NODE_ENV === "production" || isVercel;
-
-    if (!rawBackend && isVercel) {
-      throw new Error(
-        "[Deployment Configuration Error] API_BASE_URL or NEXT_PUBLIC_API_URL must be configured in Vercel environment variables. " +
-        "Without this setting, /api/* rewrites cannot route to the deployed backend on Render."
-      );
-    }
-
-    if (!rawBackend && isProduction) {
-      console.warn("[Rewrites] Warning: API_BASE_URL / NEXT_PUBLIC_API_URL is not set in production.");
-    }
-    const backendUrl = (rawBackend || (isProduction ? "" : "http://localhost:8000")).replace(/\/$/, "");
-    if (!backendUrl) {
-      return [];
-    }
-    return [
-      {
-        source: '/api/:path*',
-        destination: `${backendUrl}/api/:path*`,
-      },
-    ];
   },
   async headers() {
     return [

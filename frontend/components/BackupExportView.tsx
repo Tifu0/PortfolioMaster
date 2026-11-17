@@ -15,7 +15,7 @@ import {
   restoreBackupFile,
   restoreLocalBackup,
 } from '@/lib/api';
-import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { usePortfolioDataOptional } from '@/context/PortfolioContext';
 import type { BackupItem } from '@/lib/types';
 import { ExportSection } from './backup/ExportSection';
 import { RestoreUploadSection } from './backup/RestoreUploadSection';
@@ -42,7 +42,7 @@ export function BackupExportView({
   onError,
   onDataRestored,
 }: BackupExportViewProps = {}) {
-  const portfolioContext = usePortfolioOptional();
+  const portfolioContext = usePortfolioDataOptional();
   const router = useRouter();
   const addToast = useToast();
 

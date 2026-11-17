@@ -4,14 +4,13 @@
 // reactive state between MetricCards, WatchlistTable, and ManualEntryModal.
 // It also reads query parameters (?add=1 or ?edit=TICKER) to control modal visibility.
 
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import dynamic from 'next/dynamic';
 import { useSearchParams, useRouter } from 'next/navigation';
-import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
 import { MetricCards } from '@/components/MetricCards';
 import { WatchlistTable } from '@/components/WatchlistTable';
-import { getPositions, getMetrics, getConfig } from '@/lib/api';
-import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { usePortfolioData } from '@/context/PortfolioContext';
+import { usePortfolioRefreshOptional } from '@/context/PortfolioRefreshContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { useToast } from '@/components/ui/Toast';
 
@@ -20,75 +19,9 @@ const ManualEntryModal = dynamic(
   { ssr: false }
 );
 
-interface WatchlistContentProps {
-  initialPositions: Position[];
-  initialMetrics: PortfolioMetrics | null;
-  initialConfig?: AppConfig | null;
-}
-
-/**
- * WatchlistContent: Client coordinator for MetricCards, WatchlistTable,
- * ManualEntryModal, and reactive state updates.
- */
-export function WatchlistContent({ initialPositions, initialMetrics, initialConfig }: WatchlistContentProps) {
-  const portfolioContext = usePortfolioOptional();
+export function WatchlistContent() {
+  const { positions, metrics } = usePortfolioData();
   const { t } = useLanguage();
-
-  // Seed initial server-fetched data into portfolio provider
-  const seedInitialData = portfolioContext?.seedInitialData;
-  useEffect(() => {
-    if (seedInitialData) {
-      seedInitialData(initialPositions, initialMetrics, initialConfig);
-    }
-  }, [seedInitialData, initialPositions, initialMetrics, initialConfig]);
-
-  // When initialPositions is empty (e.g. unauthenticated SSR in cloud deployments),
-  // automatically trigger client-side data refresh once the user session is available
-  const hasTriggeredInitialRefresh = useRef(false);
-  const isInitialized = portfolioContext?.isInitialized;
-  const isRefreshing = portfolioContext?.isRefreshing;
-  const refreshPortfolioData = portfolioContext?.refreshPortfolioData;
-
-  useEffect(() => {
-    if (
-      !hasTriggeredInitialRefresh.current &&
-      portfolioContext &&
-      !isInitialized &&
-      !isRefreshing &&
-      refreshPortfolioData
-    ) {
-      hasTriggeredInitialRefresh.current = true;
-      refreshPortfolioData({ silent: true });
-    }
-  }, [portfolioContext, isInitialized, isRefreshing, refreshPortfolioData]);
-
-  const [localPositions, setLocalPositions] = useState<Position[]>(initialPositions);
-  const [localMetrics, setLocalMetrics] = useState<PortfolioMetrics | null>(initialMetrics);
-  const [localConfig, setLocalConfig] = useState<AppConfig | null>(initialConfig || null);
-
-  const positions = useMemo(() => {
-    if (portfolioContext && portfolioContext.isInitialized) {
-      return portfolioContext.positions;
-    }
-    if (initialPositions && initialPositions.length > 0) {
-      return initialPositions;
-    }
-    return portfolioContext ? portfolioContext.positions : localPositions;
-  }, [portfolioContext, initialPositions, localPositions]);
-
-  const metrics = useMemo(() => {
-    if (portfolioContext && portfolioContext.isInitialized && portfolioContext.metrics) {
-      return portfolioContext.metrics;
-    }
-    return initialMetrics || portfolioContext?.metrics || localMetrics;
-  }, [portfolioContext, initialMetrics, localMetrics]);
-
-  const appConfig = useMemo(() => {
-    if (portfolioContext && portfolioContext.config) {
-      return portfolioContext.config;
-    }
-    return initialConfig || localConfig;
-  }, [portfolioContext, initialConfig, localConfig]);
 
   // Modal state
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -97,31 +30,6 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
   const router = useRouter();
   const searchParams = useSearchParams();
   const addToast = useToast();
-
-  // Fetch backend runtime configuration if not present
-  useEffect(() => {
-    let isCancelled = false;
-    async function loadConfig() {
-      try {
-        const cfg = await getConfig();
-        if (!isCancelled) {
-          if (portfolioContext) {
-            portfolioContext.setConfig(cfg);
-          } else {
-            setLocalConfig(cfg);
-          }
-        }
-      } catch (err) {
-        console.warn('Could not fetch app configuration from backend:', err);
-      }
-    }
-    if (!appConfig && !portfolioContext?.config) {
-      loadConfig();
-    }
-    return () => {
-      isCancelled = true;
-    };
-  }, [appConfig, portfolioContext]);
 
   // Listen for ?add=1 or ?edit=TICKER in URL and custom header events
   useEffect(() => {
@@ -155,46 +63,6 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
     };
   }, [searchParams]);
 
-  // Reload data from API
-  const reloadData = useCallback(async () => {
-    if (portfolioContext) {
-      await portfolioContext.refreshPortfolioData({ silent: true });
-      return;
-    }
-    try {
-      const [posRes, metRes] = await Promise.allSettled([getPositions(), getMetrics()]);
-      let newPos: Position[] = [];
-      let newMet: PortfolioMetrics | null = null;
-
-      if (posRes.status === 'fulfilled') {
-        newPos = posRes.value.positions || [];
-      }
-      if (metRes.status === 'fulfilled') {
-        newMet = metRes.value;
-      }
-
-      setLocalPositions(newPos);
-      setLocalMetrics(newMet);
-    } catch (err: unknown) {
-      console.error('Error reloading portfolio data:', err);
-    }
-  }, [portfolioContext]);
-
-  const handleDataChange = useCallback(
-    (newPositions: Position[], newMetrics: PortfolioMetrics | null) => {
-      if (portfolioContext) {
-        queueMicrotask(() => {
-          portfolioContext.setPositions(newPositions);
-          portfolioContext.setMetrics(newMetrics);
-        });
-      } else {
-        setLocalPositions(newPositions);
-        setLocalMetrics(newMetrics);
-      }
-    },
-    [portfolioContext]
-  );
-
   const handleOpenAdd = useCallback(() => {
     setTickerToEdit(null);
     setIsModalOpen(true);
@@ -214,13 +82,9 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
     }
   }, [router, searchParams]);
 
-  const handleModalSuccess = useCallback(
-    async (message: string) => {
-      addToast('success', message);
-      await reloadData();
-    },
-    [addToast, reloadData]
-  );
+  const handleModalSuccess = useCallback((message: string) => {
+    addToast('success', message);
+  }, [addToast]);
 
   const handleModalError = useCallback(
     (message: string) => {
@@ -242,86 +106,7 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
           </p>
         </div>
 
-        {/* Top-Right: Auto-refresh & Batch Badge with Live Sync Status */}
-        {appConfig && (() => {
-          const isRefreshing = Boolean(
-            portfolioContext?.isRefreshing ||
-            Boolean(portfolioContext?.batchProgress) ||
-            appConfig.is_refreshing
-          );
-          const currentBatch = portfolioContext?.batchProgress?.currentBatch ?? appConfig.current_batch ?? 0;
-          const totalBatches = portfolioContext?.batchProgress?.totalBatches ?? appConfig.total_batches ?? 0;
-          const processed = portfolioContext?.batchProgress?.processed ?? appConfig.processed_symbols ?? 0;
-          const total = portfolioContext?.batchProgress?.total ?? appConfig.total_symbols ?? 0;
-
-          return (
-            <div
-              key={isRefreshing ? 'badge-refreshing' : 'badge-idle'}
-              translate="no"
-              className={`notranslate flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
-                isRefreshing
-                  ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
-                  : 'bg-zinc-900/90 border-zinc-800 text-zinc-300'
-              }`}
-              title={
-                isRefreshing
-                  ? t('refreshInProgress')
-                  : t('autoRefreshEvery', { seconds: appConfig.refresh_interval_seconds, size: appConfig.batch_size })
-              }
-            >
-              {isRefreshing ? (
-                <>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
-                  </span>
-                  <span className="text-amber-400 font-semibold animate-pulse">
-                    {/* Actualizando lote... */}
-                    {currentBatch > 0 ? t('updatingBatch') : t('startingUpdate')}
-                  </span>
-                  <span className="text-zinc-600">·</span>
-                  <span className="text-amber-300/80">
-                    {currentBatch > 0 && totalBatches > 0 ? (
-                      <>
-                        <strong className="text-amber-200 font-semibold">
-                          {currentBatch}/{totalBatches}
-                        </strong>{' '}
-                        <span>({processed}/{total})</span>
-                      </>
-                    ) : (
-                      <>
-                        <span>{t('batch')} </span>
-                        <strong className="text-amber-200 font-semibold">
-                          {appConfig.batch_size}
-                        </strong>
-                      </>
-                    )}
-                  </span>
-                </>
-              ) : (
-                <>
-                  <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
-                  </span>
-                  <span>
-                    <span>{t('autoSync')} </span>
-                    <strong className="text-emerald-400 font-semibold">
-                      {appConfig.refresh_interval_seconds}s
-                    </strong>
-                  </span>
-                  <span className="text-zinc-600">·</span>
-                  <span className="text-zinc-400">
-                    <span>{t('batch')} </span>
-                    <strong className="text-zinc-200 font-semibold">
-                      {appConfig.batch_size}
-                    </strong>
-                  </span>
-                </>
-              )}
-            </div>
-          );
-        })()}
+        <WatchlistRefreshBadge />
       </div>
 
       {/* Phase 4: Metric Cards */}
@@ -331,8 +116,6 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
       <WatchlistTable
         initialPositions={positions}
         initialMetrics={metrics}
-        appConfig={appConfig}
-        onDataChange={handleDataChange}
         onEditTicker={handleOpenEdit}
         onAddInstrument={handleOpenAdd}
       />
@@ -346,5 +129,84 @@ export function WatchlistContent({ initialPositions, initialMetrics, initialConf
         onError={handleModalError}
       />
     </>
+  );
+}
+
+function WatchlistRefreshBadge() {
+  const refresh = usePortfolioRefreshOptional();
+  const { t } = useLanguage();
+  const appConfig = refresh?.config;
+  if (!appConfig) return null;
+  const isRefreshing = refresh.isRefreshing;
+  const currentBatch = refresh.batchProgress?.currentBatch ?? 0;
+  const totalBatches = refresh.batchProgress?.totalBatches ?? 0;
+  const processed = refresh.batchProgress?.processed ?? 0;
+  const total = refresh.batchProgress?.total ?? 0;
+  return (
+    <div
+      key={isRefreshing ? 'badge-refreshing' : 'badge-idle'}
+      translate="no"
+      className={`notranslate flex items-center gap-2 self-start sm:self-auto px-3.5 py-1.5 rounded-full border text-xs font-mono shadow-sm backdrop-blur-sm transition-all duration-300 ${
+        isRefreshing
+          ? 'bg-amber-950/40 border-amber-500/40 text-amber-200'
+          : 'bg-zinc-900/90 border-zinc-800 text-zinc-300'
+      }`}
+      title={
+        isRefreshing
+          ? t('refreshInProgress')
+          : t('autoRefreshEvery', { seconds: appConfig.refresh_interval_seconds, size: appConfig.batch_size })
+      }
+    >
+      {isRefreshing ? (
+        <>
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
+          </span>
+          <span className="text-amber-400 font-semibold animate-pulse">
+            {/* Actualizando lote... */}
+            {currentBatch > 0 ? t('updatingBatch') : t('startingUpdate')}
+          </span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-amber-300/80">
+            {currentBatch > 0 && totalBatches > 0 ? (
+              <>
+                <strong className="text-amber-200 font-semibold">
+                  {currentBatch}/{totalBatches}
+                </strong>{' '}
+                <span>({processed}/{total})</span>
+              </>
+            ) : (
+              <>
+                <span>{t('batch')} </span>
+                <strong className="text-amber-200 font-semibold">
+                  {appConfig.batch_size}
+                </strong>
+              </>
+            )}
+          </span>
+        </>
+      ) : (
+        <>
+          <span className="relative flex h-2 w-2">
+            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+          </span>
+          <span>
+            <span>{t('autoSync')} </span>
+            <strong className="text-emerald-400 font-semibold">
+              {appConfig.refresh_interval_seconds}s
+            </strong>
+          </span>
+          <span className="text-zinc-600">·</span>
+          <span className="text-zinc-400">
+            <span>{t('batch')} </span>
+            <strong className="text-zinc-200 font-semibold">
+              {appConfig.batch_size}
+            </strong>
+          </span>
+        </>
+      )}
+    </div>
   );
 }

@@ -22,13 +22,13 @@ import {
   RefreshCw,
 } from 'lucide-react';
 import { previewImport, confirmImport } from '@/lib/api';
-import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { usePortfolioDataOptional } from '@/context/PortfolioContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { formatCurrency } from '@/lib/formatters';
 import type { ImportPreviewResponse, Instrument } from '@/lib/types';
 
 export function ImportView() {
-  const portfolioContext = usePortfolioOptional();
+  const portfolioContext = usePortfolioDataOptional();
   const router = useRouter();
   const { language } = useLanguage();
 

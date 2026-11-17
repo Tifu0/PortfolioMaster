@@ -18,6 +18,7 @@ import {
   SortingState,
   useReactTable,
 } from '@tanstack/react-table';
+import { useWindowVirtualizer } from '@tanstack/react-virtual';
 import {
   ArrowDown,
   ArrowUp,
@@ -43,12 +44,13 @@ import {
   Rows3,
   LogIn,
 } from 'lucide-react';
-import { usePortfolioOptional } from '@/context/PortfolioContext';
+import { usePortfolioDataOptional } from '@/context/PortfolioContext';
+import { usePortfolioRefreshOptional } from '@/context/PortfolioRefreshContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLanguage } from '@/context/LanguageContext';
 import { useToast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/formatters';
-import type { Position, PortfolioMetrics, AppConfig } from '@/lib/types';
+import type { Position, PortfolioMetrics, AppConfig, RefreshProgressEvent } from '@/lib/types';
 import {
   fetchAnalysisPrice,
   getPositions,
@@ -267,12 +269,12 @@ function formatDeclineToTarget(
   };
 }
 
-function timeAgo(isoDate: string | null | undefined): string {
+function timeAgo(isoDate: string | null | undefined, now: number): string {
   if (!isoDate) return '';
   try {
     const d = new Date(isoDate);
     if (isNaN(d.getTime())) return '';
-    const seconds = Math.floor((Date.now() - d.getTime()) / 1000);
+    const seconds = Math.floor((now - d.getTime()) / 1000);
     if (seconds < 60) return 'hace unos segundos';
     if (seconds < 3600) return `hace ${Math.floor(seconds / 60)}m`;
     if (seconds < 86400) return `hace ${Math.floor(seconds / 3600)}h`;
@@ -300,7 +302,7 @@ function formatStackedDate(isoDate: string | null | undefined): { dayMonth: stri
 // Quote Tooltip Helper (Accessible info on hover without visual density / boxes)
 // ========================================================================== //
 
-function getQuoteTooltip(pos: Position): string | undefined {
+function getQuoteTooltip(pos: Position, now?: number): string | undefined {
   const s = pos.quote_status ? String(pos.quote_status).toUpperCase() : null;
   const statusMap: Record<string, string> = {
     FRESH: 'Cotización en tiempo real',
@@ -319,7 +321,7 @@ function getQuoteTooltip(pos: Position): string | undefined {
   if (pos.quote_provider) {
     parts.push(`Proveedor: ${pos.quote_provider}`);
   }
-  const elapsed = timeAgo(pos.quote_fetched_at);
+  const elapsed = now === undefined ? '' : timeAgo(pos.quote_fetched_at, now);
   if (elapsed) {
     parts.push(elapsed);
   }
@@ -442,6 +444,18 @@ function WipeDatabaseModal({
 // Main Component
 // ========================================================================== //
 
+function WatchlistRowSpacer({ height, columnCount }: { height: number; columnCount: number }) {
+  if (height <= 0) return null;
+
+  return (
+    <tbody aria-hidden="true">
+      <tr>
+        <td colSpan={columnCount} className="p-0" style={{ height }} />
+      </tr>
+    </tbody>
+  );
+}
+
 export function WatchlistTable({
   initialPositions,
   initialMetrics: _initialMetrics,
@@ -450,7 +464,7 @@ export function WatchlistTable({
   onEditTicker,
   onAddInstrument,
 }: WatchlistTableProps) {
-  const portfolioContext = usePortfolioOptional();
+  const portfolioContext = usePortfolioDataOptional();
   const { user, isAuthConfigured, openAuthModal } = useAuth();
   const { language } = useLanguage();
   const addToast = useToast();
@@ -477,9 +491,6 @@ export function WatchlistTable({
 
   const data = activePositions;
   const setData = portfolioContext ? portfolioContext.setPositions : setLocalPositions;
-
-  // Track whether the client has mounted to prevent SSR hydration mismatches
-  const [isMounted, setIsMounted] = useState<boolean>(false);
 
   // Sorting state & persistence
   const [sorting, setSorting] = useState<SortingState>([]);
@@ -527,8 +538,6 @@ export function WatchlistTable({
       }
     } catch {
       // ignore storage access errors
-    } finally {
-      setIsMounted(true);
     }
   }, []);
 
@@ -870,36 +879,22 @@ export function WatchlistTable({
 
   // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
 
-  const handleBatchRefresh = useCallback(async () => {
+  const handleBatchRefresh = useCallback(async (onProgress?: (event: RefreshProgressEvent) => void) => {
     if (batchRefreshing) return;
     setBatchRefreshing(true);
     try {
+      let completed = false;
       const quotesRes = await streamRefresh((event) => {
-        if (event.type === 'batch' && event.batch_index && event.total_batches) {
-          if (portfolioContext) {
-            portfolioContext.setBatchProgress({
-              currentBatch: event.batch_index,
-              totalBatches: event.total_batches,
-              processed: event.processed_symbols ?? 0,
-              total: event.total_symbols ?? 0,
-            });
-            // Progressive live update: re-fetch positions & metrics in background per completed batch
-            portfolioContext.refreshPortfolioData({ silent: true });
-          }
-        }
+        if (event.type === 'complete') completed = true;
+        onProgress?.(event);
       });
+      if (!onProgress || !completed) await reloadData();
 
       if (quotesRes.status === 'fresh') {
         addToast(
           'info',
           quotesRes.message || 'Precios al día (actualizados recientemente)'
         );
-        if (portfolioContext) {
-          portfolioContext.setBatchProgress(null);
-          await portfolioContext.refreshPortfolioData({ silent: true });
-        } else {
-          await reloadData();
-        }
         return;
       }
 
@@ -916,22 +911,13 @@ export function WatchlistTable({
         failedQuotes > 0 ? 'info' : 'success',
         `${updatedQuotes} de ${totalQuotes} cotizaciones actualizadas${failedMsg}${analysisMsg}${ytdMsg}`
       );
-      if (portfolioContext) {
-        portfolioContext.setBatchProgress(null);
-        await portfolioContext.refreshPortfolioData({ silent: true });
-      } else {
-        await reloadData();
-      }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       addToast('error', `Error al actualizar cotizaciones: ${msg}`);
-      if (portfolioContext) {
-        portfolioContext.setBatchProgress(null);
-      }
     } finally {
       setBatchRefreshing(false);
     }
-  }, [batchRefreshing, addToast, portfolioContext, reloadData]);
+  }, [batchRefreshing, addToast, reloadData]);
 
   // ── Single Row Refresh ──────────────────────────────────────────────── //
 
@@ -1272,11 +1258,13 @@ export function WatchlistTable({
         ),
         cell: ({ row }) => {
           const pos = row.original;
-          const tooltip = getQuoteTooltip(pos);
           return (
             <div
               className="flex items-center justify-end font-mono font-medium text-white tabular-nums leading-tight"
-              title={tooltip}
+              title={getQuoteTooltip(pos)}
+              onMouseEnter={(event) => {
+                event.currentTarget.title = getQuoteTooltip(pos, Date.now()) ?? '';
+              }}
             >
               {formatCurrency(pos.latest_price, pos.currency, language)}
             </div>
@@ -1534,38 +1522,45 @@ export function WatchlistTable({
     getFilteredRowModel: getFilteredRowModel(),
   });
 
+  const rows = table.getRowModel().rows;
+  const tableHeaderRef = useRef<HTMLTableSectionElement>(null);
+  const [scrollMargin, setScrollMargin] = useState(0);
+  const getItemKey = useCallback((index: number) => rows[index].id, [rows]);
+  const rowVirtualizer = useWindowVirtualizer<HTMLTableSectionElement>({
+    count: rows.length,
+    getItemKey,
+    estimateSize: () => rowHeight,
+    initialRect: { height: 640, width: 0 },
+    overscan: 6,
+    scrollMargin,
+  });
+
+  useEffect(() => {
+    const header = tableHeaderRef.current;
+    if (!header) return;
+
+    const observer = new ResizeObserver(() => {
+      setScrollMargin(header.getBoundingClientRect().bottom + window.scrollY);
+    });
+    observer.observe(header);
+    observer.observe(document.body);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    rowVirtualizer.measure();
+  }, [rowHeight, rowVirtualizer]);
+
+  const visibleRows = rowVirtualizer.getVirtualItems();
+  const topSpace = (visibleRows[0]?.start ?? scrollMargin) - scrollMargin;
+  const visibleEnd = (visibleRows.at(-1)?.end ?? scrollMargin) - scrollMargin;
+  const bottomSpace = rowVirtualizer.getTotalSize() - visibleEnd;
+
   const cellPaddingClass = useMemo(() => {
     if (rowHeight <= 34) return 'py-1 px-2.5';
     if (rowHeight <= 42) return 'py-1.5 px-3';
     return 'py-3 px-4';
   }, [rowHeight]);
-
-  if (!isMounted) {
-    return (
-      <div className="flex flex-col gap-4">
-        {/* Table Toolbar Skeleton */}
-        <div className="flex flex-wrap items-center justify-between gap-3 bg-zinc-900/60 border border-zinc-800/80 rounded-xl p-3 shadow-lg animate-pulse">
-          <div className="flex items-center gap-3">
-            <div className="w-56 h-9 rounded-lg bg-zinc-800/80" />
-            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
-            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
-          </div>
-          <div className="flex items-center gap-2">
-            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
-            <div className="w-28 h-9 rounded-lg bg-zinc-800/60" />
-          </div>
-        </div>
-
-        {/* Table Container Skeleton */}
-        <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur shadow-2xl p-8 min-h-[440px] flex flex-col items-center justify-center gap-3 animate-pulse">
-          <div className="w-6 h-6 border-2 border-emerald-400/20 border-t-emerald-400 rounded-full animate-spin" />
-          <span className="text-xs text-zinc-500 font-medium tracking-wide">
-            Cargando cotizaciones y configuraciones...
-          </span>
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col gap-4 relative">
@@ -1689,46 +1684,14 @@ export function WatchlistTable({
           )}
 
           {/* Batch Refresh (Cotizaciones + Precios de Análisis) */}
-          {toolbarConfig.updateQuotes && (() => {
-            const isAnyRefreshing =
-              batchRefreshing ||
-              Boolean(portfolioContext?.isRefreshing) ||
-              Boolean(portfolioContext?.batchProgress) ||
-              Boolean(appConfig?.is_refreshing);
-
-            const currentBatch = portfolioContext?.batchProgress?.currentBatch ?? appConfig?.current_batch ?? 0;
-            const totalBatches = portfolioContext?.batchProgress?.totalBatches ?? appConfig?.total_batches ?? 0;
-            const processed = portfolioContext?.batchProgress?.processed ?? appConfig?.processed_symbols ?? 0;
-            const total = portfolioContext?.batchProgress?.total ?? appConfig?.total_symbols ?? 0;
-
-            return (
-              <button
-                onClick={handleBatchRefresh}
-                disabled={isAnyRefreshing || data.length === 0}
-                className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
-                  bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
-                  hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
-                  disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-                title={language === 'es' ? 'Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance' : 'Refresh all quotes and analysis prices from Yahoo Finance'}
-              >
-                {isAnyRefreshing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
-                    <span className="hidden sm:inline text-amber-300">
-                      {currentBatch > 0 && totalBatches > 0
-                        ? `${language === 'es' ? 'Actualizando' : 'Updating'} ${currentBatch}/${totalBatches} (${processed}/${total})...`
-                        : `${language === 'es' ? 'Actualizando...' : 'Refreshing...'}`}
-                    </span>
-                  </>
-                ) : (
-                  <>
-                    <RefreshCw className="w-4 h-4" />
-                    <span className="hidden sm:inline">{language === 'es' ? 'Actualizar Cotizaciones' : 'Refresh Quotes'}</span>
-                  </>
-                )}
-              </button>
-            );
-          })()}
+          {toolbarConfig.updateQuotes && (
+            <WatchlistRefreshButton
+              appConfig={appConfig}
+              batchRefreshing={batchRefreshing}
+              isEmpty={data.length === 0}
+              onRefresh={handleBatchRefresh}
+            />
+          )}
 
           {/* Reset Column Widths Button */}
           {toolbarConfig.restoreColumns && (
@@ -2116,7 +2079,7 @@ export function WatchlistTable({
       {/* Table Container */}
       <div className="overflow-x-auto rounded-xl border border-zinc-800 bg-zinc-900/40 backdrop-blur shadow-2xl">
         <table
-          className="w-full text-left text-sm text-zinc-300 divide-y divide-zinc-800/80 table-fixed"
+          className="w-full table-fixed text-left text-sm text-zinc-300"
           style={
             {
               width: `${table.getTotalSize()}px`,
@@ -2125,7 +2088,7 @@ export function WatchlistTable({
             } as React.CSSProperties
           }
         >
-          <thead className="bg-zinc-950/70 text-zinc-400">
+          <thead ref={tableHeaderRef} className="border-b border-zinc-800/80 bg-zinc-950/70 text-zinc-400">
             {table.getHeaderGroups().map((headerGroup) => (
               <tr key={headerGroup.id}>
                 {headerGroup.headers.map((header) => {
@@ -2189,130 +2152,137 @@ export function WatchlistTable({
               </tr>
             ))}
           </thead>
-          <tbody className="divide-y divide-zinc-800/60 font-sans">
-            {table.getRowModel().rows.length > 0 ? (
-              table.getRowModel().rows.map((row) => {
-                const ticker = row.original.user_ticker;
-                const isRefreshingRow = refreshingTickers.has(ticker);
-                const isExpanded = expandedDescriptionTickers.has(ticker);
-                const currentComment =
-                  commentDrafts[ticker] !== undefined
-                    ? commentDrafts[ticker]
-                    : row.original.comment || '';
-                const hasUnsavedChanges =
-                  currentComment !== (row.original.comment || '');
+          <WatchlistRowSpacer height={topSpace} columnCount={columns.length} />
+          {visibleRows.map((virtualRow) => {
+            const row = rows[virtualRow.index];
+            const ticker = row.original.user_ticker;
+            const isRefreshingRow = refreshingTickers.has(ticker);
+            const isExpanded = expandedDescriptionTickers.has(ticker);
+            const currentComment =
+              commentDrafts[ticker] !== undefined
+                ? commentDrafts[ticker]
+                : row.original.comment || '';
+            const hasUnsavedChanges =
+              currentComment !== (row.original.comment || '');
 
-                return (
-                  <React.Fragment key={row.id}>
-                    <tr
-                      className={`hover:bg-zinc-800/30 transition-colors group ${
-                        isRefreshingRow ? 'opacity-60' : ''
-                      } ${isExpanded ? 'bg-zinc-850/60' : ''}`}
-                      style={{ height: `${rowHeight}px` }}
+            return (
+              <tbody
+                key={virtualRow.key}
+                data-index={virtualRow.index}
+                ref={rowVirtualizer.measureElement}
+                className="font-sans"
+              >
+                <tr
+                  className={`group border-b border-zinc-800/60 transition-colors hover:bg-zinc-800/30 ${
+                    isRefreshingRow ? 'opacity-60' : ''
+                  } ${isExpanded ? 'bg-zinc-850/60' : ''}`}
+                  style={{ height: `${rowHeight}px` }}
+                >
+                  {row.getVisibleCells().map((cell) => (
+                    <td
+                      key={cell.id}
+                      style={{
+                        width: `${cell.column.getSize()}px`,
+                        height: `${rowHeight}px`,
+                      }}
+                      className={`${cellPaddingClass} align-middle overflow-hidden`}
                     >
-                      {row.getVisibleCells().map((cell) => (
-                        <td
-                          key={cell.id}
-                          style={{
-                            width: `${cell.column.getSize()}px`,
-                            height: `${rowHeight}px`,
-                          }}
-                          className={`${cellPaddingClass} align-middle overflow-hidden`}
-                        >
-                          {flexRender(
-                            cell.column.columnDef.cell,
-                            cell.getContext()
-                          )}
-                        </td>
-                      ))}
-                    </tr>
-                    {isExpanded && (
-                      <tr className="bg-zinc-900/95 border-b border-zinc-800">
-                        <td
-                          colSpan={row.getVisibleCells().length}
-                          className="px-4 py-3.5 sm:px-6"
-                        >
-                          <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3 shadow-lg animate-in fade-in-50 duration-150">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2.5">
-                                <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
-                                  <FileText className="w-4 h-4" />
-                                </div>
-                                <div>
-                                  <span className="text-xs font-semibold text-white">
-                                    Descripción de la Empresa
-                                  </span>
-                                  <span className="text-xs text-zinc-400 ml-2 font-mono">
-                                    {row.original.user_ticker} · {row.original.company_name}
-                                  </span>
-                                </div>
-                              </div>
-                              <button
-                                onClick={() => toggleDescription(ticker)}
-                                className="text-zinc-500 hover:text-zinc-300 p-1 rounded-lg hover:bg-zinc-800 transition"
-                                title="Cerrar panel de descripción"
-                              >
-                                <X className="w-4 h-4" />
-                              </button>
+                      {flexRender(
+                        cell.column.columnDef.cell,
+                        cell.getContext()
+                      )}
+                    </td>
+                  ))}
+                </tr>
+                {isExpanded && (
+                  <tr className="bg-zinc-900/95 border-b border-zinc-800">
+                    <td
+                      colSpan={row.getVisibleCells().length}
+                      className="px-4 py-3.5 sm:px-6"
+                    >
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3 shadow-lg animate-in fade-in-50 duration-150">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2.5">
+                            <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
+                              <FileText className="w-4 h-4" />
                             </div>
-
-                            <textarea
-                              value={currentComment}
-                              onChange={(e) =>
-                                handleCommentChange(ticker, e.target.value)
-                              }
-                              placeholder={
-                                language === 'es'
-                                  ? `Escribe aquí la descripción, notas o tesis de inversión de ${row.original.company_name}...`
-                                  : `Write description, notes, or investment thesis for ${row.original.company_name}...`
-                              }
-                              rows={3}
-                              className="w-full bg-zinc-900/90 border border-zinc-800 rounded-lg p-3 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-sans leading-relaxed resize-y"
-                            />
-
-                            <div className="flex items-center justify-between text-xs pt-0.5">
-                              <span className="text-zinc-500 text-[11px] font-mono">
-                                {currentComment.length} {language === 'es' ? 'caracteres' : 'characters'}
-                                {hasUnsavedChanges && (
-                                  <span className="ml-2 text-amber-400">
-                                    • {language === 'es' ? 'Cambios sin guardar' : 'Unsaved changes'}
-                                  </span>
-                                )}
+                            <div>
+                              <span className="text-xs font-semibold text-white">
+                                Descripción de la Empresa
                               </span>
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => toggleDescription(ticker)}
-                                  className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition"
-                                >
-                                  {language === 'es' ? 'Cerrar' : 'Close'}
-                                </button>
-                                <button
-                                  onClick={() => handleSaveComment(row.original)}
-                                  disabled={savingCommentTicker === ticker}
-                                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
-                                >
-                                  {savingCommentTicker === ticker ? (
-                                    <>
-                                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                      {language === 'es' ? 'Guardando...' : 'Saving...'}
-                                    </>
-                                  ) : (
-                                    <>
-                                      <Check className="w-3.5 h-3.5" />
-                                      {language === 'es' ? 'Guardar Descripción' : 'Save Description'}
-                                    </>
-                                  )}
-                                </button>
-                              </div>
+                              <span className="text-xs text-zinc-400 ml-2 font-mono">
+                                {row.original.user_ticker} · {row.original.company_name}
+                              </span>
                             </div>
                           </div>
-                        </td>
-                      </tr>
-                    )}
-                  </React.Fragment>
-                );
-              })
-            ) : (
+                          <button
+                            onClick={() => toggleDescription(ticker)}
+                            className="text-zinc-500 hover:text-zinc-300 p-1 rounded-lg hover:bg-zinc-800 transition"
+                            title="Cerrar panel de descripción"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
+                        </div>
+
+                        <textarea
+                          value={currentComment}
+                          onChange={(e) =>
+                            handleCommentChange(ticker, e.target.value)
+                          }
+                          placeholder={
+                            language === 'es'
+                              ? `Escribe aquí la descripción, notas o tesis de inversión de ${row.original.company_name}...`
+                              : `Write description, notes, or investment thesis for ${row.original.company_name}...`
+                          }
+                          rows={3}
+                          className="w-full bg-zinc-900/90 border border-zinc-800 rounded-lg p-3 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-sans leading-relaxed resize-y"
+                        />
+
+                        <div className="flex items-center justify-between text-xs pt-0.5">
+                          <span className="text-zinc-500 text-[11px] font-mono">
+                            {currentComment.length} {language === 'es' ? 'caracteres' : 'characters'}
+                            {hasUnsavedChanges && (
+                              <span className="ml-2 text-amber-400">
+                                • {language === 'es' ? 'Cambios sin guardar' : 'Unsaved changes'}
+                              </span>
+                            )}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => toggleDescription(ticker)}
+                              className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition"
+                            >
+                              {language === 'es' ? 'Cerrar' : 'Close'}
+                            </button>
+                            <button
+                              onClick={() => handleSaveComment(row.original)}
+                              disabled={savingCommentTicker === ticker}
+                              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium text-white bg-blue-600 hover:bg-blue-500 transition disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+                            >
+                              {savingCommentTicker === ticker ? (
+                                <>
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  {language === 'es' ? 'Guardando...' : 'Saving...'}
+                                </>
+                              ) : (
+                                <>
+                                  <Check className="w-3.5 h-3.5" />
+                                  {language === 'es' ? 'Guardar Descripción' : 'Save Description'}
+                                </>
+                              )}
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            );
+          })}
+          <WatchlistRowSpacer height={bottomSpace} columnCount={columns.length} />
+          <tbody className="font-sans">
+            {rows.length === 0 && (
               <tr>
                 <td
                   colSpan={columns.length}
@@ -2339,7 +2309,7 @@ export function WatchlistTable({
                         {language === 'es' ? 'Iniciar Sesión' : 'Sign In'}
                       </button>
                     </div>
-                  ) : portfolioContext && (!portfolioContext.isInitialized || portfolioContext.isRefreshing) && data.length === 0 ? (
+                  ) : portfolioContext && !portfolioContext.isInitialized && data.length === 0 ? (
                     <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
                       <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
                       <p className="text-sm font-medium text-zinc-300">
@@ -2428,5 +2398,48 @@ export function WatchlistTable({
         </div>
       )}
     </div>
+  );
+}
+
+function WatchlistRefreshButton({ appConfig, batchRefreshing, isEmpty, onRefresh }: {
+  appConfig?: AppConfig | null;
+  batchRefreshing: boolean;
+  isEmpty: boolean;
+  onRefresh: (onProgress?: (event: RefreshProgressEvent) => void) => Promise<void>;
+}) {
+  const refresh = usePortfolioRefreshOptional();
+  const { language } = useLanguage();
+  const config = refresh?.config ?? appConfig;
+  const isAnyRefreshing = batchRefreshing || (refresh ? refresh.isRefreshing : Boolean(config?.is_refreshing));
+  const currentBatch = refresh?.batchProgress?.currentBatch ?? config?.current_batch ?? 0;
+  const totalBatches = refresh?.batchProgress?.totalBatches ?? config?.total_batches ?? 0;
+  const processed = refresh?.batchProgress?.processed ?? config?.processed_symbols ?? 0;
+  const total = refresh?.batchProgress?.total ?? config?.total_symbols ?? 0;
+  return (
+    <button
+      onClick={() => onRefresh(refresh?.applyStreamEvent)}
+      disabled={isAnyRefreshing || isEmpty}
+      className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
+        bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
+        hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
+        disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
+      title={language === 'es' ? 'Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance' : 'Refresh all quotes and analysis prices from Yahoo Finance'}
+    >
+      {isAnyRefreshing ? (
+        <>
+          <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+          <span className="hidden sm:inline text-amber-300">
+            {currentBatch > 0 && totalBatches > 0
+              ? `${language === 'es' ? 'Actualizando' : 'Updating'} ${currentBatch}/${totalBatches} (${processed}/${total})...`
+              : `${language === 'es' ? 'Actualizando...' : 'Refreshing...'}`}
+          </span>
+        </>
+      ) : (
+        <>
+          <RefreshCw className="w-4 h-4" />
+          <span className="hidden sm:inline">{language === 'es' ? 'Actualizar Cotizaciones' : 'Refresh Quotes'}</span>
+        </>
+      )}
+    </button>
   );
 }

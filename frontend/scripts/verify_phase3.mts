@@ -1,3 +1,10 @@
+import assert from 'node:assert/strict';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { AppRouterContext } from 'next/dist/shared/lib/app-router-context.shared-runtime';
+import { WatchlistTable } from '../components/WatchlistTable';
+import { ToastProvider } from '../components/ui/Toast';
+import { AuthProvider } from '../context/AuthContext';
 import type { Position } from '../lib/types';
 
 console.log('Testing Phase 3 Watchlist Table and API data contracts...');
@@ -60,4 +67,27 @@ for (const prop of requiredProps) {
 }
 
 console.log('✅ Position data shape verified against WatchlistTable requirements');
+
+const largeWatchlist = Array.from({ length: 300 }, (_, index) => ({
+  ...samplePosition,
+  id: index,
+  user_ticker: `TST${String(index).padStart(3, '0')}`,
+  company_name: `Fixture constituent ${String(index).padStart(3, '0')}`,
+}));
+const router = {
+  bfcacheId: 'watchlist-verification',
+  back() {}, forward() {}, refresh() {}, hmrRefresh() {}, push() {}, replace() {}, prefetch() {},
+};
+const watchlist = createElement(WatchlistTable, { initialPositions: largeWatchlist });
+const markup = renderToStaticMarkup(createElement(
+  AppRouterContext.Provider,
+  { value: router },
+  createElement(AuthProvider, null, createElement(ToastProvider, null, watchlist)),
+));
+const renderedCompanies = new Set(markup.match(/Fixture constituent \d{3}/g));
+assert.ok(renderedCompanies.has('Fixture constituent 000'), 'SSR must include the first holding');
+assert.ok(renderedCompanies.size < 50, `SSR rendered ${renderedCompanies.size} holdings instead of a viewport-sized range`);
+assert.ok(!renderedCompanies.has('Fixture constituent 299'), 'Offscreen holdings must not be rendered on the server');
+console.log('✅ SSR includes the first holdings while keeping the initial row count bounded');
+
 console.log('Phase 3 verification complete!');

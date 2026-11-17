@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
-import { PortfolioProvider } from "@/context/PortfolioContext";
 import { LanguageProvider } from "@/context/LanguageContext";
+import { getServerAuth } from "@/lib/supabase/server";
 import { AuthModal } from "@/components/AuthModal";
 import { DomPatchGuard } from "@/components/DomPatchGuard";
 import { ToastProvider } from "@/components/ui/Toast";
@@ -28,7 +28,8 @@ export const metadata: Metadata = {
   },
 };
 
-export default function RootLayout({ children }: LayoutProps<"/">) {
+export default async function RootLayout({ children }: LayoutProps<"/">) {
+  const { user } = await getServerAuth();
   return (
     <html
       lang="en"
@@ -39,11 +40,9 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <DomPatchGuard />
         <LanguageProvider>
           <ToastProvider>
-            <AuthProvider>
-              <PortfolioProvider>
-                {children}
-                <AuthModal />
-              </PortfolioProvider>
+            <AuthProvider initialUser={user}>
+              {children}
+              <AuthModal />
             </AuthProvider>
           </ToastProvider>
         </LanguageProvider>

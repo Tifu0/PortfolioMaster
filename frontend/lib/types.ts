@@ -294,7 +294,22 @@ export interface RefreshProgressEvent {
   refreshed_count?: number;
   analysis_prices_updated?: number;
   ytd_prices_updated?: number;
+  last_refresh_at?: string | null;
+  refresh_counter?: number;
+  quotes?: Record<string, {
+    price?: number | string | null;
+    previous_close?: number | string | null;
+    status?: string;
+    quote_timestamp?: string;
+  }>;
 }
+
+export type RefreshStreamEvent = RefreshProgressEvent | {
+  type: 'connected';
+  last_refresh_at?: string | null;
+  refresh_counter?: number;
+  is_refreshing?: boolean;
+};
 
 export interface BackupItem {
   filename: string;
