@@ -23,8 +23,6 @@ services:
         value: "300"
       - key: REFRESH_COOLDOWN_SECONDS
         value: "120"
-      - key: BATCH_SIZE
-        value: "50"
       - key: REFRESH_BATCH_SIZE
         value: "50"
       - key: CORS_ORIGINS

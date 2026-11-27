@@ -42,3 +42,15 @@ For every assigned task, ticket, or refactoring phase, you must execute the foll
 - **Backend Concurrency:** Never block the FastAPI async event loop with synchronous database queries or external network calls (e.g., Yahoo Finance). Use threadpool delegation (`asyncio.to_thread`) or synchronous endpoints (`def`) where appropriate.
 - **Frontend Performance:** Prevent unnecessary re-renders by cleanly separating context states (data vs. transient UI progress) and utilize virtualization (`@tanstack/react-virtual`) for heavy data tables.
 - **Security:** Maintain strict multi-tenant isolation (`user_id` validation on every query), prevent fallback secrets in production environments, and secure auth tokens via `@supabase/ssr` cookies.
+
+---
+
+## 6. Dependency & Lockfile Commands
+`pyproject.toml` is the single source of truth for Python dependencies; regenerate lockfiles with `uv` instead of maintaining manual `requirements*.txt` files.
+
+| Task | Command |
+|---|---|
+| Install Python runtime | `pip install -r requirements.lock` |
+| Install Python dev/test | `pip install -r requirements-dev.lock && pip install --no-deps -e .` |
+| Update `requirements.lock` | `uv pip compile --universal pyproject.toml -o requirements.lock` |
+| Update `requirements-dev.lock` | `uv pip compile --universal pyproject.toml --extra dev -o requirements-dev.lock` |
