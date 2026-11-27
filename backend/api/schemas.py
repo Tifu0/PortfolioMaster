@@ -57,3 +57,20 @@ class ImportInstrumentItem(BaseModel):
 
 class ImportConfirmRequest(BaseModel):
     instruments: List[ImportInstrumentItem]
+
+
+class CheckYahooResponse(BaseModel):
+    """Canonical response schema for GET /api/instruments/check-yahoo."""
+
+    status: str
+    available: bool
+    valid: bool
+    ticker: str
+    provider_symbol: str
+    exchange: str
+    currency: str
+    price: Optional[float] = None
+    previous_close: Optional[float] = None
+    company_name: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None

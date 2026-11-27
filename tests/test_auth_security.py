@@ -303,11 +303,11 @@ class TestMultiTenantIsolation:
         assert res_create_b.status_code in (200, 201)
 
         # Verify User A still has their target 220
-        inst_a = client_a.get("/api/instruments/AAPL").json()
+        inst_a = client_a.get("/api/instruments/AAPL").json()["instrument"]
         assert inst_a["target_price"] == 220.0
 
         # Verify User B has their target 330
-        inst_b = client_b.get("/api/instruments/AAPL").json()
+        inst_b = client_b.get("/api/instruments/AAPL").json()["instrument"]
         assert inst_b["target_price"] == 330.0
 
         # User B wipes their database

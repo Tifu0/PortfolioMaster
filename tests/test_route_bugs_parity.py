@@ -61,8 +61,8 @@ class TestCurrencyNormalization:
         # Check DB query
         r_get1 = client.get("/api/instruments/SAN_TEST")
         assert r_get1.status_code == 200
-        assert r_get1.json()["currency"] != "AUTO"
-        assert r_get1.json()["currency"] == "EUR"
+        assert r_get1.json()["instrument"]["currency"] != "AUTO"
+        assert r_get1.json()["instrument"]["currency"] == "EUR"
 
         # 2. Currency empty string
         r2 = client.post("/api/instruments", json={

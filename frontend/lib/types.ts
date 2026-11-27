@@ -123,22 +123,9 @@ export interface InstrumentsResponse {
 }
 
 export interface InstrumentDetailResponse {
-  id?: number | null;
-  user_ticker?: string;
-  provider_symbol?: string | null;
-  exchange?: string;
-  currency?: string;
-  company_name?: string;
-  analysis_date?: string | null;
-  analysis_reference_price?: number | null;
-  start_of_year_date?: string | null;
-  start_of_year_price?: number | null;
-  target_price?: number | null;
-  comment?: string;
-  active?: boolean;
-  instrument?: Instrument;
+  status?: string;
+  instrument: Instrument;
   quote?: Quote | null;
-  [key: string]: unknown;
 }
 
 export interface InstrumentCreateRequest {
@@ -168,6 +155,7 @@ export interface InstrumentUpdateRequest {
   start_of_year_price?: number | null;
   start_of_year_date?: string | null;
   comment?: string | null;
+  active?: boolean | null;
   latest_price?: number | null;
   previous_close?: number | null;
 }
@@ -175,14 +163,16 @@ export interface InstrumentUpdateRequest {
 export interface CheckYahooResponse {
   status?: string;
   available: boolean;
+  valid?: boolean;
   ticker?: string;
   provider_symbol?: string;
   exchange?: string;
   currency?: string;
-  price?: number;
-  previous_close?: number;
-  message?: string;
-  company_name?: string;
+  price?: number | null;
+  previous_close?: number | null;
+  message?: string | null;
+  error?: string | null;
+  company_name?: string | null;
 }
 
 export interface RefreshBatchResponse {
