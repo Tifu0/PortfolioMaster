@@ -24,7 +24,7 @@ For every assigned task, ticket, or refactoring phase, you must execute the foll
    - Implement the minimal clean code required to pass the test suite successfully (Green). Ensure strict adherence to typing and architectural patterns.
 4. **Phase D: Refactoring & Quality Gate (Refactor)**
    - Clean up code, remove redundancies, ensure zero regressions, and verify 100% test passing rates.
-   - Commit atomically on a dedicated working branch (`feat/*`, `fix/*`, `chore/*`), push the branch to `origin`, and open a Pull Request toward `main` (without force-pushing or auto-merging `main` unless explicitly instructed).
+   - Commit atomically on a dedicated working branch (`feat/*`, `fix/*`, `chore/*`), push the branch to `origin`, open a Pull Request toward `main`, and execute/merge the PR into `main` once all checks pass (without force-pushing), leaving local `main` synced and removing the temporary branch.
 
 ---
 
