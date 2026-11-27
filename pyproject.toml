@@ -28,9 +28,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4",
-    "pytest-cov>=4.1",
     "pytest-timeout>=2.2",
     "httpx>=0.27",
+    "cryptography>=42.0",
 ]
 
 [project.scripts]
@@ -38,3 +38,11 @@ portfoliomaster-api = "uvicorn:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.uv]
+# Minimum security floors for transitive dependencies without adding phantom direct imports
+constraint-dependencies = [
+    "certifi>=2026.10.18",
+    "soupsieve>=4.0.0",
+    "opentelemetry-api>=1.45.2",
+]

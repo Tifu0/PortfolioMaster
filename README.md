@@ -71,64 +71,9 @@ Built on a decoupled modern architecture:
 
 ---
 
-## 🚀 Quick Start
+## 🚀 Local Execution
 
-### Windows (1-Step Launch)
-Run the automated script from the root directory or double-click it:
-```cmd
-run.bat
-```
-This script automatically:
-1. Sets up the Python virtual environment (`venv`) and installs backend requirements (`requirements.txt`).
-2. Installs Node.js dependencies in `frontend/` (`npm install`) if not present.
-3. Launches the **FastAPI backend** on `http://localhost:8000`.
-4. Launches the **Next.js frontend** on `http://localhost:3000`.
-
----
-
-### Manual Setup
-
-#### 1. Start the Backend (FastAPI)
-```bash
-# Create and activate Python virtual environment
-python -m venv venv
-venv\Scripts\activate    # On Windows (or 'source venv/bin/activate' on Linux/macOS)
-
-# Install dependencies
-pip install -r requirements.txt
-
-# Configure authentication in .env before starting the backend
-uvicorn backend.api.main:app --reload --port 8000 --env-file .env
-```
-- **API Server**: [http://localhost:8000](http://localhost:8000)
-- **Interactive API Documentation (Swagger UI)**: [http://localhost:8000/docs](http://localhost:8000/docs)
-- **Alternative Documentation (ReDoc)**: [http://localhost:8000/redoc](http://localhost:8000/redoc)
-
-#### 2. Start the Frontend (Next.js)
-In a separate terminal window:
-```bash
-cd frontend
-
-# Install dependencies
-npm install
-
-# Start Next.js development server
-npm run dev
-```
-- **Web Application**: [http://localhost:3000](http://localhost:3000)
-
----
-
-### ⚙️ Environment Configuration (`.env`)
-
-> [!NOTE]
-> The backend requires explicit authentication configuration. Set a valid `SUPABASE_JWT_SECRET` of at least 32 bytes for HS256, or set `SUPABASE_URL` alone for asymmetric signing keys. Use process environment variables or a local `.env` file.
-
-You can customize the application behavior by creating or editing `.env` in the project root (see [.env.example](.env.example))
-
-For authenticated browser sessions, set `API_BASE_URL`, `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_ANON_KEY` in the frontend environment. Add the frontend's `/auth/callback` URL to the Supabase Auth redirect allowlist for email confirmation. Users with legacy browser-storage sessions sign in again to create a cookie session.
-
-Refresh interval and batch size are dynamically exposed to the frontend via `/api/config` and displayed in the real-time status badge at the top-right of the dashboard.
+Local setup instructions (1-step `run.bat`, manual backend/frontend launch, `.env` configuration, sample CSV import, and SQLite-to-Supabase migration) live in [`local/README.md`](local/README.md), alongside the local-only `portfolio.db`, `CSV_example.csv`, and `SQL_supabase.txt` workspace files.
 
 ---
 
@@ -164,10 +109,11 @@ PortfolioMaster/
 │   └── refresh/                # Batch quote runner with fault tolerance
 │
 ├── backups/                    # Local automatic safety snapshots (rotated, git-ignored)
+├── local/                      # Local execution guide (README.md) & git-ignored local data files
 ├── tests/                      # Core test suite (calculations, database, ingest, providers, backup/export, batch_runner)
-├── portfolio.db                # Local SQLite database file
-├── requirements.txt            # Python dependencies (FastAPI, Pandas, openpyxl, yfinance, etc.)
-├── pyproject.toml              # Python package metadata
+├── requirements.lock           # Pinned Python runtime dependencies (generated from pyproject.toml)
+├── requirements-dev.lock       # Pinned Python dev/test dependencies (generated from pyproject.toml)
+├── pyproject.toml              # Single source of truth for Python dependencies and package metadata
 ├── pytest.ini                  # Pytest configuration
 └── run.bat                     # Windows 1-step launch script
 ```
@@ -218,7 +164,7 @@ Both backend and frontend contain automated test suites.
 Install the development requirements before running the Python suite. This also installs the runtime requirements.
 
 ```bash
-pip install -r requirements-dev.txt
+pip install -r requirements-dev.lock && pip install --no-deps -e .
 ```
 
 Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
@@ -267,7 +213,7 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
 1. Link repository to Render and create a **Web Service** using `render.yaml`.
 2. Configure settings:
    - **Environment**: Python 3.12.6
-   - **Build Command**: `pip install -r requirements.txt && pip install .`
+   - **Build Command**: `pip install -r requirements.lock && pip install --no-deps .`
    - **Pre-Deploy Command**: `alembic upgrade head`
    - **Start Command**: `uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT`
    - **Health Check Path**: `/health`
@@ -278,7 +224,7 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
    - `CORS_ORIGINS`: `https://portfolio-master-sigma-peach.vercel.app`
    - `ENVIRONMENT`: `production`
    - `REFRESH_INTERVAL_SECONDS`: `300` (5-minute production interval; set to `0` to disable auto-refresh)
-   - `BATCH_SIZE` / `REFRESH_BATCH_SIZE`: `50` (halves database round-trips vs. default 25)
+   - `REFRESH_BATCH_SIZE`: `50` (halves database round-trips vs. default 25)
    - `IDLE_TIMEOUT_SECONDS`: `900` (pause background refreshes after 15 min of client inactivity)
 
 ### 2. Vercel Deployment (Next.js App Router)
@@ -295,24 +241,13 @@ PortfolioMaster supports high-availability, multi-tenant cloud deployment:
 
 ## 🚚 Migrating Legacy SQLite Data to Supabase PostgreSQL
 
-To migrate an existing SQLite database (`portfolio.db`) or JSON v1.0 backup into your multi-tenant Supabase PostgreSQL database:
-
-```bash
-# 1. Dry run (validation, duplicate detection, orphan check, checksum reconciliation - 0 DB writes)
-python scripts/migrate_sqlite_to_web.py --sqlite portfolio.db --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..." --dry-run
-
-# 2. Live migration (atomic commit with rollback safety)
-python scripts/migrate_sqlite_to_web.py --sqlite portfolio.db --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..."
-
-# 3. Rollback (if ever needed to cleanly purge migrated user records)
-python scripts/migrate_sqlite_to_web.py --rollback --user-id <TARGET-USER-UUID> --db-url "postgresql+psycopg://..."
-```
+For step-by-step SQLite migration commands (`scripts/migrate_sqlite_to_web.py` with `local/portfolio.db`), see [`local/README.md`](local/README.md).
 ---
 
 ## 🔒 Privacy & Architecture Modes
 
 - **Multi-Tenant Cloud Mode:** When `DATABASE_URL` is set to Supabase PostgreSQL, all user data is partitioned by `user_id` authenticated via Supabase JWT with Row Level Security.
-- **Local-First Mode:** When `DATABASE_URL` is unset in development, data is stored locally in SQLite (`portfolio.db`).
+- **Local-First Mode:** When `DATABASE_URL` is unset in development, data is stored locally in SQLite (`portfolio.db` or `DATABASE_URL=sqlite:///local/portfolio.db`).
 
 ---
 

@@ -4,7 +4,7 @@ services:
     runtime: python
     region: frankfurt
     plan: starter
-    buildCommand: "pip install -r requirements.txt && pip install ."
+    buildCommand: "pip install -r requirements.lock && pip install --no-deps ."
     preDeployCommand: "alembic upgrade head"
     startCommand: "uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}"
     healthCheckPath: /health
@@ -23,8 +23,6 @@ services:
         value: "300"
       - key: REFRESH_COOLDOWN_SECONDS
         value: "120"
-      - key: BATCH_SIZE
-        value: "50"
       - key: REFRESH_BATCH_SIZE
         value: "50"
       - key: CORS_ORIGINS
