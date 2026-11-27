@@ -20,11 +20,3 @@ class MockProvider(MarketDataProvider):
             else:
                 results[symbol] = self.mock_data.get(symbol, Quote(status=QuoteStatus.UNAVAILABLE))
         return results
-
-    @property
-    def batch_supported(self) -> bool:
-        return True
-
-    @property
-    def default_batch_size(self) -> int:
-        return 10

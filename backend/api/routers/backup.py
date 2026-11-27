@@ -8,6 +8,7 @@ import os
 import tempfile
 import uuid
 from datetime import datetime
+from decimal import InvalidOperation
 
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 
@@ -25,6 +26,7 @@ from portfoliomaster.backup.sqlite_backup import (
     validate_sqlite_backup,
 )
 from portfoliomaster.db.repository import wipe_database
+from portfoliomaster.db.session import is_production
 from ..common import get_current_user_id, is_multi_tenant_db
 from .positions import invalidate_positions_cache
 
@@ -136,12 +138,14 @@ def restore_backup(
         try:
             payload = json.loads(text)
         except Exception as e:
-            raise HTTPException(status_code=400, detail=f"Invalid JSON format: {e}")
+            logger.warning("[BackupRestore] Invalid JSON payload: %s", e)
+            detail = "Invalid JSON format." if is_production() else f"Invalid JSON format: {e}"
+            raise HTTPException(status_code=400, detail=detail)
 
         # Strict schema & data validation before touching database
         try:
             validated_items = validate_json_backup_payload(payload)
-        except ValueError as e:
+        except (ValueError, InvalidOperation) as e:
             raise HTTPException(status_code=400, detail=str(e))
 
         if is_multi_tenant_db():
@@ -168,7 +172,7 @@ def restore_backup(
             result = restore_from_json(payload)
             invalidate_positions_cache()
             return result
-        except ValueError as e:
+        except (ValueError, InvalidOperation) as e:
             raise HTTPException(status_code=400, detail=str(e))
         except Exception as e:
             logger.error("[BackupRestore] SQLite restore failed: %s", e)
@@ -248,4 +252,6 @@ def restore_local_backup_endpoint(
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error restoring backup: {e}")
+        logger.exception("[BackupRestore] Local automatic backup restore failed: %s", e)
+        detail = "Error restoring backup." if is_production() else f"Error restoring backup: {e}"
+        raise HTTPException(status_code=500, detail=detail)

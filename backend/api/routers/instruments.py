@@ -36,9 +36,10 @@ from ..common import (
     _to_float,
     get_current_user_id,
     is_multi_tenant_db,
+    is_production,
 )
 from .positions import invalidate_positions_cache
-from ..schemas import InstrumentCreate, InstrumentUpdate
+from ..schemas import CheckYahooResponse, InstrumentCreate, InstrumentUpdate
 
 logger = logging.getLogger(__name__)
 
@@ -203,7 +204,38 @@ def list_instruments(
     }
 
 
-@router.get("/check-yahoo")
+def _parse_optional_iso_date(raw: Optional[str], field_name: str) -> Optional[date]:
+    """Parse an optional ISO-8601 date string or raise HTTP 422 on malformed input."""
+    if not raw or not raw.strip():
+        return None
+    try:
+        return date.fromisoformat(raw.strip())
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Invalid ISO date format for '{field_name}': expected YYYY-MM-DD",
+        ) from exc
+
+
+def _build_provider_symbol(norm_ticker: str, raw_ticker: str, exchange: Exchange | str, currency: str) -> str:
+    """Resolve Yahoo Finance provider_symbol from normalized ticker, exchange, and currency."""
+    suffix = get_yahoo_suffix(raw_ticker, exchange, currency)
+    if suffix and not norm_ticker.upper().endswith(suffix.upper()):
+        return f"{norm_ticker}{suffix}"
+    return norm_ticker
+
+
+def _positive_float(value: Any) -> Optional[float]:
+    """Return rounded positive float or None when missing/non-positive/NaN."""
+    if value is None:
+        return None
+    num = float(value)
+    if math.isnan(num) or num <= 0:
+        return None
+    return round(num, 4)
+
+
+@router.get("/check-yahoo", response_model=CheckYahooResponse)
 def check_yahoo_ticker(
     ticker: str,
     currency: Optional[str] = None,
@@ -213,30 +245,18 @@ def check_yahoo_ticker(
     if not ticker or not ticker.strip():
         raise HTTPException(status_code=400, detail="ticker query parameter is required")
 
+    clean_ticker = ticker.strip()
     curr = (currency or "").strip().upper()
-    norm_ticker, detected_exchange = normalize(ticker.strip(), curr)
-    suffix = get_yahoo_suffix(ticker.strip(), detected_exchange, curr)
-    if suffix and not norm_ticker.upper().endswith(suffix.upper()):
-        symbol = f"{norm_ticker}{suffix}"
-    else:
-        symbol = norm_ticker
+    norm_ticker, detected_exchange = normalize(clean_ticker, curr)
+    symbol = _build_provider_symbol(norm_ticker, clean_ticker, detected_exchange, curr)
     exchange_val = detected_exchange.value if isinstance(detected_exchange, Exchange) else str(detected_exchange)
-
-    result = {
-        "ticker": ticker.strip(),
-        "provider_symbol": symbol,
-        "exchange": exchange_val,
-        "valid": False,
-        "price": None,
-        "company_name": None,
-        "currency": curr or "USD",
-        "error": None,
-    }
+    resolved_currency = curr or "USD"
 
     try:
         t = _create_ticker(symbol)
-        price = None
-        company_name = resolve_company_name(symbol, t)
+        price: Optional[float] = None
+        previous_close: Optional[float] = None
+        company_name: Optional[str] = None
 
         fi = getattr(t, "fast_info", None)
         if fi:
@@ -245,28 +265,30 @@ def check_yahoo_ticker(
                 try:
                     meta = md_fn()
                     if isinstance(meta, dict):
-                        if not company_name:
-                            company_name = meta.get("longName") or meta.get("shortName")
-                        if price is None:
-                            raw_p = meta.get("regularMarketPrice") or meta.get("fulldayPrice")
-                            if raw_p is not None and not math.isnan(float(raw_p)) and float(raw_p) > 0:
-                                price = round(float(raw_p), 4)
-                        if not result.get("currency") and meta.get("currency"):
-                            result["currency"] = str(meta["currency"]).upper()
+                        company_name = meta.get("longName") or meta.get("shortName")
+                        price = _positive_float(meta.get("regularMarketPrice") or meta.get("fulldayPrice"))
+                        previous_close = _positive_float(
+                            meta.get("regularMarketPreviousClose") or meta.get("chartPreviousClose")
+                        )
+                        if not curr and meta.get("currency"):
+                            resolved_currency = str(meta["currency"]).upper()
                 except Exception:
                     pass
 
             try:
-                lp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
-                if lp is not None and not math.isnan(float(lp)) and float(lp) > 0:
-                    price = round(float(lp), 4)
-                if price is None:
-                    pc = getattr(fi, "previous_close", None) or getattr(fi, "regularMarketPreviousClose", None)
-                    if pc is not None and not math.isnan(float(pc)) and float(pc) > 0:
-                        price = round(float(pc), 4)
-                curr = getattr(fi, "currency", None)
-                if curr:
-                    result["currency"] = str(curr).upper()
+                fi_price = _positive_float(getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None))
+                if fi_price is not None:
+                    price = fi_price
+                fi_prev = _positive_float(
+                    getattr(fi, "previous_close", None) or getattr(fi, "regularMarketPreviousClose", None)
+                )
+                if fi_prev is not None:
+                    previous_close = fi_prev
+                if price is None and previous_close is not None:
+                    price = previous_close
+                fi_curr = getattr(fi, "currency", None)
+                if fi_curr:
+                    resolved_currency = str(fi_curr).upper()
             except Exception:
                 pass
 
@@ -279,31 +301,54 @@ def check_yahoo_ticker(
                 if not hist.empty and "Close" in hist:
                     series = hist["Close"].dropna()
                     if not series.empty:
-                        last_val = series.iloc[-1]
-                        if float(last_val) > 0:
-                            price = round(float(last_val), 4)
+                        price = _positive_float(series.iloc[-1])
+                        if previous_close is None and len(series) >= 2:
+                            previous_close = _positive_float(series.iloc[-2])
             except Exception:
                 pass
 
         if price is not None and price > 0:
-            result["status"] = "ok"
-            result["valid"] = True
-            result["available"] = True
-            result["price"] = price
-            result["company_name"] = company_name or ticker.strip()
-        else:
-            result["status"] = "ok"
-            result["valid"] = False
-            result["available"] = False
-            result["error"] = f"Symbol '{symbol}' was contacted on Yahoo Finance, but no recent price could be confirmed."
+            return CheckYahooResponse(
+                status="ok",
+                available=True,
+                valid=True,
+                ticker=clean_ticker,
+                provider_symbol=symbol,
+                exchange=exchange_val,
+                currency=resolved_currency,
+                price=price,
+                previous_close=previous_close,
+                company_name=company_name or clean_ticker,
+                message=None,
+                error=None,
+            )
+
+        not_found_msg = (
+            f"Symbol '{symbol}' was contacted on Yahoo Finance, but no recent price could be confirmed."
+        )
+        return CheckYahooResponse(
+            status="ok",
+            available=False,
+            valid=False,
+            ticker=clean_ticker,
+            provider_symbol=symbol,
+            exchange=exchange_val,
+            currency=resolved_currency,
+            price=None,
+            previous_close=previous_close,
+            company_name=company_name,
+            message=not_found_msg,
+            error=not_found_msg,
+        )
 
     except Exception as e:
-        result["status"] = "error"
-        result["valid"] = False
-        result["available"] = False
-        result["error"] = f"Network or Yahoo Finance error: {e}"
-
-    return result
+        logger.warning("Yahoo check failed for %s: %s", symbol, e)
+        detail = (
+            "Failed to query Yahoo Finance."
+            if is_production()
+            else f"Network or Yahoo Finance error: {e}"
+        )
+        raise HTTPException(status_code=502, detail=detail) from e
 
 
 @router.get("/{ticker}")
@@ -321,22 +366,19 @@ def get_instrument(
             inst = repo.get_instrument_by_ticker(ticker)
             if not inst:
                 raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-            inst_dict = _instrument_to_dict(inst)
-            quote_dict = _quote_to_dict(inst.quote) if inst.quote else None
             return {
-                **inst_dict,
-                "quote": quote_dict,
-                "instrument": inst_dict,
+                "instrument": _instrument_to_dict(inst),
+                "quote": _quote_to_dict(inst.quote) if inst.quote else None,
             }
 
     inst = get_instrument_by_ticker(ticker)
     if not inst:
         raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-    result = _instrument_to_dict(inst)
     quote = get_quote_by_instrument_id(inst.id) if inst.id else None
-    result["quote"] = _quote_to_dict(quote) if quote else None
-    result["instrument"] = _instrument_to_dict(inst)
-    return result
+    return {
+        "instrument": _instrument_to_dict(inst),
+        "quote": _quote_to_dict(quote) if quote else None,
+    }
 
 
 def _normalize_currency(curr: Optional[str], default_exchange: Optional[Exchange | str] = None) -> str:
@@ -389,11 +431,7 @@ def create_instrument_endpoint(
 
     final_currency = _normalize_currency(data.currency, exchange)
 
-    suffix = get_yahoo_suffix(ticker, exchange, final_currency)
-    if suffix and not norm_ticker.upper().endswith(suffix.upper()):
-        provider_symbol = f"{norm_ticker}{suffix}"
-    else:
-        provider_symbol = norm_ticker
+    provider_symbol = _build_provider_symbol(norm_ticker, ticker, exchange, final_currency)
 
     company_name = data.company_name.strip()
     if not company_name and data.fetch_yahoo:
@@ -403,19 +441,8 @@ def create_instrument_endpoint(
     if not company_name:
         company_name = ticker
 
-    analysis_dt = None
-    if data.analysis_date and data.analysis_date.strip():
-        try:
-            analysis_dt = date.fromisoformat(data.analysis_date.strip())
-        except ValueError:
-            pass
-
-    soy_dt = None
-    if data.start_of_year_date and data.start_of_year_date.strip():
-        try:
-            soy_dt = date.fromisoformat(data.start_of_year_date.strip())
-        except ValueError:
-            pass
+    analysis_dt = _parse_optional_iso_date(data.analysis_date, "analysis_date")
+    soy_dt = _parse_optional_iso_date(data.start_of_year_date, "start_of_year_date")
 
     analysis_price_dec = (
         Decimal(str(data.analysis_reference_price))
@@ -435,8 +462,10 @@ def create_instrument_endpoint(
 
     if is_multi_tenant_db():
         from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-        from portfoliomaster.db.schema import MarketQuote
+        from portfoliomaster.db.multi_tenant_repository import (
+            GlobalMarketQuotesRepository,
+            MultiTenantWatchlistRepository,
+        )
 
         manual_price = data.manual_price if data.manual_price and data.manual_price > 0 else None
         fetched_quote = None
@@ -445,8 +474,17 @@ def create_instrument_endpoint(
                 from .refresh import _get_yahoo_adapter
 
                 fetched_quote = _get_yahoo_adapter().fetch([provider_symbol]).get(provider_symbol)
+            if analysis_dt and not analysis_price_dec:
+                res_an = _fetch_historical_quote_and_date(provider_symbol, analysis_dt, window_days=10)
+                if res_an:
+                    analysis_price_dec = Decimal(str(res_an[0]))
+                    analysis_dt = res_an[1]
             if soy_price_dec is None:
-                year_start_quote = _fetch_start_of_year_quote(provider_symbol)
+                year_start_quote = (
+                    _fetch_start_of_year_quote(provider_symbol, analysis_dt.year)
+                    if analysis_dt
+                    else _fetch_start_of_year_quote(provider_symbol)
+                )
                 if year_start_quote:
                     ytd_price, soy_dt = year_start_quote
                     soy_price_dec = Decimal(str(ytd_price))
@@ -476,28 +514,27 @@ def create_instrument_endpoint(
             )
 
             quote_info = None
-            if manual_price is not None or fetched_quote is not None:
-                mq = session.get(MarketQuote, provider_symbol)
-                if not mq:
-                    mq = MarketQuote(
-                        provider_symbol=provider_symbol,
-                        exchange=inst_created.exchange,
-                        currency=inst_created.currency,
-                        company_name=company_name,
-                    )
-                    session.add(mq)
-                if manual_price is not None:
-                    mq.price = Decimal(str(manual_price))
-                    if data.manual_previous_close and data.manual_previous_close > 0:
-                        mq.previous_close = Decimal(str(data.manual_previous_close))
-                    mq.status = "FRESH"
-                    quote_info = {"source": "manual", "price": manual_price}
-                elif fetched_quote is not None:
-                    mq.price = fetched_quote.price
-                    mq.previous_close = fetched_quote.previous_close
-                    mq.status = fetched_quote.status.name if hasattr(fetched_quote.status, "name") else str(fetched_quote.status)
-                    quote_info = {"source": "yahoo", "price": _to_float(fetched_quote.price)}
-                mq.last_valid_fetched_at = datetime.now(timezone.utc)
+            if manual_price is not None:
+                # Tenant-supplied manual_price never mutates the shared global MarketQuote table.
+                quote_info = {"source": "manual", "price": manual_price}
+            elif fetched_quote is not None:
+                GlobalMarketQuotesRepository(session).upsert_market_quote_safe(
+                    provider_symbol=provider_symbol,
+                    price=fetched_quote.price,
+                    previous_close=fetched_quote.previous_close,
+                    quote_timestamp=fetched_quote.quote_timestamp,
+                    status=(
+                        fetched_quote.status.name
+                        if hasattr(fetched_quote.status, "name")
+                        else str(fetched_quote.status)
+                    ),
+                    error_message=fetched_quote.error_message,
+                    exchange=inst_created.exchange,
+                    currency=inst_created.currency,
+                    company_name=company_name,
+                    provider=fetched_quote.provider or "yahoo",
+                )
+                quote_info = {"source": "yahoo", "price": _to_float(fetched_quote.price)}
 
             instrument = _instrument_to_dict(inst_created)
 
@@ -625,8 +662,10 @@ def update_instrument_endpoint(
                 new_ticker_val = new_t
                 ticker_changed = True
 
-            # Calculate provider_symbol if ticker or exchange or currency changed
-            provider_symbol_val = inst.provider_symbol
+            # Recompute provider_symbol when ticker, exchange, or currency changed
+            recompute_symbol = (
+                ticker_changed or "exchange" in fields_set or "currency" in fields_set
+            )
             effective_ticker = new_ticker_val if ticker_changed else inst.user_ticker
             effective_curr = (
                 _normalize_currency(data.currency, inst.exchange)
@@ -634,41 +673,46 @@ def update_instrument_endpoint(
                 else (inst.currency or "USD")
             )
 
-            norm_ticker, detected_exchange = normalize(effective_ticker, effective_curr)
-            if "exchange" in fields_set and data.exchange is not None and data.exchange.strip() and data.exchange.strip().upper() != "AUTO":
-                try:
-                    eff_exchange = Exchange(data.exchange.strip().upper()).value
-                except ValueError:
-                    eff_exchange = detected_exchange.value if hasattr(detected_exchange, "value") else str(detected_exchange)
-            else:
-                eff_exchange = inst.exchange
-
-            suffix = get_yahoo_suffix(effective_ticker, eff_exchange, effective_curr)
-            if suffix and not norm_ticker.upper().endswith(suffix.upper()):
-                provider_symbol_val = f"{norm_ticker}{suffix}"
-            else:
-                provider_symbol_val = norm_ticker
-
-            # Parse reference prices and dates
-            an_dt = None
-            if "analysis_date" in fields_set:
-                if data.analysis_date and data.analysis_date.strip():
+            provider_symbol_val = inst.provider_symbol
+            eff_exchange = inst.exchange
+            if recompute_symbol:
+                norm_ticker, detected_exchange = normalize(effective_ticker, effective_curr)
+                if "exchange" in fields_set and data.exchange is not None and data.exchange.strip() and data.exchange.strip().upper() != "AUTO":
                     try:
-                        an_dt = date.fromisoformat(data.analysis_date.strip())
+                        eff_exchange = Exchange(data.exchange.strip().upper()).value
                     except ValueError:
-                        pass
+                        eff_exchange = (
+                            detected_exchange.value
+                            if hasattr(detected_exchange, "value")
+                            else str(detected_exchange)
+                        )
+                elif "exchange" in fields_set or detected_exchange != Exchange.UNKNOWN:
+                    eff_exchange = (
+                        detected_exchange.value
+                        if hasattr(detected_exchange, "value")
+                        else str(detected_exchange)
+                    )
+
+                provider_symbol_val = _build_provider_symbol(
+                    norm_ticker, effective_ticker, eff_exchange, effective_curr
+                )
+
+            # Parse reference prices and dates strictly
+            an_dt = (
+                _parse_optional_iso_date(data.analysis_date, "analysis_date")
+                if "analysis_date" in fields_set
+                else None
+            )
 
             an_pr = None
             if "analysis_reference_price" in fields_set and data.analysis_reference_price is not None and data.analysis_reference_price > 0:
                 an_pr = Decimal(str(data.analysis_reference_price))
 
-            soy_dt = None
-            if "start_of_year_date" in fields_set:
-                if data.start_of_year_date and data.start_of_year_date.strip():
-                    try:
-                        soy_dt = date.fromisoformat(data.start_of_year_date.strip())
-                    except ValueError:
-                        pass
+            soy_dt = (
+                _parse_optional_iso_date(data.start_of_year_date, "start_of_year_date")
+                if "start_of_year_date" in fields_set
+                else None
+            )
 
             soy_pr = None
             if "start_of_year_price" in fields_set and data.start_of_year_price is not None and data.start_of_year_price > 0:
@@ -678,14 +722,24 @@ def update_instrument_endpoint(
             if "target_price" in fields_set and data.target_price is not None and data.target_price > 0:
                 tgt_pr = Decimal(str(data.target_price))
 
+            repo_fields_set = set(fields_set)
+            if recompute_symbol:
+                repo_fields_set.add("provider_symbol")
+
+            clean_company_name = (
+                (data.company_name.strip() or None)
+                if ("company_name" in fields_set and data.company_name is not None)
+                else None
+            )
+
             updated = repo.update_instrument(
                 ticker=ticker,
-                fields_set=fields_set,
+                fields_set=repo_fields_set,
                 new_ticker=new_ticker_val,
                 provider_symbol=provider_symbol_val,
-                exchange=eff_exchange if ("exchange" in fields_set or ticker_changed) else None,
+                exchange=eff_exchange if recompute_symbol else None,
                 currency=effective_curr if "currency" in fields_set else None,
-                company_name=data.company_name.strip() if "company_name" in fields_set and data.company_name else None,
+                company_name=clean_company_name,
                 analysis_date=an_dt,
                 analysis_reference_price=an_pr,
                 start_of_year_date=soy_dt,
@@ -735,7 +789,7 @@ def update_instrument_endpoint(
     if "currency" in fields_set and data.currency is not None:
         inst.currency = _normalize_currency(data.currency, inst.exchange)
 
-    if ticker_changed or "exchange" in fields_set:
+    if ticker_changed or "exchange" in fields_set or "currency" in fields_set:
         curr_for_norm = inst.currency or ""
         norm_ticker, detected_exchange = normalize(inst.user_ticker, curr_for_norm)
 
@@ -747,11 +801,9 @@ def update_instrument_endpoint(
         elif detected_exchange != Exchange.UNKNOWN:
             inst.exchange = detected_exchange
 
-        suffix = get_yahoo_suffix(inst.user_ticker, inst.exchange, curr_for_norm)
-        if suffix and not norm_ticker.upper().endswith(suffix.upper()):
-            inst.provider_symbol = f"{norm_ticker}{suffix}"
-        else:
-            inst.provider_symbol = norm_ticker
+        inst.provider_symbol = _build_provider_symbol(
+            norm_ticker, inst.user_ticker, inst.exchange, curr_for_norm
+        )
 
     if "company_name" in fields_set and data.company_name is not None:
         if data.company_name.strip():
@@ -773,13 +825,7 @@ def update_instrument_endpoint(
             inst.analysis_reference_price = None
 
     if "analysis_date" in fields_set:
-        if data.analysis_date and data.analysis_date.strip():
-            try:
-                inst.analysis_date = date.fromisoformat(data.analysis_date.strip())
-            except ValueError:
-                inst.analysis_date = None
-        else:
-            inst.analysis_date = None
+        inst.analysis_date = _parse_optional_iso_date(data.analysis_date, "analysis_date")
 
     if "start_of_year_price" in fields_set:
         if data.start_of_year_price is not None and data.start_of_year_price > 0:
@@ -788,13 +834,9 @@ def update_instrument_endpoint(
             inst.start_of_year_price = None
 
     if "start_of_year_date" in fields_set:
-        if data.start_of_year_date and data.start_of_year_date.strip():
-            try:
-                inst.start_of_year_date = date.fromisoformat(data.start_of_year_date.strip())
-            except ValueError:
-                inst.start_of_year_date = None
-        else:
-            inst.start_of_year_date = None
+        inst.start_of_year_date = _parse_optional_iso_date(
+            data.start_of_year_date, "start_of_year_date"
+        )
 
     if "comment" in fields_set:
         inst.comment = (data.comment or "").strip()

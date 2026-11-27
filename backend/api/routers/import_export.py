@@ -18,6 +18,7 @@ from portfoliomaster.backup.exporters import export_to_csv, export_to_excel, exp
 from portfoliomaster.backup.sqlite_backup import create_automatic_safety_backup
 from portfoliomaster.core.models import Exchange, Instrument
 from portfoliomaster.db.repository import upsert_instrument
+from portfoliomaster.db.session import is_production
 from portfoliomaster.ingest.import_session import import_spreadsheet
 from .positions import invalidate_positions_cache
 from ..common import _instrument_to_dict, get_current_user_id, is_multi_tenant_db
@@ -59,12 +60,18 @@ async def import_preview(
         except ValueError:
             pass
 
-    content = await file.read()
-    if len(content) > MAX_UPLOAD_BYTES:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
-        )
+    chunks = bytearray()
+    while True:
+        chunk = await file.read(65536)
+        if not chunk:
+            break
+        if len(chunks) + len(chunk) > MAX_UPLOAD_BYTES:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File exceeds maximum upload size of {MAX_UPLOAD_BYTES // (1024 * 1024)} MB.",
+            )
+        chunks.extend(chunk)
+    content = bytes(chunks)
 
     with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
         tmp.write(content)
@@ -72,7 +79,7 @@ async def import_preview(
 
     try:
         instruments, errors, unresolved, warnings = await asyncio.to_thread(
-            import_spreadsheet, tmp_path, file.filename
+            import_spreadsheet, tmp_path, file.filename, MAX_IMPORT_ROWS
         )
     finally:
         if os.path.exists(tmp_path):
@@ -123,10 +130,8 @@ def import_confirm(
             return {"status": "ok", "committed": count, "errors": []}
         except Exception as e:
             logger.exception("Error committing instruments in multi-tenant mode: %s", e)
-            raise HTTPException(
-                status_code=400,
-                detail=f"Database error during import: {e}"
-            )
+            detail = "Database error during import." if is_production() else f"Database error during import: {e}"
+            raise HTTPException(status_code=400, detail=detail)
 
     committed = 0
     commit_errors: list[str] = []
@@ -199,10 +204,22 @@ def import_confirm(
             upsert_instrument(inst)
             committed += 1
         except Exception as e:
-            commit_errors.append(f"Error importing '{inst_dict.get('user_ticker', '?')}': {e}")
+            logger.warning("Error importing '%s': %s", inst_dict.get("user_ticker", "?"), e)
+            msg = (
+                f"Error importing '{inst_dict.get('user_ticker', '?')}'"
+                if is_production()
+                else f"Error importing '{inst_dict.get('user_ticker', '?')}': {e}"
+            )
+            commit_errors.append(msg)
 
     invalidate_positions_cache()
-    return {"status": "ok", "committed": committed, "errors": commit_errors}
+    if committed == 0 and commit_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"message": "Import failed for all instruments.", "errors": commit_errors},
+        )
+    status_label = "partial" if commit_errors else "ok"
+    return {"status": status_label, "committed": committed, "errors": commit_errors}
 
 
 @router.get("/export/csv")

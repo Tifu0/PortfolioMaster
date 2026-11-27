@@ -28,6 +28,7 @@ def bearer(secret=TEST_SECRET):
         {
             "sub": str(uuid.uuid4()),
             "aud": "authenticated",
+            "role": "authenticated",
             "exp": datetime.now(timezone.utc) + timedelta(minutes=5),
         },
         secret,

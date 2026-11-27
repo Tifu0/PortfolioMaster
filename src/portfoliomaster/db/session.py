@@ -127,15 +127,3 @@ def session_scope(session_or_engine: Optional[Session | Engine] = None) -> Gener
         raise
     finally:
         session.close()
-
-
-def get_db_session() -> Generator[Session, None, None]:
-    """FastAPI dependency for yielding database sessions."""
-    with session_scope() as session:
-        yield session
-
-
-def create_all_tables(engine: Optional[Engine] = None) -> None:
-    """Create all declarative tables (used for tests and SQLite initialization)."""
-    eng = engine or get_engine()
-    Base.metadata.create_all(bind=eng)

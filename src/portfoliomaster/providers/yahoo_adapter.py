@@ -46,8 +46,6 @@ try:
 
     _CRUMB_RATE_LIMITED_UNTIL = time.time() + 86400.0 if os.environ.get("RENDER") else 0.0
     _orig_get_cookie_and_crumb = _yd.YfData._get_cookie_and_crumb
-    _orig_get_crumb_basic = _yd.YfData._get_crumb_basic
-    _orig_get_crumb_csrf = _yd.YfData._get_crumb_csrf
 
     def _sanitize_crumb_val(val: Any) -> Optional[str]:
         if val is None:
@@ -522,82 +520,3 @@ class YahooAdapter(MarketDataProvider):
                 )
 
         return results
-
-    @property
-    def batch_supported(self) -> bool:
-        return True
-
-    @property
-    def default_batch_size(self) -> int:
-        return 10
-
-    def fetch_historical_quote(
-        self, symbol: str, target_date: date, window_days: int = 10
-    ) -> Optional[tuple[Decimal, date]]:
-        """Fetch historical close on or before target_date with lookback and resilient fallback."""
-        yahoo_symbol = self._normalize_symbol_for_yahoo(symbol)
-        try:
-            t = _create_ticker(yahoo_symbol)
-
-            # 1. Historical lookback window
-            start_str = (target_date - timedelta(days=window_days)).isoformat()
-            end_str = (target_date + timedelta(days=1)).isoformat()
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                hist = t.history(start=start_str, end=end_str)
-
-            if not hist.empty and "Close" in hist:
-                valid_rows = []
-                for idx, row in hist.iterrows():
-                    row_dt = idx.date() if hasattr(idx, "date") else idx.to_pydatetime().date()
-                    val = row["Close"]
-                    if row_dt <= target_date and pd.notna(val) and float(val) > 0:
-                        valid_rows.append((float(val), row_dt))
-
-                if valid_rows:
-                    price, actual_dt = valid_rows[-1]
-                    return Decimal(str(round(price, 4))), actual_dt
-
-            # 2. Resilient fallback: ONLY for today / recent trading days within 5 days (Bug 2 fix)
-            # Never contaminate historical dates (> 5 days ago) with current market prices!
-            days_from_today = (date.today() - target_date).days
-            if 0 <= days_from_today <= 5:
-                price = None
-                actual_dt = target_date
-
-                try:
-                    fi = getattr(t, "fast_info", None)
-                    if fi:
-                        lp = _fi_get(fi, "last_price", "lastPrice", "regularMarketPrice")
-                        if lp is not None and not math.isnan(float(lp)) and float(lp) > 0:
-                            price = float(lp)
-                        if price is None:
-                            pc = _fi_get(fi, "previous_close", "previousClose", "regularMarketPreviousClose")
-                            if pc is not None and not math.isnan(float(pc)) and float(pc) > 0:
-                                price = float(pc)
-                except Exception:
-                    pass
-
-                if price is None:
-                    try:
-                        with warnings.catch_warnings():
-                            warnings.simplefilter("ignore")
-                            hist_recent = t.history(period="5d")
-                        if not hist_recent.empty and "Close" in hist_recent:
-                            recent_series = hist_recent["Close"].dropna()
-                            if not recent_series.empty:
-                                last_val = recent_series.iloc[-1]
-                                if float(last_val) > 0:
-                                    price = float(last_val)
-                                    last_idx = recent_series.index[-1]
-                                    actual_dt = last_idx.date() if hasattr(last_idx, "date") else target_date
-                    except Exception:
-                        pass
-
-                if price is not None and price > 0:
-                    return Decimal(str(round(price, 4))), actual_dt
-
-        except Exception as e:
-            self.logger.debug(f"fetch_historical_quote error for {symbol}: {e}")
-
-        return None

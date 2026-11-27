@@ -198,7 +198,7 @@ class TestGetInstrument:
         })
         r = client.get("/api/instruments/GOOG")
         assert r.status_code == 200
-        assert r.json()["user_ticker"] == "GOOG"
+        assert r.json()["instrument"]["user_ticker"] == "GOOG"
 
 
 # ---------------------------------------------------------------------- #

@@ -225,7 +225,7 @@ class TestBackupAndRestoreEndpoints:
         # Verify AMD exists in DB
         r_get = client.get("/api/instruments/AMD")
         assert r_get.status_code == 200
-        assert r_get.json()["company_name"] == "Advanced Micro Devices"
+        assert r_get.json()["instrument"]["company_name"] == "Advanced Micro Devices"
 
     def test_backup_restore_json_file(self):
         json_content = """{
@@ -254,8 +254,8 @@ class TestBackupAndRestoreEndpoints:
         # Check DB
         r_ibm = client.get("/api/instruments/IBM")
         assert r_ibm.status_code == 200
-        assert r_ibm.json()["company_name"] == "International Business Machines"
-        assert r_ibm.json()["comment"] == "Restored via JSON"
+        assert r_ibm.json()["instrument"]["company_name"] == "International Business Machines"
+        assert r_ibm.json()["instrument"]["comment"] == "Restored via JSON"
 
     def test_backup_restore_corrupted_file(self):
         corrupted_bytes = b"NOT_A_VALID_SQLITE_OR_JSON"

@@ -83,7 +83,7 @@ const user = {
 };
 const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
 const jwtPayload = `${encode({ typ: 'JWT', alg: 'HS256' })}.${encode({
-  sub: user.id, email: user.email, exp: Math.floor(Date.now() / 1000) + 3600,
+  sub: user.id, email: user.email, role: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600,
 })}`;
 const accessToken = `${jwtPayload}.${createHmac('sha256', 'test-fixture').update(jwtPayload).digest('base64url')}`;
 const tokenResponse = { access_token: accessToken, refresh_token: 'fixture-refresh', expires_in: 3600, token_type: 'bearer', user };

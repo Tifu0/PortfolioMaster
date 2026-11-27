@@ -26,16 +26,8 @@ from .models import FreshnessConfig, Exchange
 # Financial calculations (CLAUDE.md section 6): rounding for display only.
 DISPLAY_DECIMAL_PLACES: int = 2
 
-# Freshness thresholds for QuoteStatus determination.
-DEFAULT_DELAY_SECONDS: float = 60.0
-DEFAULT_STALENESS_SECONDS: float = 2 * 24 * 60 * 60  # 48 hours
-
 # Batch runner tuning. Set to 50 to minimize database round-trips and egress.
 DEFAULT_BATCH_SIZE: int = 50
-MAX_BATCH_SIZE: int = 100
-MAX_RETRIES: int = 2
-BASE_BACKOFF_SECONDS: float = 0.5
-MAX_BACKOFF_SECONDS: float = 5.0
 
 # Refresh scheduler.
 DEFAULT_REFRESH_INTERVAL_SECONDS: float = 5 * 60  # 5 minutes
@@ -78,10 +70,6 @@ def get_batch_size() -> int:
 
 # Database.
 DATABASE_FILENAME: str = "portfolio.db"
-
-# App binding.
-DEFAULT_BIND_ADDRESS: str = "127.0.0.1"
-DEFAULT_PORT: int = 8501
 
 # Provider / symbol normalization reference.
 # provider_symbol -> (exchange, currency_hint) discovered on first fetch.
@@ -248,47 +236,6 @@ PREFIX_TO_YAHOO_SUFFIX: dict[str, str] = {
     "SZSE": ".SZ", "SHE": ".SZ",          # China Shenzhen
     "SSE": ".SS", "SHA": ".SS",           # China Shanghai
     "NZX": ".NZ",                         # Nueva Zelanda
-}
-
-# Currency per exchange, when we cannot derive it from the instrument row.
-EXCHANGE_CURRENCY: dict[Exchange, str] = {
-    Exchange.US: "USD",
-    Exchange.SPAIN: "EUR",
-    Exchange.FRANCE: "EUR",
-    Exchange.UK: "GBP",
-    Exchange.GERMANY: "EUR",
-    Exchange.ITALY: "EUR",
-    Exchange.NETHERLANDS: "EUR",
-    Exchange.BELGIUM: "EUR",
-    Exchange.PORTUGAL: "EUR",
-    Exchange.SWITZERLAND: "CHF",
-    Exchange.SWEDEN: "SEK",
-    Exchange.DENMARK: "DKK",
-    Exchange.NORWAY: "NOK",
-    Exchange.FINLAND: "EUR",
-    Exchange.POLAND: "PLN",
-    Exchange.AUSTRIA: "EUR",
-    Exchange.GREECE: "EUR",
-    Exchange.IRELAND: "EUR",
-    Exchange.AUSTRALIA: "AUD",
-    Exchange.SOUTH_KOREA: "KRW",
-    Exchange.JAPAN: "JPY",
-    Exchange.HONG_KONG: "HKD",
-    Exchange.TAIWAN: "TWD",
-    Exchange.CHINA: "CNY",
-    Exchange.INDIA: "INR",
-    Exchange.CANADA: "CAD",
-    Exchange.BRAZIL: "BRL",
-    Exchange.MEXICO: "MXN",
-    Exchange.ARGENTINA: "ARS",
-    Exchange.SINGAPORE: "SGD",
-    Exchange.NEW_ZEALAND: "NZD",
-    Exchange.TURKEY: "TRY",
-    Exchange.SAUDI_ARABIA: "SAR",
-    Exchange.INDONESIA: "IDR",
-    Exchange.MALAYSIA: "MYR",
-    Exchange.THAILAND: "THB",
-    Exchange.PHILIPPINES: "PHP",
 }
 
 # Yahoo-specific symbol suffixes per exchange.

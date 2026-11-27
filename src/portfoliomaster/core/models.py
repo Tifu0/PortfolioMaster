@@ -35,31 +35,6 @@ class QuoteStatus(Enum):
     # valid value, which must be preserved and clearly marked.
     ERROR = auto()
 
-    def is_fresh(self) -> bool:
-        return self is QuoteStatus.FRESH
-
-    def is_usable_for_alerts(self, freshness_config: FreshnessConfig) -> bool:
-        """Whether a quote of this status can trigger a target alert."""
-        if self is QuoteStatus.FRESH:
-            return True
-        if self is QuoteStatus.DELAYED:
-            return freshness_config.allow_delayed_alerts
-        if self is QuoteStatus.STALE:
-            return freshness_config.allow_stale_alerts
-        return False
-
-    def display_label(self) -> str:
-        return _STATUS_DISPLAY_LABELS.get(self, "Desconocido")
-
-
-_STATUS_DISPLAY_LABELS: dict[QuoteStatus, str] = {
-    QuoteStatus.FRESH: "Actual (fresco)",
-    QuoteStatus.DELAYED: "Cerrado / EOD",
-    QuoteStatus.STALE: "Vencido",
-    QuoteStatus.UNAVAILABLE: "No disponible",
-    QuoteStatus.ERROR: "Error",
-}
-
 
 class Exchange(Enum):
     """Known exchanges we import symbols for."""
@@ -139,11 +114,6 @@ class Instrument:
         ):
             self.updated_at = datetime(self.updated_at.year, self.updated_at.month, self.updated_at.day)
 
-    @property
-    def display_ticker(self) -> str:
-        """Ticker shown in the UI: provider symbol when known, else user's."""
-        return self.provider_symbol or self.user_ticker
-
 
 @dataclass
 class Quote:
@@ -168,9 +138,6 @@ class Quote:
         """A quote is valid when we actually have a price."""
         return self.price is not None and self.price > 0
 
-    def is_fresh(self) -> bool:
-        return self.status.is_fresh()
-
 
 @dataclass
 class CalculationResult:
@@ -188,38 +155,7 @@ class CalculationResult:
     ytd_variation_valid: bool = False
     decline_to_target: Optional[Decimal] = None
     decline_to_target_valid: bool = False
-    target_reached: bool = False
-    target_reached_valid: bool = False
     price_valid: bool = False
-    target_valid: bool = False
-
-    @property
-    def summary(self) -> str:
-        """Short human-readable summary for logs and tooltips."""
-        parts = []
-        if self.price_valid:
-            parts.append(f"precio {self.decline_to_target}")
-        if self.target_reached_valid:
-            parts.append(
-                "precio por debajo del objetivo"
-                if self.target_reached
-                else "objetivo no alcanzado"
-            )
-        return "; ".join(parts) if parts else "sin datos"
-
-
-@dataclass
-class RefreshRun:
-    """Record of one refresh execution for auditability."""
-
-    id: Optional[int] = None
-    started_at: Optional[datetime] = None
-    finished_at: Optional[datetime] = None
-    status: str = "running"  # running, success, partial, failure
-    instruments_requested: int = 0
-    instruments_updated: int = 0
-    instruments_failed: int = 0
-    diagnostic_summary: str = ""
 
 
 @dataclass
@@ -235,16 +171,6 @@ class FreshnessConfig:
     allow_delayed_alerts: bool = False  # never auto-alert on delayed data
     allow_stale_alerts: bool = False  # never auto-alert on stale data
 
-    def freshness_state(self, quote_timestamp: Optional[datetime]) -> QuoteStatus:
-        if quote_timestamp is None:
-            return QuoteStatus.UNAVAILABLE
-        age = (datetime.now(quote_timestamp.tzinfo) - quote_timestamp).total_seconds()
-        if age <= self.delay_seconds:
-            return QuoteStatus.FRESH
-        if age <= self.staleness_seconds:
-            return QuoteStatus.DELAYED
-        return QuoteStatus.STALE
-
     def freshness_state_naive(self, quote_timestamp: Optional[datetime]) -> QuoteStatus:
         """Same as freshness_state but tolerates naive timestamps."""
         if quote_timestamp is None:
@@ -256,17 +182,3 @@ class FreshnessConfig:
         if age <= self.staleness_seconds:
             return QuoteStatus.DELAYED
         return QuoteStatus.STALE
-
-
-@dataclass
-class ImportSummary:
-    """Result of a dry-run or commit of a spreadsheet import."""
-
-    total_rows: int = 0
-    valid_rows: int = 0
-    malformed_rows: int = 0
-    duplicates: list[dict] = field(default_factory=list)
-    unresolved_symbols: list[dict] = field(default_factory=list)
-    instruments_created: int = 0
-    instruments_updated: int = 0
-    errors: list[str] = field(default_factory=list)
