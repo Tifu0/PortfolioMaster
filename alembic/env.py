@@ -54,13 +54,42 @@ def get_url(cfg=None) -> str:
     return get_database_url()
 
 
+def _ensure_offline_mock_inspector() -> None:
+    """Register a minimal inspector for SQLAlchemy MockConnection during offline --sql mode."""
+    from sqlalchemy.engine.mock import MockConnection
+    from sqlalchemy.inspection import _inspects, _registrars
+
+    if MockConnection in _registrars:
+        return
+
+    class _OfflineMockInspector:
+        def get_table_names(self, schema=None):
+            return []
+
+        def get_indexes(self, table_name, schema=None):
+            return []
+
+        def get_unique_constraints(self, table_name, schema=None):
+            return []
+
+        def get_check_constraints(self, table_name, schema=None):
+            return []
+
+    @_inspects(MockConnection)
+    def _inspect_mock_connection(subject):
+        return _OfflineMockInspector()
+
+
 def run_migrations_offline() -> None:
     """Run migrations in 'offline' mode."""
+    _ensure_offline_mock_inspector()
     url = get_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
         literal_binds=True,
+        compare_type=True,
+        output_buffer=config.stdout,
         dialect_opts={"paramstyle": "named"},
     )
 
