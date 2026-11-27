@@ -10,8 +10,8 @@ from __future__ import annotations
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Optional, Union
 
-from .config import DISPLAY_DECIMAL_PLACES, FreshnessConfig
-from .models import CalculationResult, Quote
+from .config import DISPLAY_DECIMAL_PLACES
+from .models import CalculationResult
 
 Number = Union[float, Decimal, int, str, None]
 
@@ -174,34 +174,4 @@ def decline_to_target(
         return result
     result.decline_to_target = _round(decline * _HUNDRED)
     result.decline_to_target_valid = True
-    result.target_valid = True
-    return result
-
-
-def is_target_reached(
-    latest_price: Number,
-    target_price: Number,
-    quote: Quote,
-    freshness_config: FreshnessConfig,
-) -> CalculationResult:
-    """latest_price <= target_price, only when the quote is trustworthy.
-
-    Returns a valid target_reached flag only if both prices are valid and
-    the quote status is fresh enough under the app's freshness rules.
-    Missing or untrustworthy data yields an unavailable result rather
-    than a fabricated alert.
-    """
-    result = CalculationResult()
-    price = _to_decimal(latest_price)
-    target = _to_decimal(target_price)
-    if price is None or target is None:
-        return result
-    result.price_valid = price > _ZERO
-    result.target_valid = target > _ZERO
-    if not result.price_valid or not result.target_valid:
-        return result
-    if not quote.status.is_usable_for_alerts(freshness_config):
-        return result
-    result.target_reached = price <= target
-    result.target_reached_valid = True
     return result

@@ -4,9 +4,7 @@ from portfoliomaster.core.calculations import (
     variation_since_analysis,
     ytd_variation,
     decline_to_target,
-    is_target_reached,
 )
-from portfoliomaster.core.models import Quote, QuoteStatus, FreshnessConfig
 
 def test_daily_variation():
     # latest / prev_close - 1 * 100
@@ -65,21 +63,3 @@ def test_decline_to_target():
     # Missing/Zero latest
     assert decline_to_target(Decimal("90"), None).decline_to_target_valid is False
     assert decline_to_target(Decimal("90"), Decimal("0")).decline_to_target_valid is False
-
-def test_is_target_reached():
-    fresh_config = FreshnessConfig()
-    fresh_quote = Quote(status=QuoteStatus.FRESH)
-    # latest <= target
-    assert is_target_reached(Decimal("90"), Decimal("100"), fresh_quote, fresh_config).target_reached is True
-    assert is_target_reached(Decimal("100"), Decimal("100"), fresh_quote, fresh_config).target_reached is True
-    assert is_target_reached(Decimal("110"), Decimal("100"), fresh_quote, fresh_config).target_reached is False
-
-    # Untrustworthy quote
-    stale_quote = Quote(status=QuoteStatus.STALE)
-    # stale not usable for alerts by default
-    result = is_target_reached(Decimal("90"), Decimal("100"), stale_quote, fresh_config)
-    assert result.target_reached_valid is False
-
-    # Missing
-    assert is_target_reached(None, Decimal("100"), fresh_quote, fresh_config).target_reached_valid is False
-    assert is_target_reached(Decimal("90"), None, fresh_quote, fresh_config).target_reached_valid is False

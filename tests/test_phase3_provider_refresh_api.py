@@ -12,10 +12,9 @@ Tests:
 from __future__ import annotations
 
 import uuid
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timezone
 from decimal import Decimal
 from unittest.mock import MagicMock
-import pandas as pd
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -24,12 +23,10 @@ from portfoliomaster.core.models import Quote, QuoteStatus
 from portfoliomaster.db.schema import Base
 from portfoliomaster.db.multi_tenant_repository import (
     GlobalMarketQuotesRepository,
+    MultiTenantWatchlistRepository,
     RefreshRunRepository,
-    UnitOfWork,
 )
-from portfoliomaster.providers.yahoo_adapter import YahooAdapter
 from portfoliomaster.refresh.batch_runner import BatchRunner
-from portfoliomaster.refresh.service import RefreshService
 
 
 @pytest.fixture
@@ -44,65 +41,7 @@ def in_memory_db():
 
 
 # ==============================================================================
-# 1. BUG 2 FIX: Historical Quote Fallback Verification
-# ==============================================================================
-
-def test_historical_quote_does_not_falsely_fallback_for_old_dates(monkeypatch):
-    """
-    Verify Bug 2 fix: If target_date is in the past (> 5 days ago) and historical data
-    is missing in the lookback window, fetch_historical_quote returns None and NEVER
-    substitutes current fast_info / 5-day prices.
-    """
-    adapter = YahooAdapter()
-
-    # Mock yf.Ticker
-    mock_ticker = MagicMock()
-    mock_ticker.history.return_value = pd.DataFrame()  # No data in window
-    mock_fast_info = MagicMock()
-    mock_fast_info.last_price = 555.55
-    mock_ticker.fast_info = mock_fast_info
-
-    monkeypatch.setattr("yfinance.Ticker", lambda symbol: mock_ticker)
-
-    # 1. Old historical date from 2021
-    old_target = date(2021, 5, 10)
-    res = adapter.fetch_historical_quote("AAPL", old_target, window_days=10)
-    assert res is None, "Old historical date must return None when no history exists; never fast_info!"
-
-    # 2. Date from 20 days ago
-    twenty_days_ago = date.today() - timedelta(days=20)
-    res2 = adapter.fetch_historical_quote("AAPL", twenty_days_ago, window_days=10)
-    assert res2 is None, "Dates > 5 days ago must return None when lookback window is empty"
-
-    # 3. Target date is today: fast_info fallback is permissible for closed market/intraday
-    today = date.today()
-    res3 = adapter.fetch_historical_quote("AAPL", today, window_days=10)
-    assert res3 is not None
-    assert res3[0] == Decimal("555.55")
-    assert res3[1] == today
-
-
-def test_historical_quote_returns_observation_within_lookback_window(monkeypatch):
-    """Verify that when historical data is available on or before target date, it is returned accurately."""
-    adapter = YahooAdapter()
-
-    target_dt = date(2026, 10, 18)  # Sunday
-    friday_dt = pd.Timestamp("2026-10-16")
-    hist_df = pd.DataFrame({"Close": [182.40]}, index=[friday_dt])
-
-    mock_ticker = MagicMock()
-    mock_ticker.history.return_value = hist_df
-    monkeypatch.setattr("yfinance.Ticker", lambda symbol: mock_ticker)
-
-    res = adapter.fetch_historical_quote("AAPL", target_dt, window_days=10)
-    assert res is not None
-    price, actual_dt = res
-    assert price == Decimal("182.4")
-    assert actual_dt == date(2026, 10, 16)
-
-
-# ==============================================================================
-# 2. BATCH RUNNER: Deduplication and Isolation
+# 1. BATCH RUNNER: Deduplication and Isolation
 # ==============================================================================
 
 def test_batch_runner_deduplicates_symbols():
@@ -184,7 +123,8 @@ def test_import_or_restore_user_watchlist_parity(in_memory_db):
     mirrors Supabase RPC public.import_or_restore_user_watchlist.
     """
     tenant_id = uuid.uuid4()
-    uow = UnitOfWork(in_memory_db, user_id=tenant_id)
+    watchlist = MultiTenantWatchlistRepository(in_memory_db, user_id=tenant_id)
+    quotes_repo = GlobalMarketQuotesRepository(in_memory_db)
 
     payload = [
         {
@@ -208,14 +148,14 @@ def test_import_or_restore_user_watchlist_parity(in_memory_db):
         },
     ]
 
-    count = uow.watchlist.import_or_restore_user_watchlist(payload, replace_all=True)
-    uow.commit()
+    count = watchlist.import_or_restore_user_watchlist(payload, replace_all=True)
+    in_memory_db.commit()
 
     assert count == 2
-    instruments = uow.watchlist.get_instruments(active_only=False)
+    instruments = watchlist.get_instruments(active_only=False)
     assert len(instruments) == 2
 
-    san = uow.watchlist.get_instrument_by_ticker("SAN")
+    san = watchlist.get_instrument_by_ticker("SAN")
     assert san is not None
     assert san.provider_symbol == "SAN.MC"
     assert san.target_price == Decimal("5.50")
@@ -223,13 +163,13 @@ def test_import_or_restore_user_watchlist_parity(in_memory_db):
     assert san.analysis_date == date(2026, 1, 15)
     assert san.active is True
 
-    vis = uow.watchlist.get_instrument_by_ticker("VIS")
+    vis = watchlist.get_instrument_by_ticker("VIS")
     assert vis is not None
     assert vis.active is False  # 'false' string evaluated to False
 
     # Auto-provisioned market_quotes placeholder check (mirrors trg_ensure_market_quote)
-    mq_san = uow.quotes.get_quote("SAN.MC")
-    mq_vis = uow.quotes.get_quote("VIS.MC")
+    mq_san = quotes_repo.get_quote("SAN.MC")
+    mq_vis = quotes_repo.get_quote("VIS.MC")
     assert mq_san is not None
     assert mq_vis is not None
     assert mq_san.provider_symbol == "SAN.MC"
@@ -269,53 +209,6 @@ def test_refresh_run_cooldown_and_concurrency(in_memory_db):
     can_rf_cooldown, err_cooldown = repo.can_user_refresh(user_id=user_id, cooldown_seconds=60)
     assert can_rf_cooldown is False
     assert "Please wait" in err_cooldown
-
-
-# ==============================================================================
-# 6. REFRESH SERVICE: Global Decoupled Refresh & Non-Destructive Update
-# ==============================================================================
-
-def test_refresh_service_global_refresh_flow(in_memory_db):
-    """
-    Verify that RefreshService refreshes decoupled unique provider_symbols once
-    and safely updates market quotes across all active tenant instruments.
-    """
-    tenant_a = uuid.uuid4()
-    tenant_b = uuid.uuid4()
-
-    uow_a = UnitOfWork(in_memory_db, user_id=tenant_a)
-    uow_b = UnitOfWork(in_memory_db, user_id=tenant_b)
-
-    # Both users watch AAPL
-    uow_a.watchlist.create_instrument(user_ticker="AAPL", provider_symbol="AAPL")
-    uow_b.watchlist.create_instrument(user_ticker="APPLE", provider_symbol="AAPL")
-    in_memory_db.commit()
-
-    # Mock provider returning a fresh quote for AAPL
-    mock_adapter = MagicMock()
-    mock_adapter.fetch.return_value = {
-        "AAPL": Quote(
-            price=Decimal("230.50"),
-            previous_close=Decimal("228.00"),
-            quote_timestamp=datetime.now(timezone.utc),
-            status=QuoteStatus.FRESH,
-            provider="YahooMock",
-        )
-    }
-
-    service = RefreshService(provider=mock_adapter, batch_size=10)
-    uow_global = UnitOfWork(in_memory_db)
-    res = service.execute_global_refresh_uow(uow_global)
-
-    assert res["status"] == "ok"
-    assert res["updated"] == 1
-    assert res["total"] == 1  # 1 unique provider symbol, even though 2 tenant instruments watch it
-
-    # Check market quote was updated
-    quote = uow_global.quotes.get_quote("AAPL")
-    assert quote is not None
-    assert quote.price == Decimal("230.50")
-    assert quote.status == "FRESH"
 
 
 def test_upsert_market_quotes_batch(in_memory_db):

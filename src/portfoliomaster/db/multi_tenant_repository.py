@@ -131,15 +131,6 @@ class MultiTenantWatchlistRepository:
         )
         return self.session.scalars(stmt).first()
 
-    def get_instrument_by_id(self, instrument_id: uuid.UUID | str) -> Optional[UserInstrument]:
-        """Fetch an instrument by its UUID id for this tenant."""
-        inst_uuid = instrument_id if isinstance(instrument_id, uuid.UUID) else uuid.UUID(str(instrument_id))
-        stmt = select(UserInstrument).where(
-            UserInstrument.user_id == self.user_id,
-            UserInstrument.id == inst_uuid,
-        )
-        return self.session.scalars(stmt).first()
-
     def create_instrument(
         self,
         user_ticker: str,
@@ -241,8 +232,12 @@ class MultiTenantWatchlistRepository:
             inst.exchange = exchange
         if "currency" in fields_set and currency is not None:
             inst.currency = currency
-        if "company_name" in fields_set and company_name is not None:
-            inst.company_name = company_name
+        if "company_name" in fields_set:
+            inst.company_name = (
+                company_name.strip() or None
+                if isinstance(company_name, str)
+                else company_name
+            )
 
         # Nullable reference prices and dates (Bug 6 fix: explicit clearing supported)
         if "analysis_date" in fields_set:
@@ -448,93 +443,6 @@ class GlobalMarketQuotesRepository:
         if not symbol:
             return None
         return self.session.get(MarketQuote, symbol.strip().upper())
-
-    def get_quotes_batch(self, symbols: List[str]) -> Dict[str, MarketQuote]:
-        """Fetch quotes for a batch of symbols."""
-        clean_symbols = [s.strip().upper() for s in symbols if s and s.strip()]
-        if not clean_symbols:
-            return {}
-        stmt = select(MarketQuote).where(MarketQuote.provider_symbol.in_(clean_symbols))
-        rows = self.session.scalars(stmt).all()
-        return {q.provider_symbol: q for q in rows}
-
-    def save_quote_success(
-        self,
-        symbol: str,
-        price: Decimal,
-        previous_close: Optional[Decimal] = None,
-        quote_timestamp: Optional[datetime] = None,
-        provider: str = "yahoo",
-        status: str = "FRESH",
-        company_name: Optional[str] = None,
-        currency: Optional[str] = None,
-        exchange: Optional[str] = None,
-    ) -> MarketQuote:
-        """Update or insert a successful quote observation."""
-        canonical = symbol.strip().upper()
-        now = datetime.now(timezone.utc)
-        quote = self.session.get(MarketQuote, canonical)
-
-        if not quote:
-            quote = MarketQuote(
-                provider_symbol=canonical,
-                currency=currency or "EUR",
-                exchange=exchange or "UNKNOWN",
-                company_name=company_name,
-                provider=provider,
-            )
-            self.session.add(quote)
-
-        # Update valid market values
-        quote.price = price
-        if previous_close is not None:
-            quote.previous_close = previous_close
-        if quote_timestamp is not None:
-            quote.quote_timestamp = quote_timestamp
-        quote.last_valid_fetched_at = now
-
-        # Update attempt audit
-        quote.last_attempt_at = now
-        quote.status = status
-        quote.error_message = None
-        if company_name and not quote.company_name:
-            quote.company_name = company_name
-
-        self.session.flush()
-        return quote
-
-    def save_quote_failure(
-        self,
-        symbol: str,
-        error_message: str,
-        status: str = "ERROR",
-        provider: str = "yahoo",
-    ) -> MarketQuote:
-        """
-        Record a failed fetch attempt.
-        CRITICAL FIX (Bug 3): Preserves existing valid price, previous_close, and quote_timestamp!
-        """
-        canonical = symbol.strip().upper()
-        now = datetime.now(timezone.utc)
-        quote = self.session.get(MarketQuote, canonical)
-
-        if not quote:
-            quote = MarketQuote(
-                provider_symbol=canonical,
-                status=status,
-                error_message=error_message,
-                provider=provider,
-                last_attempt_at=now,
-            )
-            self.session.add(quote)
-        else:
-            # Audit update only - existing price, previous_close, and timestamp remain untouched!
-            quote.status = status
-            quote.error_message = error_message
-            quote.last_attempt_at = now
-
-        self.session.flush()
-        return quote
 
     def upsert_market_quote_safe(
         self,
@@ -846,40 +754,3 @@ class RefreshRunRepository:
                 return False, f"Please wait {wait_sec} seconds before requesting another refresh."
 
         return True, None
-
-
-class UnitOfWork:
-    """Unit of Work coordinator wrapping repositories in an atomic transaction."""
-
-    def __init__(self, session: Session, user_id: Optional[uuid.UUID | str] = None) -> None:
-        self.session = session
-        self.user_id = user_id
-        self._watchlist_repo: Optional[MultiTenantWatchlistRepository] = None
-        self._quotes_repo: Optional[GlobalMarketQuotesRepository] = None
-        self._refresh_repo: Optional[RefreshRunRepository] = None
-
-    @property
-    def watchlist(self) -> MultiTenantWatchlistRepository:
-        if not self.user_id:
-            raise ValueError("UnitOfWork requires a user_id to access the tenant watchlist repository.")
-        if self._watchlist_repo is None:
-            self._watchlist_repo = MultiTenantWatchlistRepository(self.session, self.user_id)
-        return self._watchlist_repo
-
-    @property
-    def quotes(self) -> GlobalMarketQuotesRepository:
-        if self._quotes_repo is None:
-            self._quotes_repo = GlobalMarketQuotesRepository(self.session)
-        return self._quotes_repo
-
-    @property
-    def refresh_runs(self) -> RefreshRunRepository:
-        if self._refresh_repo is None:
-            self._refresh_repo = RefreshRunRepository(self.session)
-        return self._refresh_repo
-
-    def commit(self) -> None:
-        self.session.commit()
-
-    def rollback(self) -> None:
-        self.session.rollback()

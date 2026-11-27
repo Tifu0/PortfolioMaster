@@ -19,8 +19,8 @@ from sqlalchemy.orm import sessionmaker
 from portfoliomaster.db.schema import Base
 from portfoliomaster.db.multi_tenant_repository import (
     GlobalMarketQuotesRepository,
+    MultiTenantWatchlistRepository,
     RefreshRunRepository,
-    UnitOfWork,
 )
 
 
@@ -42,11 +42,11 @@ def test_tenant_isolation_coexistence_and_queries(db_session):
     user_a = uuid.uuid4()
     user_b = uuid.uuid4()
 
-    uow_a = UnitOfWork(db_session, user_id=user_a)
-    uow_b = UnitOfWork(db_session, user_id=user_b)
+    watchlist_a = MultiTenantWatchlistRepository(db_session, user_id=user_a)
+    watchlist_b = MultiTenantWatchlistRepository(db_session, user_id=user_b)
 
     # User A creates AAPL
-    inst_a = uow_a.watchlist.create_instrument(
+    inst_a = watchlist_a.create_instrument(
         user_ticker="AAPL",
         provider_symbol="AAPL",
         currency="USD",
@@ -54,7 +54,7 @@ def test_tenant_isolation_coexistence_and_queries(db_session):
         comment="User A notes on Apple",
     )
     # User B creates AAPL with different target and notes
-    inst_b = uow_b.watchlist.create_instrument(
+    inst_b = watchlist_b.create_instrument(
         user_ticker="AAPL",
         provider_symbol="AAPL",
         currency="USD",
@@ -68,42 +68,42 @@ def test_tenant_isolation_coexistence_and_queries(db_session):
     assert inst_b.user_id == user_b
 
     # User A only sees their own AAPL
-    list_a = uow_a.watchlist.get_instruments()
+    list_a = watchlist_a.get_instruments()
     assert len(list_a) == 1
     assert list_a[0].target_price == Decimal("250.00")
     assert list_a[0].comment == "User A notes on Apple"
 
     # User B only sees their own AAPL
-    list_b = uow_b.watchlist.get_instruments()
+    list_b = watchlist_b.get_instruments()
     assert len(list_b) == 1
     assert list_b[0].target_price == Decimal("190.00")
     assert list_b[0].comment == "User B notes on Apple"
 
     # Cross-tenant query by ticker
-    found_a = uow_a.watchlist.get_instrument_by_ticker("AAPL")
+    found_a = watchlist_a.get_instrument_by_ticker("AAPL")
     assert found_a is not None
     assert found_a.target_price == Decimal("250.00")
 
     # User A cannot delete User B's instrument by id
-    deleted_cross = uow_a.watchlist.delete_instrument("NON_EXISTENT")
+    deleted_cross = watchlist_a.delete_instrument("NON_EXISTENT")
     assert deleted_cross is False
 
 
 def test_case_insensitive_ticker_search(db_session):
     """Verify ticker lookup is case-insensitive."""
     user = uuid.uuid4()
-    uow = UnitOfWork(db_session, user_id=user)
+    watchlist = MultiTenantWatchlistRepository(db_session, user_id=user)
 
-    uow.watchlist.create_instrument(user_ticker="msft", provider_symbol="MSFT")
+    watchlist.create_instrument(user_ticker="msft", provider_symbol="MSFT")
     db_session.commit()
 
     # Search with uppercase
-    inst = uow.watchlist.get_instrument_by_ticker("MSFT")
+    inst = watchlist.get_instrument_by_ticker("MSFT")
     assert inst is not None
     assert inst.user_ticker == "msft"
 
     # Search with mixed case
-    inst_mixed = uow.watchlist.get_instrument_by_ticker("MsFt")
+    inst_mixed = watchlist.get_instrument_by_ticker("MsFt")
     assert inst_mixed is not None
     assert inst_mixed.user_ticker == "msft"
 
@@ -115,23 +115,24 @@ def test_shared_market_quotes_decoupling(db_session):
     user_1 = uuid.uuid4()
     user_2 = uuid.uuid4()
 
-    uow_1 = UnitOfWork(db_session, user_id=user_1)
-    uow_2 = UnitOfWork(db_session, user_id=user_2)
+    watchlist_1 = MultiTenantWatchlistRepository(db_session, user_id=user_1)
+    watchlist_2 = MultiTenantWatchlistRepository(db_session, user_id=user_2)
+    quotes_repo = GlobalMarketQuotesRepository(db_session)
 
     # Both users watch SAN.MC
-    uow_1.watchlist.create_instrument(user_ticker="SAN", provider_symbol="SAN.MC", currency="EUR")
-    uow_2.watchlist.create_instrument(user_ticker="SANTANDER", provider_symbol="SAN.MC", currency="EUR")
+    watchlist_1.create_instrument(user_ticker="SAN", provider_symbol="SAN.MC", currency="EUR")
+    watchlist_2.create_instrument(user_ticker="SANTANDER", provider_symbol="SAN.MC", currency="EUR")
     db_session.commit()
 
     # Verify only ONE quote entry exists in market_quotes for SAN.MC
-    quote = uow_1.quotes.get_quote("SAN.MC")
+    quote = quotes_repo.get_quote("SAN.MC")
     assert quote is not None
     assert quote.provider_symbol == "SAN.MC"
 
     # Single provider fetch updates the shared quote
     now = datetime(2026, 10, 22, 13, 0, 0, tzinfo=timezone.utc)
-    uow_1.quotes.save_quote_success(
-        symbol="SAN.MC",
+    quotes_repo.upsert_market_quote_safe(
+        provider_symbol="SAN.MC",
         price=Decimal("4.65"),
         previous_close=Decimal("4.50"),
         quote_timestamp=now,
@@ -140,8 +141,8 @@ def test_shared_market_quotes_decoupling(db_session):
     db_session.commit()
 
     # Both User 1 and User 2 see the updated market price in positions
-    pos_1 = uow_1.watchlist.get_positions_with_calculations()[0]
-    pos_2 = uow_2.watchlist.get_positions_with_calculations()[0]
+    pos_1 = watchlist_1.get_positions_with_calculations()[0]
+    pos_2 = watchlist_2.get_positions_with_calculations()[0]
 
     assert pos_1["latest_price"] == 4.65
     assert pos_2["latest_price"] == 4.65
@@ -150,51 +151,14 @@ def test_shared_market_quotes_decoupling(db_session):
     assert pos_2["daily_variation"] == 3.33
 
 
-def test_quote_failure_preserves_last_valid_price(db_session):
-    """Verify that a provider error preserves the last known valid price and timestamp."""
-    quotes_repo = GlobalMarketQuotesRepository(db_session)
-    now = datetime(2026, 10, 22, 12, 0, 0, tzinfo=timezone.utc)
-
-    # 1. Successful quote fetch
-    quotes_repo.save_quote_success(
-        symbol="NVDA",
-        price=Decimal("130.50"),
-        previous_close=Decimal("128.00"),
-        quote_timestamp=now,
-        status="FRESH",
-    )
-    db_session.commit()
-
-    stored = quotes_repo.get_quote("NVDA")
-    assert stored.price == Decimal("130.50")
-    assert stored.status == "FRESH"
-
-    # 2. Next attempt fails (Yahoo network timeout or HTTP 500)
-    quotes_repo.save_quote_failure(
-        symbol="NVDA",
-        error_message="HTTP 503: Service Unavailable",
-        status="ERROR",
-    )
-    db_session.commit()
-
-    after_fail = quotes_repo.get_quote("NVDA")
-    # Price, previous close, and timestamp remain intact!
-    assert after_fail.price == Decimal("130.50")
-    assert after_fail.previous_close == Decimal("128.00")
-    assert after_fail.quote_timestamp == now
-    # Attempt status and error message reflect failure
-    assert after_fail.status == "ERROR"
-    assert after_fail.error_message == "HTTP 503: Service Unavailable"
-
-
 def test_tristate_patch_field_clearing(db_session):
     """Verify that updating with explicit None clears fields (Bug 6 fix),
     while omitting fields in fields_set leaves them untouched.
     """
     user = uuid.uuid4()
-    uow = UnitOfWork(db_session, user_id=user)
+    watchlist = MultiTenantWatchlistRepository(db_session, user_id=user)
 
-    inst = uow.watchlist.create_instrument(
+    watchlist.create_instrument(
         user_ticker="INTC",
         target_price=Decimal("35.00"),
         comment="Original thesis notes",
@@ -203,21 +167,21 @@ def test_tristate_patch_field_clearing(db_session):
     db_session.commit()
 
     # Case A: Omit target_price, only update comment
-    uow.watchlist.update_instrument(
+    watchlist.update_instrument(
         ticker="INTC",
         fields_set={"comment"},
         comment="Updated thesis",
     )
     db_session.commit()
 
-    refreshed = uow.watchlist.get_instrument_by_ticker("INTC")
+    refreshed = watchlist.get_instrument_by_ticker("INTC")
     assert refreshed.comment == "Updated thesis"
     # target_price was omitted, so it remained 35.00
     assert refreshed.target_price == Decimal("35.00")
     assert refreshed.analysis_date == date(2026, 1, 15)
 
     # Case B: Explicitly send target_price=None and analysis_date=None to clear them
-    uow.watchlist.update_instrument(
+    watchlist.update_instrument(
         ticker="INTC",
         fields_set={"target_price", "analysis_date"},
         target_price=None,
@@ -225,7 +189,7 @@ def test_tristate_patch_field_clearing(db_session):
     )
     db_session.commit()
 
-    cleared = uow.watchlist.get_instrument_by_ticker("INTC")
+    cleared = watchlist.get_instrument_by_ticker("INTC")
     assert cleared.target_price is None
     assert cleared.analysis_date is None
     assert cleared.comment == "Updated thesis"
