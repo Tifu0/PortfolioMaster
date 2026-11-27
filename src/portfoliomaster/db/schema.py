@@ -15,6 +15,7 @@ from typing import Optional, List
 
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Enum as SQLEnum,
@@ -109,8 +110,8 @@ class MarketQuote(Base):
     provider: Mapped[str] = mapped_column(String(50), default="yahoo", nullable=False)
 
     # Latest Valid Market Observation (Never overwritten by failed attempts)
-    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
-    previous_close: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
+    previous_close: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     quote_timestamp: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
     last_valid_fetched_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
 
@@ -126,6 +127,7 @@ class MarketQuote(Base):
             "UNAVAILABLE",
             "ERROR",
             name="quote_status",
+            length=20,
             native_enum=False,
             create_type=False,
         ),
@@ -144,6 +146,12 @@ class MarketQuote(Base):
     )
 
     __table_args__ = (
+        CheckConstraint("price IS NULL OR price > 0", name="chk_market_quotes_price_pos"),
+        CheckConstraint("previous_close IS NULL OR previous_close > 0", name="chk_market_quotes_prev_close_pos"),
+        CheckConstraint(
+            "status IN ('FRESH', 'DELAYED', 'STALE', 'UNAVAILABLE', 'ERROR')",
+            name="chk_market_quotes_status",
+        ),
         Index("idx_market_quotes_status_attempt", "status", "last_attempt_at"),
         Index("idx_market_quotes_last_attempt", "last_attempt_at"),
     )
@@ -162,7 +170,7 @@ class UserInstrument(Base):
     __tablename__ = "user_instruments"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False, index=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(GUID(), nullable=False)
 
     # User's display ticker (ground-truth string, preserved as written)
     user_ticker: Mapped[str] = mapped_column(String(50), nullable=False)
@@ -182,10 +190,10 @@ class UserInstrument(Base):
 
     # Reference prices and dates
     analysis_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    analysis_reference_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    analysis_reference_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     start_of_year_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
-    start_of_year_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
-    target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(18, 6), nullable=True)
+    start_of_year_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
+    target_price: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
 
     # Notes and active flag
     comment: Mapped[Optional[str]] = mapped_column(Text, default="", nullable=True)
@@ -203,6 +211,22 @@ class UserInstrument(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "analysis_reference_price IS NULL OR analysis_reference_price > 0",
+            name="chk_user_instruments_analysis_price_pos",
+        ),
+        CheckConstraint(
+            "start_of_year_price IS NULL OR start_of_year_price > 0",
+            name="chk_user_instruments_soy_price_pos",
+        ),
+        CheckConstraint(
+            "target_price IS NULL OR target_price > 0",
+            name="chk_user_instruments_target_price_pos",
+        ),
+        CheckConstraint(
+            "length(trim(user_ticker)) >= 1 AND length(trim(user_ticker)) <= 50",
+            name="chk_user_ticker_length",
+        ),
         UniqueConstraint("user_id", "user_ticker", name="uq_user_instruments_tenant_ticker"),
         Index("idx_user_instruments_tenant_active", "user_id", "active"),
         Index("idx_user_instruments_user_upper_ticker", "user_id", func.upper(text("user_ticker")), unique=True),
@@ -217,10 +241,10 @@ class RefreshRun(Base):
     __tablename__ = "refresh_runs"
 
     id: Mapped[uuid.UUID] = mapped_column(GUID(), primary_key=True, default=uuid.uuid4)
-    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(GUID(), nullable=True, index=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(GUID(), nullable=True)
 
     trigger_type: Mapped[str] = mapped_column(String(50), default="manual", nullable=False)
-    status: Mapped[str] = mapped_column(String(20), default="RUNNING", nullable=False, index=True)
+    status: Mapped[str] = mapped_column(String(20), default="RUNNING", nullable=False)
 
     total_symbols: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
     processed_symbols: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
@@ -242,6 +266,18 @@ class RefreshRun(Base):
     )
 
     __table_args__ = (
+        CheckConstraint(
+            "status IN ('RUNNING', 'COMPLETED', 'FAILED', 'TIMEOUT', 'PARTIAL')",
+            name="chk_refresh_runs_status",
+        ),
+        CheckConstraint(
+            "total_symbols >= 0 AND processed_symbols >= 0 AND failed_symbols >= 0 AND successful_symbols >= 0",
+            name="chk_counts_nonneg",
+        ),
+        CheckConstraint(
+            "completed_at IS NULL OR completed_at >= started_at",
+            name="chk_completed_after_start",
+        ),
         Index("idx_refresh_runs_user_started", "user_id", "started_at"),
         Index("idx_refresh_runs_active", "status", "started_at"),
     )
