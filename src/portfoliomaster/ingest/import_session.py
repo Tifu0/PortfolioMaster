@@ -62,7 +62,7 @@ def _cell_date(value: Any) -> Optional[date]:
 
 
 def import_spreadsheet(
-    file_path: str, original_filename: str
+    file_path: str, original_filename: str, max_rows: int = 2000
 ) -> Tuple[List[Instrument], List[str], List[str], List[str]]:
     """
     Full import workflow: parse -> map -> normalize -> validate -> deduplicate.
@@ -70,7 +70,7 @@ def import_spreadsheet(
     Returns:
         (instruments, errors, unresolved_symbols, warnings)
     """
-    df, parse_error = parse_spreadsheet(file_path, original_filename)
+    df, parse_error = parse_spreadsheet(file_path, original_filename, max_rows=max_rows)
     if parse_error:
         return [], [parse_error], [], []
 

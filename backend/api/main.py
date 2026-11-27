@@ -286,13 +286,16 @@ async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONR
     sys.stderr.write(f"\n[ERROR] Unhandled exception on {request.method} {request.url.path}: {exc}\n")
     sys.stderr.flush()
 
-    is_prod_env = (
-        os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod")
-        or os.environ.get("RENDER", "").lower() == "true"
-    )
+    from portfoliomaster.db.session import is_production
+
+    is_prod_env = is_production()
     exc_name = type(exc).__name__
     if "IntegrityError" in exc_name or "CheckViolation" in str(exc) or "NotNullViolation" in str(exc):
-        detail_message = f"Database constraint violation: {exc}"
+        detail_message = (
+            "Database constraint violation."
+            if is_prod_env
+            else f"Database constraint violation: {exc}"
+        )
     elif is_prod_env:
         detail_message = "An unexpected internal error occurred on the server."
     else:

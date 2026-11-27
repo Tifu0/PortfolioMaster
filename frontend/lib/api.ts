@@ -27,10 +27,10 @@ const isServer = typeof window === 'undefined';
 /**
  * Base URL resolution:
  * On client (browser), calls use relative path ('/api/...') hitting Next.js proxy/BFF.
- * On server (SSR), calls use API_BASE_URL or NEXT_PUBLIC_API_URL.
+ * On server (SSR), calls use API_BASE_URL or BACKEND_URL (never NEXT_PUBLIC_*).
  * Localhost fallback is restricted strictly to non-production development.
  */
-const rawApiUrl = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL;
+const rawApiUrl = isServer ? (process.env.API_BASE_URL || process.env.BACKEND_URL) : undefined;
 export const API_BASE_URL = isServer
   ? (rawApiUrl ? rawApiUrl.replace(/\/$/, '') : (process.env.NODE_ENV === 'production' ? '' : 'http://localhost:8000'))
   : '';
@@ -59,10 +59,10 @@ export async function authFetch(input: RequestInfo | URL, init?: RequestInit): P
 
 function getFullUrl(path: string): URL {
   if (isServer) {
-    const rawBackend = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL;
+    const rawBackend = process.env.API_BASE_URL || process.env.BACKEND_URL;
     if (!rawBackend && process.env.NODE_ENV === 'production') {
       throw new Error(
-        '[Configuration Error] API_BASE_URL or NEXT_PUBLIC_API_URL is required in production environment for server-side requests.'
+        '[Configuration Error] API_BASE_URL is required in production environment for server-side requests.'
       );
     }
     const base = rawBackend ? rawBackend.replace(/\/$/, '') : 'http://localhost:8000';

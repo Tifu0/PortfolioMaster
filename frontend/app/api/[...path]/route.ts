@@ -35,7 +35,7 @@ async function forward(request: NextRequest, { params }: { params: Promise<{ pat
     return NextResponse.json({ detail: 'Cross-origin request denied.' }, { status: 403 });
   }
 
-  const backend = process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL
+  const backend = process.env.API_BASE_URL || process.env.BACKEND_URL
     || (process.env.NODE_ENV === 'production' ? null : 'http://localhost:8000');
   if (!backend) return NextResponse.json({ detail: 'Backend URL is not configured.' }, { status: 503 });
 

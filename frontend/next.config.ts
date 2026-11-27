@@ -1,6 +1,6 @@
 import type { NextConfig } from "next";
 
-if (process.env.VERCEL === '1' && !(process.env.API_BASE_URL || process.env.NEXT_PUBLIC_API_URL || process.env.BACKEND_URL)) {
+if (process.env.VERCEL === '1' && !(process.env.API_BASE_URL || process.env.BACKEND_URL)) {
   throw new Error('Configure API_BASE_URL in Vercel so Next.js can reach the FastAPI backend.');
 }
 

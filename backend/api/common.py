@@ -69,8 +69,11 @@ def _configured_jwt_secret() -> str | None:
 
 def validate_auth_configuration() -> None:
     """Require an HS256 key or a Supabase project URL for JWKS verification."""
-    if _configured_jwt_secret() is None and not os.environ.get("SUPABASE_URL", "").strip():
+    supabase_url = os.environ.get("SUPABASE_URL", "").strip()
+    if _configured_jwt_secret() is None and not supabase_url:
         raise ValueError("Configure SUPABASE_JWT_SECRET for HS256 or SUPABASE_URL for asymmetric JWTs.")
+    if is_production() and is_multi_tenant_db() and not supabase_url:
+        raise ValueError("SUPABASE_URL is required in production multi-tenant mode to enforce JWT issuer validation.")
 
 
 def _get_jwt_secret() -> str:
@@ -128,9 +131,10 @@ def get_current_user(
     try:
         unverified_header = jwt.get_unverified_header(token)
     except Exception as e:
+        logger.warning("[Auth] Malformed JWT header: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: malformed token header ({e}).",
+            detail="Authentication failed: malformed token header.",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
 
@@ -138,12 +142,18 @@ def get_current_user(
     if not alg or alg.lower() == "none" or alg not in ("HS256", "RS256", "ES256"):
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: unsupported or prohibited token algorithm '{alg}'.",
+            detail="Authentication failed: unsupported or prohibited token algorithm.",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token", error_description="Unsupported algorithm"'},
         )
 
     raw_supabase_url = os.environ.get("SUPABASE_URL", "").strip()
     clean_supabase_url = raw_supabase_url.rstrip("/") if raw_supabase_url else None
+    if is_production() and is_multi_tenant_db() and not clean_supabase_url:
+        logger.error("[Auth] SUPABASE_URL is required in production multi-tenant mode.")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Authentication configuration error: SUPABASE_URL is required.",
+        )
     expected_issuer = f"{clean_supabase_url}/auth/v1" if clean_supabase_url else None
 
     # 2. Strict cryptographic signature & claim verification
@@ -213,21 +223,24 @@ def get_current_user(
             headers={"WWW-Authenticate": 'Bearer error="invalid_token", error_description="Invalid signature"'},
         )
     except jwt.DecodeError as e:
+        logger.warning("[Auth] JWT decode failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: malformed token ({e}).",
+            detail="Authentication failed: malformed token.",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
     except jwt.PyJWKClientError as e:
+        logger.warning("[Auth] JWKS key verification failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: unable to verify key from JWKS ({e}).",
+            detail="Authentication failed: unable to verify signing key.",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
     except jwt.PyJWTError as e:
+        logger.warning("[Auth] JWT verification failed: %s", e)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail=f"Authentication failed: {e}.",
+            detail="Authentication failed: invalid token.",
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
 
@@ -248,11 +261,11 @@ def get_current_user(
             headers={"WWW-Authenticate": 'Bearer error="invalid_token"'},
         )
 
-    role = payload.get("role", "authenticated")
+    role = payload.get("role")
     if role != "authenticated":
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="Access forbidden: unauthorized user role. service_role cannot access user-facing endpoints.",
+            detail="Access forbidden: unauthorized user role. Only authenticated user tokens are permitted.",
         )
 
     return AuthenticatedUser(

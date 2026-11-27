@@ -722,17 +722,20 @@ def _execute_refresh_all(
                     err_session.commit()
             except Exception:
                 pass
-        err_msg = f"error: {e}"
+        from portfoliomaster.db.session import is_production
+
+        public_err = "Refresh failed due to an internal error." if is_production() else str(e)
+        err_msg = f"error: {public_err}"
         _state["last_refresh_result"] = err_msg
         _state["last_refresh_status"] = err_msg
-        err_payload = {"type": "error", "detail": str(e)}
+        err_payload = {"type": "error", "detail": public_err}
         _broadcast_refresh_event(err_payload)
         if on_batch_progress:
             try:
                 on_batch_progress(err_payload)
             except Exception:
                 pass
-        return {"status": "error", "detail": str(e)}
+        return {"status": "error", "detail": public_err}
 
     finally:
         _state["is_refreshing"] = False

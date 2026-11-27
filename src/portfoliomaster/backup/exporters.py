@@ -51,8 +51,12 @@ def _serialize_decimal(val: Any) -> Optional[float]:
 
 def _sanitize_formula(val: Any) -> Any:
     """Protect spreadsheet users against Formula Injection (CSV/Excel macro injection)."""
-    if isinstance(val, str) and val and val[0] in ("=", "+", "-", "@"):
-        return f"'{val}"
+    if isinstance(val, str) and val:
+        stripped = val.lstrip(" \t\r\n\x00\x0b\x0c")
+        if val[0] in ("=", "+", "-", "@", "\t", "\r", "\n") or (
+            stripped and stripped[0] in ("=", "+", "-", "@")
+        ):
+            return f"'{val}"
     return val
 
 
@@ -330,6 +334,11 @@ def validate_json_backup_payload(payload: Any) -> List[dict]:
         if "version" not in payload and "app" not in payload:
             raise ValueError("Ambiguous backup payload: empty backup must include 'version' or 'app' metadata.")
         return []
+
+    if len(instruments_data) > 500:
+        raise ValueError(
+            f"Backup contains {len(instruments_data)} instruments, exceeding the maximum limit of 500."
+        )
 
     seen_tickers: set[str] = set()
     validated_items: List[dict] = []
