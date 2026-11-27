@@ -42,6 +42,10 @@ portfolio.db
 *.db-shm
 *.sqlite*
 
+# Local-only workspace files (keep local/README.md tracked)
+local/*
+!local/README.md
+
 # Streamlit
 .streamlit/
 
