@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { AuthProvider } from "@/context/AuthContext";
-import { LanguageProvider } from "@/context/LanguageContext";
+import { LanguageProvider, SkipToContentLink } from "@/context/LanguageContext";
 import { getServerAuth } from "@/lib/supabase/server";
 import { AuthModal } from "@/components/AuthModal";
 import { DomPatchGuard } from "@/components/DomPatchGuard";
@@ -41,6 +41,7 @@ export default async function RootLayout({ children }: LayoutProps<"/">) {
         <LanguageProvider>
           <ToastProvider>
             <AuthProvider initialUser={user}>
+              <SkipToContentLink />
               {children}
               <AuthModal />
             </AuthProvider>

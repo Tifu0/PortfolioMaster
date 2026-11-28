@@ -2,9 +2,11 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useAuth } from '@/context/AuthContext';
+import { useLanguage } from '@/context/LanguageContext';
 import { LogIn, UserPlus, X, AlertCircle, CheckCircle2, Loader2, Lock, Mail } from 'lucide-react';
 
 export function AuthModal() {
+  const { t } = useLanguage();
   const {
     isAuthModalOpen,
     authMessage,
@@ -63,12 +65,12 @@ export function AuthModal() {
 
     const cleanEmail = email.trim();
     if (!cleanEmail || !password) {
-      setErrorMessage('Por favor, introduce tu correo electrónico y contraseña.');
+      setErrorMessage(t('authMissingFields'));
       return;
     }
 
     if (password.length < 6) {
-      setErrorMessage('La contraseña debe tener al menos 6 caracteres.');
+      setErrorMessage(t('authPasswordMinLength'));
       return;
     }
 
@@ -80,7 +82,7 @@ export function AuthModal() {
         if (error) {
           setErrorMessage(
             error.message.includes('Invalid login credentials')
-              ? 'Credenciales incorrectas. Verifica tu email y contraseña.'
+              ? t('authInvalidCredentials')
               : error.message
           );
         } else {
@@ -91,9 +93,7 @@ export function AuthModal() {
         if (error) {
           setErrorMessage(error.message);
         } else if (needsConfirmation) {
-          setSuccessNotice(
-            '¡Cuenta creada! Hemos enviado un enlace de confirmación a tu correo electrónico. Por favor, confirma tu cuenta antes de iniciar sesión.'
-          );
+          setSuccessNotice(t('authConfirmationSent'));
         } else {
           closeAuthModal();
         }
@@ -105,7 +105,7 @@ export function AuthModal() {
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200"
+      className="fixed inset-0 z-[150] flex items-center justify-center p-4 bg-black/70 backdrop-blur-sm animate-in fade-in duration-200 motion-reduce:animate-none motion-reduce:transition-none overscroll-contain"
       onClick={(e) => {
         if (e.target === e.currentTarget && !loading) handleClose();
       }}
@@ -113,7 +113,7 @@ export function AuthModal() {
       aria-modal="true"
       aria-labelledby="auth-modal-title"
     >
-      <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-zinc-100 flex flex-col gap-5">
+      <div className="relative w-full max-w-md bg-zinc-900 border border-zinc-800 rounded-2xl p-6 shadow-2xl text-zinc-100 flex flex-col gap-5 max-h-[90dvh] overflow-y-auto overscroll-contain">
         {/* Header */}
         <div className="flex items-center justify-between pb-3 border-b border-zinc-800">
           <div className="flex items-center gap-2.5">
@@ -121,7 +121,7 @@ export function AuthModal() {
               {mode === 'signin' ? <LogIn className="w-4 h-4" /> : <UserPlus className="w-4 h-4" />}
             </div>
             <h2 id="auth-modal-title" className="text-lg font-bold text-white tracking-tight">
-              {mode === 'signin' ? 'Iniciar Sesión' : 'Crear Cuenta'}
+              {mode === 'signin' ? t('signIn') : t('authCreateAccountBtn')}
             </h2>
           </div>
           <button
@@ -129,7 +129,7 @@ export function AuthModal() {
             onClick={handleClose}
             disabled={loading}
             className="p-1 rounded-lg text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition disabled:opacity-50"
-            aria-label="Cerrar modal"
+            aria-label={t('closeModal')}
           >
             <X className="w-5 h-5" />
           </button>
@@ -140,7 +140,7 @@ export function AuthModal() {
           <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-300 text-xs flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
             <span>
-              Supabase Auth no está configurado en las variables de entorno (<code className="font-mono">NEXT_PUBLIC_SUPABASE_URL</code>). El backend se encuentra en modo local sin login requerido.
+              {t('authNotConfiguredNotice', { envVar: 'NEXT_PUBLIC_SUPABASE_URL' })}
             </span>
           </div>
         )}
@@ -180,7 +180,7 @@ export function AuthModal() {
                 : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            Iniciar Sesión
+            {t('signIn')}
           </button>
           <button
             type="button"
@@ -191,16 +191,16 @@ export function AuthModal() {
                 : 'text-zinc-400 hover:text-zinc-200'
             }`}
           >
-            Registrarse
+            {t('authCreateAccountTab')}
           </button>
         </div>
 
         {/* Form */}
         <form onSubmit={handleSubmit} className="flex flex-col gap-4">
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
+            <label htmlFor="auth-email-input" className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
               <Mail className="w-3.5 h-3.5 text-zinc-500" />
-              Correo Electrónico
+              {t('authEmailLabel')}
             </label>
             <input
               id="auth-email-input"
@@ -211,16 +211,16 @@ export function AuthModal() {
               autoComplete="email"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
-              placeholder="tu@email.com"
+              placeholder={t('authEmailPlaceholder')}
               disabled={loading}
               className="w-full px-3.5 py-2.5 bg-zinc-950 border border-zinc-800 rounded-xl text-sm text-zinc-100 placeholder:text-zinc-600 focus:outline-none focus:border-emerald-500 focus:ring-1 focus:ring-emerald-500 transition disabled:opacity-50"
             />
           </div>
 
           <div className="flex flex-col gap-1.5">
-            <label className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
+            <label htmlFor="auth-password-input" className="text-xs font-medium text-zinc-300 flex items-center gap-1.5">
               <Lock className="w-3.5 h-3.5 text-zinc-500" />
-              Contraseña
+              {t('authPasswordLabel')}
             </label>
             <input
               id="auth-password-input"
@@ -245,18 +245,18 @@ export function AuthModal() {
           >
             {loading ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Procesando...</span>
+                <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
+                <span>{t('authProcessing')}</span>
               </>
             ) : mode === 'signin' ? (
               <>
                 <LogIn className="w-4 h-4" />
-                <span>Iniciar Sesión</span>
+                <span>{t('signIn')}</span>
               </>
             ) : (
               <>
                 <UserPlus className="w-4 h-4" />
-                <span>Crear Cuenta</span>
+                <span>{t('authCreateAccountBtn')}</span>
               </>
             )}
           </button>

@@ -8,6 +8,7 @@ import {
   RotateCcw,
   ShieldAlert,
 } from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface RestoreUploadSectionProps {
   selectedFile: File | null;
@@ -26,6 +27,7 @@ export function RestoreUploadSection({
   restoringFile,
   onExecuteRestore,
 }: RestoreUploadSectionProps) {
+  const { t } = useLanguage();
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -40,10 +42,10 @@ export function RestoreUploadSection({
       <div>
         <h4 className="font-semibold text-zinc-200 text-sm flex items-center gap-2">
           <Upload className="w-4 h-4 text-emerald-400" />
-          Restore From File (.db or .json)
+          {t('restoreFromFileTitle')}
         </h4>
         <p className="text-xs text-zinc-400 mt-1">
-          Upload an existing SQLite database file or a JSON backup snapshot to restore your portfolio watchlist.
+          {t('restoreFromFileDesc')}
         </p>
       </div>
 
@@ -52,34 +54,36 @@ export function RestoreUploadSection({
         ref={fileInputRef}
         onChange={handleFileChange}
         accept=".db,.json"
+        aria-label={t('selectBackupFileAria')}
         className="hidden"
       />
 
       {!selectedFile ? (
-        <div
+        <button
+          type="button"
           onClick={() => fileInputRef.current?.click()}
-          className="border-2 border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 hover:bg-zinc-950/60 rounded-xl p-8 text-center cursor-pointer transition flex flex-col items-center justify-center gap-3"
+          className="w-full border-2 border-dashed border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 hover:bg-zinc-950/60 rounded-xl p-8 text-center cursor-pointer transition flex flex-col items-center justify-center gap-3 focus:outline-none focus:ring-2 focus:ring-emerald-500"
         >
           <div className="w-10 h-10 rounded-xl bg-zinc-900 border border-zinc-800 flex items-center justify-center text-zinc-400">
             <Upload className="w-5 h-5 text-emerald-400" />
           </div>
           <div>
             <span className="text-xs font-semibold text-zinc-200 block">
-              Click to select a backup file (.db or .json)
+              {t('clickSelectBackup')}
             </span>
             <span className="text-[11px] text-zinc-500 mt-0.5 block">
-              Supports SQLite database files and JSON export snapshots
+              {t('supportsDbJson')}
             </span>
           </div>
-        </div>
+        </button>
       ) : (
         <div className="flex flex-col gap-4">
           <div className="p-4 rounded-xl bg-zinc-950/80 border border-zinc-800 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 truncate">
+            <div className="flex items-center gap-3 min-w-0 flex-1">
               <div className="w-8 h-8 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
                 <Upload className="w-4 h-4" />
               </div>
-              <div className="truncate">
+              <div className="min-w-0 truncate">
                 <span className="text-xs font-semibold text-white block truncate">
                   {selectedFile.name}
                 </span>
@@ -89,13 +93,15 @@ export function RestoreUploadSection({
               </div>
             </div>
             <button
+              type="button"
               onClick={() => {
                 onSelectFile(null);
                 onSetConfirmFileRestore(false);
                 if (fileInputRef.current) fileInputRef.current.value = '';
               }}
-              className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
-              title="Remove file"
+              className="p-1.5 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition shrink-0"
+              title={t('removeFile')}
+              aria-label={t('removeBackupFileAria')}
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -107,16 +113,15 @@ export function RestoreUploadSection({
               className="w-full inline-flex items-center justify-center gap-2 px-4 py-2 text-xs font-semibold text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-xl transition border border-zinc-700/60"
             >
               <RotateCcw className="w-3.5 h-3.5 text-amber-400" />
-              Restore Watchlist from Selected File
+              {t('restoreFromSelectedFile')}
             </button>
           ) : (
-            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex flex-col gap-3 animate-in fade-in">
+            <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 flex flex-col gap-3 animate-in fade-in motion-reduce:animate-none">
               <div className="flex items-start gap-2.5">
                 <ShieldAlert className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                 <div className="text-xs text-amber-300">
-                  <strong className="font-semibold block text-amber-200">Confirmation Required</strong>
-                  Restoring will atomically replace current watchlist instruments with the contents of{' '}
-                  <strong className="font-mono text-white">{selectedFile.name}</strong>. An automatic safety snapshot will be created first.
+                  <strong className="font-semibold block text-amber-200">{t('confirmationRequired')}</strong>
+                  {t('restoreConfirmDesc', { name: selectedFile.name })}
                 </div>
               </div>
               <div className="flex items-center justify-end gap-2 pt-1">
@@ -125,7 +130,7 @@ export function RestoreUploadSection({
                   disabled={restoringFile}
                   className="px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition"
                 >
-                  Cancel
+                  {t('cancel')}
                 </button>
                 <button
                   onClick={onExecuteRestore}
@@ -134,11 +139,11 @@ export function RestoreUploadSection({
                 >
                   {restoringFile ? (
                     <>
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Restoring...
+                      <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none" />
+                      {t('restoring')}
                     </>
                   ) : (
-                    'Confirm & Restore'
+                    t('confirmAndRestore')
                   )}
                 </button>
               </div>

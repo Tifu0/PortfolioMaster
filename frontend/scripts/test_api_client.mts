@@ -2,44 +2,23 @@ import assert from 'node:assert/strict';
 import { createHmac } from 'node:crypto';
 import { NextRequest, type NextResponse } from 'next/server';
 import * as api from '../lib/api';
-
-console.log('Testing Phase 2 API Client exports...');
-
-const expectedFunctions = [
-  'getPositions',
-  'getInstruments',
-  'getInstrument',
-  'createInstrument',
-  'updateInstrument',
-  'deleteInstrument',
-  'refreshInstrument',
-  'refreshAll',
-  'previewImport',
-  'confirmImport',
-  'wipeDatabase',
-];
-
-let failed = false;
-for (const fnName of expectedFunctions) {
-  if (typeof (api as Record<string, unknown>)[fnName] !== 'function') {
-    console.error(`❌ Missing expected function: ${fnName}`);
-    failed = true;
-  } else {
-    console.log(`✅ ${fnName} is exported and typed`);
-  }
-}
-
-if (failed) {
-  process.exit(1);
-} else {
-  console.log('All 11 API client functions verified successfully!');
-}
+import nextConfig from '../next.config';
 
 const originalFetch = globalThis.fetch;
 const serverToken = 'fixture-server-token';
 const authorizationHeaders: Array<string | null> = [];
-globalThis.fetch = async (_input, init) => {
+const cacheOptions: Array<{ url: string; cache: RequestCache | undefined }> = [];
+
+globalThis.fetch = async (input, init) => {
+  const url = typeof input === 'string' ? input : input instanceof Request ? input.url : String(input);
+  cacheOptions.push({ url, cache: init?.cache });
   authorizationHeaders.push(new Headers(init?.headers).get('Authorization'));
+  if (url.includes('/api/config')) {
+    return Response.json({ status: 'ok', refresh_interval_seconds: 60, batch_size: 20 });
+  }
+  if (url.includes('/api/instruments/check-yahoo')) {
+    return Response.json({ available: true, ticker: 'AAPL', provider_symbol: 'AAPL' });
+  }
   return Response.json({ positions: [] }, { headers: { ETag: 'fixture-etag' } });
 };
 
@@ -50,13 +29,26 @@ try {
     api.getPositions('no-store', 'other-server-token'),
   ]);
   assert.deepEqual(authorizationHeaders, [
-    'Bearer fixture-server-token', 'Bearer fixture-server-token', 'Bearer other-server-token',
+    'Bearer fixture-server-token',
+    'Bearer fixture-server-token',
+    'Bearer other-server-token',
   ]);
+
+  await api.getConfig();
+  await api.checkYahooTicker('AAPL');
+  const configCall = cacheOptions.find((entry) => entry.url.includes('/api/config'));
+  const checkCall = cacheOptions.find((entry) => entry.url.includes('/api/instruments/check-yahoo'));
+  assert.equal(configCall?.cache, 'no-store', 'getConfig must bypass fetch cache');
+  assert.equal(checkCall?.cache, 'no-store', 'checkYahooTicker must bypass fetch cache');
+
   globalThis.fetch = async () => new Response(null, { status: 304 });
   await assert.rejects(api.getPositions('no-store', 'other-server-token'), api.ApiError);
 } finally {
   globalThis.fetch = originalFetch;
 }
+
+assert.equal(Object.hasOwn(nextConfig, 'cacheComponents'), false, 'cacheComponents must be omitted');
+assert.equal(Object.hasOwn(nextConfig, 'partialPrefetching'), false, 'partialPrefetching must be omitted');
 
 process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://auth.example';
 process.env.NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY = 'fixture-publishable-key';
@@ -69,9 +61,14 @@ const streamRoute = { params: Promise.resolve({ path: ['refresh', 'stream'] }) }
 const positionsRoute = { params: Promise.resolve({ path: ['positions'] }) };
 const origin = 'https://portfolio.example';
 const { getRequestOrigin } = await import('../lib/supabase/request');
-assert.equal(getRequestOrigin(new NextRequest('http://localhost:4918/api/auth', {
-  headers: { Host: '127.0.0.1:4918' },
-})), 'http://127.0.0.1:4918');
+
+assert.equal(
+  getRequestOrigin(new NextRequest('http://localhost:4918/api/auth', {
+    headers: { Host: '127.0.0.1:4918' },
+  })),
+  'http://127.0.0.1:4918'
+);
+
 const user = {
   id: '72c338c2-f1ac-4e90-8e1e-ad2a1e38c896',
   email: 'fixture@example.com',
@@ -83,10 +80,20 @@ const user = {
 };
 const encode = (value: object) => Buffer.from(JSON.stringify(value)).toString('base64url');
 const jwtPayload = `${encode({ typ: 'JWT', alg: 'HS256' })}.${encode({
-  sub: user.id, email: user.email, role: 'authenticated', exp: Math.floor(Date.now() / 1000) + 3600,
+  sub: user.id,
+  email: user.email,
+  role: 'authenticated',
+  exp: Math.floor(Date.now() / 1000) + 3600,
 })}`;
 const accessToken = `${jwtPayload}.${createHmac('sha256', 'test-fixture').update(jwtPayload).digest('base64url')}`;
-const tokenResponse = { access_token: accessToken, refresh_token: 'fixture-refresh', expires_in: 3600, token_type: 'bearer', user };
+const tokenResponse = {
+  access_token: accessToken,
+  refresh_token: 'fixture-refresh',
+  expires_in: 3600,
+  token_type: 'bearer',
+  user,
+};
+
 let upstreamRequest: Request | undefined;
 globalThis.fetch = async (input, init) => {
   const request = new Request(input, init);
@@ -106,7 +113,9 @@ function authRequest(action: 'signIn' | 'signUp' | 'signOut', cookie?: string) {
   const headers = new Headers({ Origin: origin, 'Content-Type': 'application/json' });
   if (cookie) headers.set('Cookie', cookie);
   return new NextRequest(`${origin}/api/auth`, {
-    method: 'POST', headers, body: JSON.stringify({ action, email: user.email, password: 'fixture-password' }),
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ action, email: user.email, password: 'fixture-password' }),
   });
 }
 
@@ -122,13 +131,21 @@ function sessionCookie(response: Pick<NextResponse, 'cookies'>): string {
 }
 
 try {
-  const ambiguousTrigger = await GET(new NextRequest('https://portfolio.example/api/refresh/stream?mode=listen&mode=start', {
-    headers: { 'Sec-Fetch-Site': 'cross-site' },
-  }), streamRoute);
+  const ambiguousTrigger = await GET(
+    new NextRequest('https://portfolio.example/api/refresh/stream?mode=listen&mode=start', {
+      headers: { 'Sec-Fetch-Site': 'cross-site' },
+    }),
+    streamRoute
+  );
   assert.equal(ambiguousTrigger.status, 403, 'An ambiguous mode must not bypass the refresh trigger origin guard.');
-  const crossOriginMutation = await POST(new NextRequest(`${origin}/api/positions`, {
-    method: 'POST', headers: { Origin: 'https://untrusted.example' },
-  }), positionsRoute);
+
+  const crossOriginMutation = await POST(
+    new NextRequest(`${origin}/api/positions`, {
+      method: 'POST',
+      headers: { Origin: 'https://untrusted.example' },
+    }),
+    positionsRoute
+  );
   assert.equal(crossOriginMutation.status, 403);
 
   const login = await authRoute.POST(authRequest('signIn'));
@@ -137,9 +154,12 @@ try {
   assert.equal(login.headers.get('Cache-Control'), 'private, no-store');
   const cookie = sessionCookie(login);
 
-  const proxied = await GET(new NextRequest(`${origin}/api/positions`, {
-    headers: { Cookie: cookie, Authorization: 'Bearer untrusted', 'If-None-Match': 'same-etag' },
-  }), positionsRoute);
+  const proxied = await GET(
+    new NextRequest(`${origin}/api/positions`, {
+      headers: { Cookie: cookie, Authorization: 'Bearer untrusted', 'If-None-Match': 'same-etag' },
+    }),
+    positionsRoute
+  );
   assert.equal(proxied.status, 304);
   assert.equal(proxied.headers.get('ETag'), 'same-etag');
   assert.equal(proxied.headers.get('Set-Cookie'), null);
@@ -152,9 +172,11 @@ try {
   const signup = await authRoute.POST(authRequest('signUp'));
   assert.deepEqual(await signup.json(), { user: null, needsConfirmation: true });
   const verifier = sessionCookie(signup);
-  const callback = await callbackRoute.GET(new NextRequest(`${origin}/auth/callback?code=fixture-code`, {
-    headers: { Cookie: verifier },
-  }));
+  const callback = await callbackRoute.GET(
+    new NextRequest(`${origin}/auth/callback?code=fixture-code`, {
+      headers: { Cookie: verifier },
+    })
+  );
   assert.equal(callback.headers.get('Location'), `${origin}/`);
   sessionCookie(callback);
 
@@ -164,3 +186,5 @@ try {
 } finally {
   globalThis.fetch = originalFetch;
 }
+
+console.log('✓ API client, proxy auth, cache no-store, and route security tests passed');

@@ -10,6 +10,7 @@ import {
   Loader2,
   FileDown,
 } from 'lucide-react';
+import { useLanguage } from '@/context/LanguageContext';
 
 interface ExportSectionProps {
   onExport: (format: 'csv' | 'excel' | 'json') => Promise<void>;
@@ -24,15 +25,17 @@ export function ExportSection({
   exportingFormat,
   downloadingDb,
 }: ExportSectionProps) {
+  const { t } = useLanguage();
+
   return (
     <div className="flex flex-col gap-6">
       <div>
         <h3 className="text-sm font-semibold text-white flex items-center gap-2">
           <Download className="w-4 h-4 text-emerald-400" />
-          Export Watchlist Data
+          {t('exportWatchlistData')}
         </h3>
         <p className="text-xs text-zinc-400 mt-1">
-          Download your current watchlist instruments, target prices, and calculated metrics in your preferred format.
+          {t('exportWatchlistDesc')}
         </p>
       </div>
 
@@ -44,9 +47,9 @@ export function ExportSection({
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="font-semibold text-zinc-200 text-sm">CSV Format</h4>
+              <h4 className="font-semibold text-zinc-200 text-sm">{t('csvFormat')}</h4>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Comma-separated values spreadsheet, universally compatible with Excel and Google Sheets.
+                {t('csvFormatDesc')}
               </p>
             </div>
           </div>
@@ -57,13 +60,13 @@ export function ExportSection({
           >
             {exportingFormat === 'csv' ? (
               <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Exporting...
+                <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                {t('exporting')}
               </>
             ) : (
               <>
                 <FileDown className="w-3.5 h-3.5 text-emerald-400" />
-                Download CSV
+                {t('downloadCsv')}
               </>
             )}
           </button>
@@ -76,9 +79,9 @@ export function ExportSection({
               <FileSpreadsheet className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="font-semibold text-zinc-200 text-sm">Excel (.xlsx)</h4>
+              <h4 className="font-semibold text-zinc-200 text-sm">{t('excelFormat')}</h4>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Formatted native Excel workbook with styled headers and tabular numeric columns.
+                {t('excelFormatDesc')}
               </p>
             </div>
           </div>
@@ -89,13 +92,13 @@ export function ExportSection({
           >
             {exportingFormat === 'excel' ? (
               <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Exporting...
+                <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                {t('exporting')}
               </>
             ) : (
               <>
                 <FileDown className="w-3.5 h-3.5 text-teal-400" />
-                Download Excel
+                {t('downloadExcel')}
               </>
             )}
           </button>
@@ -108,9 +111,9 @@ export function ExportSection({
               <FileJson className="w-5 h-5" />
             </div>
             <div>
-              <h4 className="font-semibold text-zinc-200 text-sm">JSON Format</h4>
+              <h4 className="font-semibold text-zinc-200 text-sm">{t('jsonFormat')}</h4>
               <p className="text-xs text-zinc-400 mt-0.5">
-                Structured machine-readable snapshot, perfect for backups and programmatic migrations.
+                {t('jsonFormatDesc')}
               </p>
             </div>
           </div>
@@ -121,29 +124,29 @@ export function ExportSection({
           >
             {exportingFormat === 'json' ? (
               <>
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                Exporting...
+                <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                {t('exporting')}
               </>
             ) : (
               <>
                 <FileDown className="w-3.5 h-3.5 text-cyan-400" />
-                Download JSON
+                {t('downloadJson')}
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* Raw SQLite Database Backup Download */}
+      {/* Raw Database Snapshot Download */}
       <div className="p-5 rounded-2xl bg-gradient-to-r from-zinc-900/80 to-zinc-900/40 border border-zinc-800/80 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3.5">
           <div className="w-11 h-11 rounded-xl bg-purple-500/10 text-purple-400 flex items-center justify-center shrink-0 border border-purple-500/20">
             <Database className="w-5 h-5" />
           </div>
           <div>
-            <h4 className="font-semibold text-zinc-100 text-sm">Raw Database Snapshot (.db)</h4>
+            <h4 className="font-semibold text-zinc-100 text-sm">{t('rawSnapshotTitle')}</h4>
             <p className="text-xs text-zinc-400 mt-0.5">
-              Complete raw database binary file containing all schema definitions, instruments, and quotes.
+              {t('rawSnapshotDesc')}
             </p>
           </div>
         </div>
@@ -154,13 +157,13 @@ export function ExportSection({
         >
           {downloadingDb ? (
             <>
-              <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              Generating Snapshot...
+              <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+              {t('generatingSnapshot')}
             </>
           ) : (
             <>
               <Download className="w-3.5 h-3.5" />
-              Download .db File
+              {t('downloadDbFile')}
             </>
           )}
         </button>

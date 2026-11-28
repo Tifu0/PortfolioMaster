@@ -12,16 +12,16 @@ export function AppHeader() {
 
   return (
     <header className="border-b border-zinc-800/80 bg-zinc-950/80 backdrop-blur sticky top-0 z-50">
-      <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Link href="/" className="flex items-center gap-3 group">
-            <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-105 transition">
+      <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2 sm:gap-3 min-w-0">
+          <Link href="/" className="flex items-center gap-2.5 sm:gap-3 group min-w-0">
+            <div className="w-9 h-9 shrink-0 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 group-hover:scale-105 motion-reduce:group-hover:scale-100 transition">
               <BarChart3 className="w-5 h-5" />
             </div>
-            <div>
-              <span className="font-bold text-lg tracking-tight text-white flex items-center gap-2">
+            <div className="min-w-0">
+              <span className="font-bold text-base sm:text-lg tracking-tight text-white flex items-center gap-2 truncate">
                 PortfolioMaster
-                <span className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/60 font-normal">
+                <span className="hidden sm:inline-block text-[10px] font-mono px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-400 border border-zinc-700/60 font-normal">
                   v1.0
                 </span>
               </span>
@@ -29,9 +29,9 @@ export function AppHeader() {
           </Link>
         </div>
 
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3 shrink-0">
           {/* Language Switcher */}
-          <div className="flex items-center rounded-lg bg-zinc-900 border border-zinc-800 p-0.5 text-xs font-mono">
+          <div className="flex items-center rounded-lg bg-zinc-900 border border-zinc-800 p-0.5 text-xs font-mono shrink-0">
             <button
               type="button"
               onClick={() => setLanguage('en')}
@@ -59,10 +59,6 @@ export function AppHeader() {
           </div>
 
           <UserAuthButton />
-          <span className="hidden sm:inline-flex items-center gap-1.5 text-xs text-zinc-400 font-mono">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            FastAPI
-          </span>
         </div>
       </div>
 

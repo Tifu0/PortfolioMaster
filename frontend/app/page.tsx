@@ -3,6 +3,7 @@ import { isAuthConfigured } from '@/lib/supabase';
 import { getServerAuth } from '@/lib/supabase/server';
 import { AppHeader } from '@/components/AppHeader';
 import { WatchlistContent } from '@/components/WatchlistContent';
+import { TranslatedText } from '@/context/LanguageContext';
 import { PortfolioProvider } from '@/context/PortfolioContext';
 import { AlertCircle } from 'lucide-react';
 
@@ -24,7 +25,7 @@ async function WatchlistDataLoader() {
       {connectionError && (
         <div role="alert" className="flex items-center gap-3 rounded-xl border border-amber-500/20 bg-amber-500/10 p-4 text-xs text-amber-300">
           <AlertCircle className="size-4 shrink-0" />
-          <span>No se pudo cargar la cartera. Comprueba la conexión con el backend.</span>
+          <span><TranslatedText tKey="backendConnectionError" /></span>
         </div>
       )}
 
@@ -45,7 +46,7 @@ export default function WatchlistPage() {
   return (
     <div className="flex min-h-screen flex-col bg-zinc-950 text-zinc-100">
       <AppHeader />
-      <main className="mx-auto flex w-full max-w-[1680px] flex-1 flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+      <main id="main-content" className="mx-auto flex w-full max-w-[1680px] flex-1 flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
         <WatchlistDataLoader />
       </main>
     </div>

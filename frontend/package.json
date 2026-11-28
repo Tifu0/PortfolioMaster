@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx scripts/verify_api_client.mts && tsx scripts/verify_phase3.mts && tsx scripts/verify_phase4.mts && tsx scripts/verify_phase5.mts && tsx scripts/verify_phase6.mts && tsx scripts/verify_phase7.mts && tsx scripts/verify_backup_export.mts && tsx scripts/verify_toolbar_and_backup_tab.mts && tsx scripts/verify_api_cache.mts && tsx scripts/verify_portfolio_context.mts && tsx scripts/verify_watchlist_fixes.mts && tsx scripts/verify_analysis_date_column.mts && tsx scripts/verify_responsive_headers_and_row_height.mts && tsx scripts/verify_save_and_update_analysis_date.mts && tsx scripts/verify_batch_auto_sync.mts"
+    "test": "tsx scripts/test_i18n_and_policies.mts && tsx scripts/test_formatters_and_metrics.mts && tsx scripts/test_table_ssr_and_budget.mts && tsx scripts/test_api_client.mts && tsx scripts/test_refresh_sync.mts && tsx scripts/test_backup_modal_ssr.mts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

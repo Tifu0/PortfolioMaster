@@ -4,6 +4,7 @@ import { createContext, use, useCallback, useEffect, useEffectEvent, useMemo, us
 import { useRouter } from 'next/navigation';
 import { clearApiClientCache } from '@/lib/api';
 import { isAuthConfigured, supabaseUrl, type AuthUser } from '@/lib/supabase';
+import { useLanguage } from '@/context/LanguageContext';
 
 export interface AuthContextType {
   user: AuthUser | null;
@@ -36,6 +37,7 @@ async function requestAuth(action: AuthAction): Promise<AuthResult> {
 }
 
 export function AuthProvider({ children, initialUser = null }: { children: ReactNode; initialUser?: AuthUser | null }) {
+  const { t } = useLanguage();
   const router = useRouter();
   const [previousInitialUser, setPreviousInitialUser] = useState(initialUser);
   const [user, setUser] = useState(initialUser);
@@ -68,7 +70,7 @@ export function AuthProvider({ children, initialUser = null }: { children: React
   const handleAuthRequired = useEffectEvent((event: Event) => {
     if (user) updateUser(null);
     const { detail } = event as CustomEvent<{ message?: string }>;
-    openAuthModal(detail?.message || 'Identifícate para acceder a tu portafolio personal.');
+    openAuthModal(detail?.message || t('authRequiredMessage'));
   });
 
   const handleRemoteSessionChange = useEffectEvent((event: MessageEvent) => {
@@ -142,4 +144,8 @@ export function useAuth(): AuthContextType {
   const context = use(AuthContext);
   if (!context) throw new Error('useAuth must be used within an AuthProvider');
   return context;
+}
+
+export function useAuthOptional(): AuthContextType | null {
+  return use(AuthContext);
 }

@@ -16,13 +16,14 @@ import {
   restoreLocalBackup,
 } from '@/lib/api';
 import { usePortfolioDataOptional } from '@/context/PortfolioContext';
+import { useAuthOptional } from '@/context/AuthContext';
+import { useLanguage } from '@/context/LanguageContext';
+import { isExpectedUnauthError, shouldFetchBackupsOnTabOpen } from '@/lib/modal-policies';
 import type { BackupItem } from '@/lib/types';
 import { ExportSection } from './backup/ExportSection';
 import { RestoreUploadSection } from './backup/RestoreUploadSection';
 import { LocalSnapshotsSection } from './backup/LocalSnapshotsSection';
 import { useToast } from './ui/Toast';
-
-export const BACKUP_EXPORT_TITLE = 'Backup & Export Center';
 
 export interface BackupExportCallbacks {
   onSuccess?: (message: string) => void;
@@ -43,6 +44,10 @@ export function BackupExportView({
   onDataRestored,
 }: BackupExportViewProps = {}) {
   const portfolioContext = usePortfolioDataOptional();
+  const authContext = useAuthOptional();
+  const { t } = useLanguage();
+  const isAuthConfigured = authContext?.isAuthConfigured ?? false;
+  const isAuthenticated = Boolean(authContext?.user);
   const router = useRouter();
   const addToast = useToast();
 
@@ -76,7 +81,9 @@ export function BackupExportView({
       const res = await getBackupList();
       setBackups(res.backups || []);
     } catch (err: unknown) {
-      console.warn('Could not load local backups:', err);
+      if (!isExpectedUnauthError(err)) {
+        console.warn('Could not load local backups:', err);
+      }
     } finally {
       setLoadingBackups(false);
     }
@@ -84,7 +91,7 @@ export function BackupExportView({
 
   useEffect(() => {
     let ignore = false;
-    if (activeTab === 'backup') {
+    if (shouldFetchBackupsOnTabOpen({ activeTab, isAuthConfigured, isAuthenticated })) {
       void Promise.resolve().then(() => {
         if (!ignore) {
           fetchBackups();
@@ -94,16 +101,16 @@ export function BackupExportView({
     return () => {
       ignore = true;
     };
-  }, [activeTab, fetchBackups]);
+  }, [activeTab, isAuthConfigured, isAuthenticated, fetchBackups]);
 
   const handleExport = async (format: 'csv' | 'excel' | 'json') => {
     setExportingFormat(format);
     try {
       await exportWatchlist(format);
-      notify('success', `Watchlist exported to ${format.toUpperCase()} successfully.`);
+      notify('success', t('exportSuccessToast', { format: format.toUpperCase() }));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      notify('error', `Failed to export ${format.toUpperCase()}: ${msg}`);
+      notify('error', t('exportErrorToast', { format: format.toUpperCase(), error: msg }));
     } finally {
       setExportingFormat(null);
     }
@@ -113,10 +120,10 @@ export function BackupExportView({
     setDownloadingDb(true);
     try {
       await downloadDatabaseBackup();
-      notify('success', 'SQLite database snapshot (.db) downloaded successfully.');
+      notify('success', t('snapshotDownloadedToast'));
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      notify('error', `Failed to download database snapshot: ${msg}`);
+      notify('error', t('snapshotDownloadErrorToast', { error: msg }));
     } finally {
       setDownloadingDb(false);
     }
@@ -130,7 +137,7 @@ export function BackupExportView({
       const count = res.restored_instruments ?? res.active_instruments ?? 0;
       notify(
         'success',
-        `Database restored successfully from ${selectedFile.name} (${count} instruments).`
+        t('restoreSuccessToast', { name: selectedFile.name, count })
       );
 
       setSelectedFile(null);
@@ -139,7 +146,7 @@ export function BackupExportView({
       await refreshAfterRestore();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      notify('error', `Failed to restore backup file: ${msg}`);
+      notify('error', t('restoreFileErrorToast', { error: msg }));
     } finally {
       setRestoringFile(false);
     }
@@ -152,7 +159,7 @@ export function BackupExportView({
       const count = res.restored_instruments ?? res.active_instruments ?? 0;
       notify(
         'success',
-        `Database restored successfully from ${filename} (${count} instruments).`
+        t('restoreSuccessToast', { name: filename, count })
       );
 
       setBackupToRestore(null);
@@ -160,7 +167,7 @@ export function BackupExportView({
       await refreshAfterRestore();
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      notify('error', `Failed to restore local backup: ${msg}`);
+      notify('error', t('restoreLocalErrorToast', { error: msg }));
     } finally {
       setRestoringLocal(false);
       setBackupToRestore(null);
@@ -175,9 +182,9 @@ export function BackupExportView({
             <ShieldCheck className="w-6 h-6" />
           </div>
           <div className="min-w-0 flex-1">
-            <h2 className="text-xl font-bold text-white tracking-tight">{BACKUP_EXPORT_TITLE}</h2>
+            <h2 className="text-xl font-bold text-white tracking-tight">{t('backupCenterTitle')}</h2>
             <p className="text-xs text-zinc-400 mt-1 max-w-xl">
-              Export your portfolio data to CSV, Excel, or JSON. Restore database snapshots atomically with automatic safety backups.
+              {t('backupCenterDesc')}
             </p>
           </div>
           {onClose && (
@@ -185,7 +192,7 @@ export function BackupExportView({
               type="button"
               onClick={onClose}
               className="shrink-0 rounded-xl p-2 text-zinc-400 transition hover:bg-zinc-800/60 hover:text-white"
-              aria-label="Close modal"
+              aria-label={t('closeModal')}
             >
               <X className="size-5" aria-hidden="true" />
             </button>
@@ -205,7 +212,7 @@ export function BackupExportView({
             }`}
           >
             <Download className="w-3.5 h-3.5 text-emerald-400" />
-            Export Data
+            {t('exportDataTab')}
           </button>
           <button
             type="button"
@@ -218,7 +225,7 @@ export function BackupExportView({
             }`}
           >
             <Database className="w-3.5 h-3.5 text-purple-400" />
-            Restore & Backups
+            {t('restoreBackupsTab')}
           </button>
         </div>
       </div>

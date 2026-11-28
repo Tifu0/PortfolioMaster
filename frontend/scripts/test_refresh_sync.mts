@@ -7,13 +7,25 @@ let polls = 0;
 let stream!: ReadableStreamDefaultController<Uint8Array>;
 let endPoll!: () => void;
 let connected!: () => void;
-const sawConnected = new Promise<void>((resolve) => { connected = resolve; });
-const sawPoll = new Promise<void>((resolve) => { endPoll = resolve; });
+const sawConnected = new Promise<void>((resolve) => {
+  connected = resolve;
+});
+const sawPoll = new Promise<void>((resolve) => {
+  endPoll = resolve;
+});
 
 const stop = startRefreshSync({
-  openStream: async () => new Response(new ReadableStream({ start(controller) { stream = controller; } }), {
-    headers: { 'Content-Type': 'text/event-stream' },
-  }),
+  openStream: async () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          stream = controller;
+        },
+      }),
+      {
+        headers: { 'Content-Type': 'text/event-stream' },
+      }
+    ),
   getConfig: async () => {
     polls += 1;
     endPoll();
@@ -39,4 +51,4 @@ try {
   stop();
 }
 
-console.log('Refresh sync keeps SSE primary and uses a config fallback after disconnect.');
+console.log('✓ Refresh sync SSE and fallback polling tests passed');

@@ -160,10 +160,10 @@ function WatchlistRefreshBadge() {
       {isRefreshing ? (
         <>
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+            <span className="animate-ping motion-reduce:animate-none absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500"></span>
           </span>
-          <span className="text-amber-400 font-semibold animate-pulse">
+          <span className="text-amber-400 font-semibold animate-pulse motion-reduce:animate-none">
             {/* Actualizando lote... */}
             {currentBatch > 0 ? t('updatingBatch') : t('startingUpdate')}
           </span>
@@ -189,7 +189,7 @@ function WatchlistRefreshBadge() {
       ) : (
         <>
           <span className="relative flex h-2 w-2">
-            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+            <span className="animate-ping motion-reduce:animate-none absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
           </span>
           <span>

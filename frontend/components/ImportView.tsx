@@ -30,7 +30,7 @@ import type { ImportPreviewResponse, Instrument } from '@/lib/types';
 export function ImportView() {
   const portfolioContext = usePortfolioDataOptional();
   const router = useRouter();
-  const { language } = useLanguage();
+  const { language, t } = useLanguage();
 
   const [file, setFile] = useState<File | null>(null);
   const [isDragging, setIsDragging] = useState(false);
@@ -69,7 +69,7 @@ export function ImportView() {
   const validateAndSetFile = (selectedFile: File) => {
     const ext = selectedFile.name.split('.').pop()?.toLowerCase();
     if (ext !== 'csv' && ext !== 'xlsx') {
-      setErrorMessage('Unsupported file format. Please upload a .csv or .xlsx file.');
+      setErrorMessage(t('unsupportedFileFormat'));
       return;
     }
     setFile(selectedFile);
@@ -88,7 +88,7 @@ export function ImportView() {
       setPreview(result);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(`Error analyzing file: ${msg}`);
+      setErrorMessage(t('errorAnalyzingFile', { error: msg }));
       setPreview(null);
     } finally {
       setIsAnalyzing(false);
@@ -119,7 +119,7 @@ export function ImportView() {
 
       const res = await confirmImport(instrumentsToCommit);
       if (res.errors && res.errors.length > 0) {
-        setErrorMessage(`Imported ${res.committed} instruments with notices: ${res.errors.join(', ')}`);
+        setErrorMessage(t('importedWithNotices', { count: res.committed, notices: res.errors.join(', ') }));
       }
       setSuccessCount(res.committed);
       setPreview(null);
@@ -136,7 +136,7 @@ export function ImportView() {
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setErrorMessage(`Error confirming import: ${msg}`);
+      setErrorMessage(t('errorConfirmingImport', { error: msg }));
     } finally {
       setIsCommitting(false);
     }
@@ -175,17 +175,17 @@ export function ImportView() {
     <div className="flex flex-col gap-6">
       {/* Success Notification Banner */}
       {successCount !== null && (
-        <div className="p-6 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in">
+        <div className="p-6 rounded-2xl bg-emerald-500/10 border border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-4 animate-in fade-in motion-reduce:animate-none">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0">
               <CheckCircle2 className="w-6 h-6" />
             </div>
             <div>
               <h3 className="font-semibold text-emerald-300 text-base">
-                Import completed successfully!
+                {t('importSuccessTitle')}
               </h3>
               <p className="text-xs text-emerald-400/80 mt-0.5">
-                Successfully saved <strong className="font-mono">{successCount}</strong> instruments to your watchlist.
+                {t('importSuccessDesc', { count: successCount })}
               </p>
             </div>
           </div>
@@ -194,13 +194,13 @@ export function ImportView() {
               onClick={handleReset}
               className="px-3.5 py-2 text-xs font-medium text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-xl transition"
             >
-              Import another file
+              {t('importAnotherFile')}
             </button>
             <Link
               href="/"
               className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-emerald-950 bg-emerald-400 hover:bg-emerald-300 rounded-xl transition shadow-sm"
             >
-              View in Watchlist
+              {t('viewInWatchlist')}
               <ArrowRight className="w-3.5 h-3.5" />
             </Link>
           </div>
@@ -222,30 +222,39 @@ export function ImportView() {
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5 text-emerald-400" />
-                Upload CSV or Excel File
+                {t('uploadSpreadsheetTitle')}
               </h2>
               <p className="text-xs text-zinc-400 mt-1">
-                Upload your watchlist spreadsheet. Symbols will be normalized and market exchanges detected automatically.
+                {t('uploadSpreadsheetDesc')}
               </p>
             </div>
 
             <button
               onClick={downloadSampleCsv}
               className="inline-flex items-center gap-2 text-xs font-medium text-zinc-300 hover:text-white px-3.5 py-2 rounded-xl bg-zinc-800/80 hover:bg-zinc-800 border border-zinc-700/60 transition self-start sm:self-auto"
-              title="Download sample CSV template"
+              title={t('downloadCsvTemplateTitle')}
             >
               <Download className="w-3.5 h-3.5 text-emerald-400" />
-              Download CSV Template
+              {t('downloadCsvTemplate')}
             </button>
           </div>
 
           {/* Drag & Drop Zone */}
           <div
+            role="button"
+            tabIndex={0}
+            aria-label={t('uploadSpreadsheetAria')}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
             onDrop={handleDrop}
             onClick={() => fileInputRef.current?.click()}
-            className={`cursor-pointer border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center transition flex flex-col items-center justify-center gap-4 ${
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                fileInputRef.current?.click();
+              }
+            }}
+            className={`cursor-pointer border-2 border-dashed rounded-2xl p-8 sm:p-12 text-center transition flex flex-col items-center justify-center gap-4 focus:outline-none focus:ring-2 focus:ring-emerald-500 ${
               isDragging
                 ? 'border-emerald-500 bg-emerald-500/5'
                 : 'border-zinc-800 hover:border-zinc-700 bg-zinc-950/40 hover:bg-zinc-950/60'
@@ -256,6 +265,7 @@ export function ImportView() {
               ref={fileInputRef}
               onChange={handleFileChange}
               accept=".csv,.xlsx"
+              aria-label={t('selectSpreadsheetAria')}
               className="hidden"
             />
 
@@ -265,22 +275,22 @@ export function ImportView() {
 
             <div className="flex flex-col gap-1 max-w-sm">
               <span className="text-sm font-semibold text-zinc-200">
-                Click to select or drag and drop your spreadsheet here
+                {t('dragDropSpreadsheet')}
               </span>
               <span className="text-xs text-zinc-500">
-                Supports <strong className="text-zinc-400">.CSV</strong> and <strong className="text-zinc-400">.XLSX</strong> formats
+                {t('supportsSpreadsheetFormats')}
               </span>
             </div>
           </div>
 
           {/* Selected File Details */}
           {file && (
-            <div className="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800 flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3 truncate">
+            <div className="p-4 rounded-xl bg-zinc-950/60 border border-zinc-800 flex flex-wrap items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0 flex-1">
                 <div className="w-9 h-9 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shrink-0">
                   <FileSpreadsheet className="w-5 h-5" />
                 </div>
-                <div className="truncate">
+                <div className="min-w-0 truncate">
                   <span className="text-sm font-medium text-white block truncate">
                     {file.name}
                   </span>
@@ -290,7 +300,7 @@ export function ImportView() {
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 shrink-0">
                 <button
                   type="button"
                   onClick={(e) => {
@@ -298,7 +308,8 @@ export function ImportView() {
                     handleReset();
                   }}
                   className="p-2 text-zinc-400 hover:text-rose-400 hover:bg-rose-500/10 rounded-lg transition"
-                  title="Remove file"
+                  title={t('removeFile')}
+                  aria-label={t('removeSelectedFileAria')}
                 >
                   <Trash2 className="w-4 h-4" />
                 </button>
@@ -310,13 +321,13 @@ export function ImportView() {
                 >
                   {isAnalyzing ? (
                     <>
-                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                      Analyzing...
+                      <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                      {t('analyzing')}
                     </>
                   ) : (
                     <>
                       <RefreshCw className="w-3.5 h-3.5" />
-                      Analyze & Validate
+                      {t('analyzeAndValidate')}
                     </>
                   )}
                 </button>
@@ -328,11 +339,11 @@ export function ImportView() {
 
       {/* Step 2: Review Preview & Validation Inconsistencies */}
       {preview && (
-        <div className="flex flex-col gap-6 animate-in fade-in">
+        <div className="flex flex-col gap-6 animate-in fade-in motion-reduce:animate-none">
           {/* Header & Status Cards */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Valid Instruments</span>
+              <span className="text-xs text-zinc-400 font-medium">{t('validInstruments')}</span>
               <div className="mt-2 text-2xl font-bold font-mono text-emerald-400 flex items-center gap-2">
                 <CheckCircle2 className="w-5 h-5 text-emerald-400" />
                 {preview.valid_count}
@@ -340,7 +351,7 @@ export function ImportView() {
             </div>
 
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Warnings / Duplicates</span>
+              <span className="text-xs text-zinc-400 font-medium">{t('warningsDuplicates')}</span>
               <div className="mt-2 text-2xl font-bold font-mono text-amber-400 flex items-center gap-2">
                 <AlertTriangle className="w-5 h-5 text-amber-400" />
                 {preview.warnings.length}
@@ -348,7 +359,7 @@ export function ImportView() {
             </div>
 
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Unresolved Symbols</span>
+              <span className="text-xs text-zinc-400 font-medium">{t('unresolvedSymbols')}</span>
               <div className="mt-2 text-2xl font-bold font-mono text-orange-400 flex items-center gap-2">
                 <HelpCircle className="w-5 h-5 text-orange-400" />
                 {preview.unresolved.length}
@@ -356,7 +367,7 @@ export function ImportView() {
             </div>
 
             <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4">
-              <span className="text-xs text-zinc-400 font-medium">Row Errors</span>
+              <span className="text-xs text-zinc-400 font-medium">{t('rowErrors')}</span>
               <div className="mt-2 text-2xl font-bold font-mono text-rose-400 flex items-center gap-2">
                 <XCircle className="w-5 h-5 text-rose-400" />
                 {preview.errors.length}
@@ -369,10 +380,10 @@ export function ImportView() {
             <div className="p-4 rounded-xl bg-orange-500/10 border border-orange-500/30 text-xs text-orange-300">
               <div className="flex items-center gap-2 font-semibold">
                 <HelpCircle className="w-4 h-4 text-orange-400" />
-                <span>Unresolved Exchange Symbols ({preview.unresolved.length}):</span>
+                <span>{t('unresolvedHeader', { count: preview.unresolved.length })}</span>
               </div>
               <p className="mt-1 text-orange-300/80">
-                The following tickers have an UNKNOWN exchange assigned. Market data providers may fail unless qualified with a regional prefix (e.g. `BME:SAN`):
+                {t('unresolvedDesc')}
               </p>
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {preview.unresolved.map((sym, idx) => (
@@ -389,7 +400,7 @@ export function ImportView() {
             <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300">
               <div className="flex items-center gap-2 font-semibold">
                 <AlertTriangle className="w-4 h-4 text-amber-400" />
-                <span>Duplicate Notices ({preview.warnings.length}):</span>
+                <span>{t('duplicateNoticesHeader', { count: preview.warnings.length })}</span>
               </div>
               <ul className="mt-2 list-disc list-inside space-y-1 text-amber-300/80">
                 {preview.warnings.map((w, idx) => (
@@ -404,7 +415,7 @@ export function ImportView() {
             <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-xs text-rose-300">
               <div className="flex items-center gap-2 font-semibold">
                 <XCircle className="w-4 h-4 text-rose-400" />
-                <span>Validation Errors ({preview.errors.length}):</span>
+                <span>{t('rowErrorsHeader', { count: preview.errors.length })}</span>
               </div>
               <ul className="mt-2 list-disc list-inside space-y-1 text-rose-300/80">
                 {preview.errors.map((e, idx) => (
@@ -416,24 +427,24 @@ export function ImportView() {
 
           {/* Validated Instruments Preview Table */}
           {preview.instruments.length > 0 && (
-            <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-6 backdrop-blur flex flex-col gap-4">
-              <div className="flex items-center justify-between">
-                <div>
+            <div className="rounded-2xl bg-zinc-900/60 border border-zinc-800/80 p-4 sm:p-6 backdrop-blur flex flex-col gap-4">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
                   <h3 className="text-base font-bold text-white flex items-center gap-2">
-                    <TableIcon className="w-4 h-4 text-emerald-400" />
-                    Validated Instruments Preview ({preview.instruments.length})
+                    <TableIcon className="w-4 h-4 text-emerald-400 shrink-0" />
+                    {t('validatedPreviewHeader', { count: preview.instruments.length })}
                   </h3>
                   <p className="text-xs text-zinc-400 mt-0.5">
-                    Review normalized market data before committing import.
+                    {t('validatedPreviewDesc')}
                   </p>
                 </div>
 
-                <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2">
                   <button
                     onClick={handleReset}
                     className="px-3.5 py-2 text-xs font-medium text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-xl transition"
                   >
-                    Discard
+                    {t('discard')}
                   </button>
                   <button
                     onClick={handleConfirm}
@@ -442,13 +453,13 @@ export function ImportView() {
                   >
                     {isCommitting ? (
                       <>
-                        <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                        Saving...
+                        <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                        {t('saving')}
                       </>
                     ) : (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5" />
-                        Confirm Import ({preview.instruments.length})
+                        {t('confirmImportCount', { count: preview.instruments.length })}
                       </>
                     )}
                   </button>
@@ -460,13 +471,13 @@ export function ImportView() {
                 <table className="w-full text-left text-xs border-collapse">
                   <thead className="bg-zinc-950/80 text-zinc-400 font-medium border-b border-zinc-800">
                     <tr>
-                      <th className="py-3 px-4">Ticker</th>
-                      <th className="py-3 px-4">Company</th>
-                      <th className="py-3 px-4">Exchange</th>
-                      <th className="py-3 px-4">Currency</th>
-                      <th className="py-3 px-4 text-right">Analysis Price</th>
-                      <th className="py-3 px-4 text-right">Target Price</th>
-                      <th className="py-3 px-4">Comments</th>
+                      <th className="py-3 px-4">{t('colTicker')}</th>
+                      <th className="py-3 px-4">{t('colCompany')}</th>
+                      <th className="py-3 px-4">{t('colExchange')}</th>
+                      <th className="py-3 px-4">{t('colCurrency')}</th>
+                      <th className="py-3 px-4 text-right">{t('colAnalysisPrice')}</th>
+                      <th className="py-3 px-4 text-right">{t('colTargetPrice')}</th>
+                      <th className="py-3 px-4">{t('colComments')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-zinc-800/60 bg-zinc-900/40">
