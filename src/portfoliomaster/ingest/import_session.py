@@ -8,6 +8,7 @@ import pandas as pd
 from ..core.calculations import _to_decimal
 from ..core.config import get_yahoo_suffix
 from ..core.models import Exchange, Instrument
+from ..core.parsing import parse_bool, parse_date
 from .columns import map_columns
 from .normalizer import normalize
 from .parser import parse_spreadsheet
@@ -35,30 +36,13 @@ def _cell_str(value: Any) -> str:
 def _cell_bool(value: Any, default: bool = True) -> bool:
     if _is_blank(value):
         return default
-    if isinstance(value, bool):
-        return value
-    text = str(value).strip().lower()
-    if text in {"1", "true", "t", "yes", "y", "si", "sí", "s"}:
-        return True
-    if text in {"0", "false", "f", "no", "n"}:
-        return False
-    return default
+    return parse_bool(value, default=default)
 
 
 def _cell_date(value: Any) -> Optional[date]:
     if _is_blank(value):
         return None
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    text = str(value).strip()
-    for fmt in ("%d/%m/%Y", "%Y-%m-%d", "%d-%m-%Y", "%d/%m/%y", "%Y/%m/%d"):
-        try:
-            return datetime.strptime(text, fmt).date()
-        except ValueError:
-            continue
-    return None
+    return parse_date(value)
 
 
 def import_spreadsheet(

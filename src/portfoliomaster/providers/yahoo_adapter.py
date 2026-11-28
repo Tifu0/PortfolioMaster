@@ -93,6 +93,7 @@ except Exception:
 
 from .base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus, FreshnessConfig, Exchange
+from ..core.parsing import parse_decimal
 from ..core.config import (
     FRESHNESS_PER_EXCHANGE,
     YAHOO_SUFFIXES,
@@ -267,12 +268,122 @@ class YahooAdapter(MarketDataProvider):
         return Exchange.US
 
     def _to_decimal(self, value) -> Optional[Decimal]:
-        if value is None:
+        return parse_decimal(value)
+
+    def resolve_company_name(self, symbol: str, ticker: Optional[yf.Ticker] = None) -> Optional[str]:
+        """Resolve display company name for a Yahoo symbol."""
+        return resolve_company_name(symbol, ticker)
+
+    def fetch_start_of_year_quote(
+        self, provider_symbol: str, year: Optional[int] = None
+    ) -> Optional[tuple[float, date]]:
+        """Fetch closing price and trading date for the beginning of the given (or current) year."""
+        y = year or date.today().year
+        target_date = date(y, 1, 1)
+        if not provider_symbol:
             return None
         try:
-            return Decimal(str(value))
+            t = _create_ticker(provider_symbol)
+            start_str = target_date.isoformat()
+            end_str = (target_date + timedelta(days=10)).isoformat()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                hist = t.history(start=start_str, end=end_str)
+                if hist.empty or "Close" not in hist:
+                    hist = t.history(period="ytd")
+            if not hist.empty and "Close" in hist:
+                close_series = hist["Close"].dropna()
+                if not close_series.empty:
+                    price = close_series.iloc[0]
+                    idx = close_series.index[0]
+                    actual_dt = (
+                        idx.date()
+                        if hasattr(idx, "date")
+                        else (
+                            idx.to_pydatetime().date()
+                            if hasattr(idx, "to_pydatetime")
+                            else target_date
+                        )
+                    )
+                    if float(price) > 0:
+                        return round(float(price), 4), actual_dt
         except Exception:
+            pass
+        return None
+
+    def fetch_historical_quote_and_date(
+        self, provider_symbol: str, target_date: date, window_days: int = 10
+    ) -> Optional[tuple[float, date]]:
+        """Fetch closing price and trading date on or before target_date with resilient lookback.
+
+        Only falls back to fast_info when target_date is today or within the last 5 days.
+        """
+        if not provider_symbol or not target_date:
             return None
+        try:
+            if target_date.month == 1 and target_date.day == 1:
+                return self.fetch_start_of_year_quote(provider_symbol, target_date.year)
+
+            t = _create_ticker(provider_symbol)
+            start_str = (target_date - timedelta(days=window_days)).isoformat()
+            end_str = (target_date + timedelta(days=1)).isoformat()
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore")
+                hist = t.history(start=start_str, end=end_str)
+
+            if not hist.empty and "Close" in hist:
+                valid_rows = []
+                for idx, val in hist["Close"].dropna().items():
+                    row_dt = idx.date() if hasattr(idx, "date") else idx.to_pydatetime().date()
+                    if row_dt <= target_date and float(val) > 0:
+                        valid_rows.append((float(val), row_dt))
+                if valid_rows:
+                    price, actual_dt = valid_rows[-1]
+                    return round(price, 4), actual_dt
+
+            days_from_today = (date.today() - target_date).days
+            if 0 <= days_from_today <= 5:
+                price = None
+                actual_dt = target_date
+                try:
+                    fi = getattr(t, "fast_info", None)
+                    if fi:
+                        lp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
+                        if lp is not None and not math.isnan(float(lp)) and float(lp) > 0:
+                            price = float(lp)
+                        if price is None:
+                            pc = getattr(fi, "previous_close", None) or getattr(fi, "regularMarketPreviousClose", None)
+                            if pc is not None and not math.isnan(float(pc)) and float(pc) > 0:
+                                price = float(pc)
+                except Exception:
+                    pass
+
+                if price is None:
+                    try:
+                        hist_recent = t.history(period="5d")
+                        if not hist_recent.empty and "Close" in hist_recent:
+                            recent_series = hist_recent["Close"].dropna()
+                            if not recent_series.empty:
+                                last_val = recent_series.iloc[-1]
+                                if float(last_val) > 0:
+                                    price = float(last_val)
+                                    last_idx = recent_series.index[-1]
+                                    actual_dt = last_idx.date() if hasattr(last_idx, "date") else target_date
+                    except Exception:
+                        pass
+
+                if price is not None and price > 0:
+                    return round(price, 4), actual_dt
+        except Exception as e:
+            self.logger.debug("Error in fetch_historical_quote_and_date for %s: %s", provider_symbol, e)
+        return None
+
+    def fetch_historical_quote_for_date(
+        self, provider_symbol: str, target_date: date
+    ) -> Optional[float]:
+        """Fetch closing price on or shortly before target_date from Yahoo Finance."""
+        res = self.fetch_historical_quote_and_date(provider_symbol, target_date, window_days=10)
+        return res[0] if res else None
 
     def _normalize_symbol_for_yahoo(self, symbol: str) -> str:
         """
