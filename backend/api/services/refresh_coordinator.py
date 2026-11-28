@@ -239,6 +239,7 @@ def execute_refresh_all(
                         "previous_close": safe_float(quote.previous_close),
                         "status": quote.status.name if hasattr(quote.status, "name") else str(quote.status),
                         "quote_timestamp": quote.quote_timestamp.isoformat() if quote.quote_timestamp else None,
+                        "earnings_date": quote.earnings_date.isoformat() if quote.earnings_date else None,
                     }
 
             _emit_event(

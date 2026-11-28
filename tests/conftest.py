@@ -26,6 +26,7 @@ from portfoliomaster.db import connection as sqlite_conn  # noqa: E402
 from portfoliomaster.db import session as db_session  # noqa: E402
 from portfoliomaster.db.multi_tenant_repository import clear_quote_delta_cache  # noqa: E402
 from portfoliomaster.db.schema import Base  # noqa: E402
+from portfoliomaster.providers.yahoo_adapter import clear_earnings_cache  # noqa: E402
 
 
 def mint_jwt(
@@ -68,11 +69,13 @@ def test_db_isolation(tmp_path, monkeypatch):
     db_session._ENGINE = None
     db_session._SESSION_FACTORY = None
     clear_quote_delta_cache()
+    clear_earnings_cache()
     invalidate_positions_cache()
     sqlite_conn.init_db()
     yield test_db_file
     main.app.dependency_overrides.clear()
     clear_quote_delta_cache()
+    clear_earnings_cache()
     invalidate_positions_cache()
     db_session._ENGINE = None
     db_session._SESSION_FACTORY = None
