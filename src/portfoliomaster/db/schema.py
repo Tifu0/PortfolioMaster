@@ -115,9 +115,9 @@ class MarketQuote(Base):
     quote_timestamp: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
     last_valid_fetched_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
 
-    # Latest Fetch Attempt Audit
+    # Latest Fetch Attempt Audit (NULL until a quote fetch is actually attempted)
     last_attempt_at: Mapped[Optional[datetime]] = mapped_column(
-        TZDateTime(), default=utc_now, nullable=True
+        TZDateTime(), nullable=True
     )
     status: Mapped[str] = mapped_column(
         SQLEnum(

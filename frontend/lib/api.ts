@@ -17,6 +17,7 @@ import type {
   PortfolioMetrics,
   RefreshBatchResponse,
   RefreshProgressEvent,
+  RefreshStreamEvent,
   RefreshSingleResponse,
   AppConfig,
   BackupListResponse,
@@ -231,14 +232,19 @@ export async function refreshAll(): Promise<RefreshBatchResponse> {
 }
 
 /**
- * 8b. GET /api/refresh/stream
- * Streams batch-by-batch progress via Server-Sent Events (SSE) and returns final summary.
+ * 8b. GET /api/refresh/stream + POST /api/refresh?background=true
+ * Subscribes first to SSE progress events so no fast frames are lost,
+ * then triggers a background batch refresh and resolves with final summary.
  */
 export async function streamRefresh(
   onProgress?: (event: RefreshProgressEvent) => void
 ): Promise<RefreshBatchResponse> {
-  const res = await authFetch(`${API_BASE_URL}/api/refresh/stream?trigger=1`, {
-    headers: { 'X-Portfolio-Mutation': '1' },
+  const res = await authFetch(`${API_BASE_URL}/api/refresh/stream`, {
+    headers: {
+      Accept: 'text/event-stream',
+      'X-Portfolio-Mutation': '1',
+    },
+    cache: 'no-store',
   });
   if (!res.ok) {
     throw new ApiError(`Stream refresh failed: ${res.statusText}`, res.status);
@@ -251,6 +257,7 @@ export async function streamRefresh(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
+  let triggered = false;
   let finalResult: RefreshBatchResponse = {
     status: 'ok',
     updated: 0,
@@ -264,37 +271,56 @@ export async function streamRefresh(
       if (done) break;
 
       buffer += decoder.decode(value, { stream: true });
-      const blocks = buffer.split('\n\n');
+      const blocks = buffer.split(/\r?\n\r?\n/);
       buffer = blocks.pop() || '';
 
       for (const block of blocks) {
-        for (const line of block.split('\n')) {
+        for (const line of block.split(/\r?\n/)) {
           if (line.startsWith('data: ')) {
+            let event: RefreshStreamEvent;
             try {
-              const event: RefreshProgressEvent = JSON.parse(line.slice(6));
-              if (onProgress) {
-                onProgress(event);
-              }
-              if (event.type === 'complete') {
-                finalResult = {
-                  status: event.status || 'ok',
-                  updated: event.updated ?? 0,
-                  failed: event.failed ?? 0,
-                  total: event.total ?? event.total_symbols ?? 0,
-                  refreshed_count: event.refreshed_count,
-                  message: event.message,
-                  analysis_prices_updated: event.analysis_prices_updated,
-                  ytd_prices_updated: event.ytd_prices_updated,
-                };
-              }
+              event = JSON.parse(line.slice(6));
             } catch {
-              // Ignore non-json or comments
+              continue;
+            }
+            if (event.type === 'connected') {
+              if (!triggered) {
+                triggered = true;
+                if (!event.is_refreshing) {
+                  const triggerRes = await authFetch(`${API_BASE_URL}/api/refresh?background=true`, {
+                    method: 'POST',
+                  });
+                  if (!triggerRes.ok) {
+                    throw new ApiError(`Stream refresh failed: ${triggerRes.statusText}`, triggerRes.status);
+                  }
+                }
+              }
+              continue;
+            }
+            if (onProgress) {
+              onProgress(event);
+            }
+            if (event.type === 'complete') {
+              finalResult = {
+                status: event.status || 'ok',
+                updated: event.updated ?? 0,
+                failed: event.failed ?? 0,
+                total: event.total ?? event.total_symbols ?? 0,
+                refreshed_count: event.refreshed_count,
+                message: event.message,
+                analysis_prices_updated: event.analysis_prices_updated,
+                ytd_prices_updated: event.ytd_prices_updated,
+              };
+            } else if (event.type === 'error') {
+              const detail = (event as { detail?: string }).detail;
+              throw new ApiError(event.error || detail || 'Refresh failed due to an internal error.', 500);
             }
           }
         }
       }
     }
   } finally {
+    await reader.cancel().catch(() => {});
     reader.releaseLock();
   }
 

@@ -106,33 +106,47 @@ def test_stale_refresh_run_auto_timeout_cleanup():
 
 def test_broadcast_payload_does_not_leak_private_data():
     """SSE broadcast events must only contain status and progress counts, never user or ticker data."""
-    from backend.api.routers.refresh import _broadcast_refresh_event, _sse_subscribers, _sse_lock
-    import queue
+    import asyncio
+    import uuid
+    from backend.api.routers.refresh import (
+        _SSESubscriber,
+        _broadcast_refresh_event,
+        _sse_subscribers,
+        _sse_lock,
+    )
 
-    test_q = queue.Queue()
-    with _sse_lock:
-        _sse_subscribers.add(test_q)
-
-    try:
-        sample_batch = {
-            "type": "batch",
-            "batch_index": 1,
-            "total_batches": 2,
-            "processed_symbols": 10,
-            "total_symbols": 20,
-            "updated": 9,
-            "failed": 1,
-            "batch_updated": 9,
-            "batch_failed": 1,
-        }
-        _broadcast_refresh_event(sample_batch)
-
-        received = test_q.get_nowait()
-        assert "user_id" not in received
-        assert "ticker" not in received
-        assert "positions" not in received
-        assert received["total_symbols"] == 20
-        assert received["updated"] == 9
-    finally:
+    async def _run():
+        test_sub = _SSESubscriber(
+            queue=asyncio.Queue(maxsize=100),
+            loop=asyncio.get_running_loop(),
+            user_id=uuid.uuid4(),
+        )
         with _sse_lock:
-            _sse_subscribers.discard(test_q)
+            _sse_subscribers.add(test_sub)
+
+        try:
+            sample_batch = {
+                "type": "batch",
+                "batch_index": 1,
+                "total_batches": 2,
+                "processed_symbols": 10,
+                "total_symbols": 20,
+                "updated": 9,
+                "failed": 1,
+                "batch_updated": 9,
+                "batch_failed": 1,
+            }
+            _broadcast_refresh_event(sample_batch)
+            await asyncio.sleep(0)
+
+            received = test_sub.queue.get_nowait()
+            assert "user_id" not in received
+            assert "ticker" not in received
+            assert "positions" not in received
+            assert received["total_symbols"] == 20
+            assert received["updated"] == 9
+        finally:
+            with _sse_lock:
+                _sse_subscribers.discard(test_sub)
+
+    asyncio.run(_run())

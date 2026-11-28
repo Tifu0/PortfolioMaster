@@ -559,19 +559,29 @@ class TestConfig:
 
     def test_refresh_stream_endpoint(self, monkeypatch):
         from unittest.mock import MagicMock
+        import threading
         mock_adapter = MagicMock()
         mock_adapter.fetch.return_value = {}
         monkeypatch.setattr("backend.api.main.YahooAdapter", lambda: mock_adapter)
+
+        def _trigger_soon():
+            import time
+            time.sleep(0.05)
+            client.post("/api/refresh?background=true")
+
+        t = threading.Thread(target=_trigger_soon, daemon=True)
+        t.start()
 
         with client.stream("GET", "/api/refresh/stream") as response:
             assert response.status_code == 200
             assert "text/event-stream" in response.headers.get("content-type", "")
             lines = []
             for line in response.iter_lines():
-                if line:
+                if line and line.startswith("data:"):
                     lines.append(line)
                 if len(lines) >= 2:
                     break
+            assert any("connected" in l for l in lines)
             assert any("start" in l or "complete" in l for l in lines)
 
 
