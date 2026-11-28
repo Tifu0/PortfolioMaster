@@ -133,6 +133,7 @@ class Quote:
     provider: str = ""
     status: QuoteStatus = QuoteStatus.UNAVAILABLE
     error_message: Optional[str] = None
+    earnings_date: Optional[date] = None
 
     def is_valid(self) -> bool:
         """A quote is valid when we actually have a price."""

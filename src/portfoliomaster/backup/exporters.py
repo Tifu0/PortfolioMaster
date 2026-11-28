@@ -20,6 +20,7 @@ from ..core.calculations import (
     ytd_variation,
 )
 from ..core.models import Exchange, Instrument, Quote, QuoteStatus
+from ..core.parsing import parse_date
 from ..db.connection import get_connection
 from ..db.repository import (
     get_all_instruments_with_quotes,
@@ -116,6 +117,7 @@ def get_export_records(db_path: Optional[str] = None) -> List[dict]:
                 "provider": quote.provider if quote else "",
                 "status": status_str,
                 "error_message": quote.error_message if quote else None,
+                "earnings_date": _serialize_date(quote.earnings_date) if quote else None,
             } if quote else None,
         })
 
@@ -502,6 +504,7 @@ def restore_from_json(
                 provider=q_data.get("provider", ""),
                 status=status_enum,
                 error_message=q_data.get("error_message"),
+                earnings_date=parse_date(q_data.get("earnings_date")),
             )
 
         validated_records.append((inst, quote_obj))
@@ -554,9 +557,9 @@ def restore_from_json(
                     """
                     INSERT INTO quotes (
                         instrument_id, price, previous_close, quote_timestamp,
-                        fetched_at, provider, status, error_message
+                        fetched_at, provider, status, error_message, earnings_date
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     (
                         inst_id,
@@ -567,6 +570,7 @@ def restore_from_json(
                         quote_obj.provider,
                         quote_obj.status.value,
                         quote_obj.error_message,
+                        quote_obj.earnings_date.isoformat() if quote_obj.earnings_date else None,
                     ),
                 )
 

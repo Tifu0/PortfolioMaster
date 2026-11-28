@@ -412,3 +412,74 @@ def test_unified_portfolio_store_contract_parity(backend_kind, monkeypatch, tmp_
     assert store.delete_instrument("AAPL") is True
     assert store.delete_instrument("AAPL") is False
     assert store.instrument_exists("AAPL") is False
+
+
+@pytest.mark.parametrize("backend_kind", ["sqlite", "postgres"])
+def test_earnings_date_persistence_parity_and_null_handling(backend_kind, monkeypatch, tmp_path):
+    """Both SQLite and Postgres stores persist earnings_date (date and None) and expose it in get_positions."""
+    if backend_kind == "sqlite":
+        db_file = str(tmp_path / "earn_sq.db")
+        monkeypatch.setenv("PORTFOLIOMASTER_DB_PATH", db_file)
+        monkeypatch.delenv("DATABASE_URL", raising=False)
+        monkeypatch.delenv("PORTFOLIOMASTER_FORCE_MULTI_TENANT", raising=False)
+        sqlite_conn.init_db()
+        store: PortfolioStore = SqliteWatchlistStore()
+    else:
+        db_url = f"sqlite:///{tmp_path / 'earn_pg.db'}"
+        engine = create_engine(db_url, connect_args={"check_same_thread": False})
+        Base.metadata.create_all(engine)
+        monkeypatch.setenv("DATABASE_URL", db_url)
+        monkeypatch.setenv("PORTFOLIOMASTER_FORCE_MULTI_TENANT", "true")
+        monkeypatch.setattr(db_session, "_ENGINE", engine)
+        monkeypatch.setattr(db_session, "_SESSION_FACTORY", None)
+        store = PostgresWatchlistStore(user_id=uuid.uuid4())
+
+    next_earnings = date(2027, 1, 28)
+    store.create_instrument(
+        {
+            "user_ticker": "AAPL",
+            "provider_symbol": "AAPL",
+            "exchange": "US",
+            "currency": "USD",
+            "company_name": "Apple Inc.",
+            "active": True,
+        },
+        fetched_quote=Quote(
+            price=Decimal("220.00"),
+            previous_close=Decimal("218.00"),
+            quote_timestamp=datetime.now(timezone.utc),
+            fetched_at=datetime.now(timezone.utc),
+            provider="Yahoo",
+            status=QuoteStatus.FRESH,
+            earnings_date=next_earnings,
+        ),
+        manual_price=None,
+    )
+    store.create_instrument(
+        {
+            "user_ticker": "SPY",
+            "provider_symbol": "SPY",
+            "exchange": "US",
+            "currency": "USD",
+            "company_name": "SPDR S&P 500 ETF",
+            "active": True,
+        },
+        fetched_quote=Quote(
+            price=Decimal("590.00"),
+            previous_close=Decimal("588.00"),
+            quote_timestamp=datetime.now(timezone.utc),
+            fetched_at=datetime.now(timezone.utc),
+            provider="Yahoo",
+            status=QuoteStatus.FRESH,
+            earnings_date=None,
+        ),
+        manual_price=None,
+    )
+
+    positions = {p["user_ticker"]: p for p in store.get_positions(active_only=False)}
+    assert positions["AAPL"]["earnings_date"] == "2027-01-28"
+    assert positions["SPY"]["earnings_date"] is None
+
+    detail_aapl = store.get_instrument_detail("AAPL")
+    assert detail_aapl is not None and detail_aapl[1] is not None
+    assert detail_aapl[1]["earnings_date"] == "2027-01-28"

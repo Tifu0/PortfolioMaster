@@ -185,9 +185,9 @@ def upsert_quote(quote: Quote, db_path: Optional[str] = None):
         """
         INSERT INTO quotes (
             instrument_id, price, previous_close, quote_timestamp,
-            fetched_at, provider, status, error_message
+            fetched_at, provider, status, error_message, earnings_date
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT(instrument_id) DO UPDATE SET
             price = CASE WHEN excluded.price IS NOT NULL THEN excluded.price ELSE quotes.price END,
             previous_close = CASE WHEN excluded.previous_close IS NOT NULL THEN excluded.previous_close ELSE quotes.previous_close END,
@@ -195,7 +195,12 @@ def upsert_quote(quote: Quote, db_path: Optional[str] = None):
             fetched_at = excluded.fetched_at,
             provider = CASE WHEN excluded.provider != '' THEN excluded.provider ELSE quotes.provider END,
             status = excluded.status,
-            error_message = excluded.error_message
+            error_message = excluded.error_message,
+            earnings_date = CASE
+                WHEN excluded.earnings_date IS NOT NULL THEN excluded.earnings_date
+                WHEN excluded.price IS NOT NULL AND quotes.earnings_date IS NOT NULL AND quotes.earnings_date < date('now') THEN NULL
+                ELSE quotes.earnings_date
+            END
         """,
         (
             quote.instrument_id,
@@ -206,6 +211,7 @@ def upsert_quote(quote: Quote, db_path: Optional[str] = None):
             quote.provider,
             quote.status.value,
             quote.error_message,
+            _sql_value(quote.earnings_date),
         ),
     )
     conn.commit()
@@ -273,7 +279,8 @@ def get_all_instruments_with_quotes(
                 q.fetched_at AS q_fetched_at,
                 q.provider AS q_provider,
                 q.status AS q_status,
-                q.error_message AS q_error_message
+                q.error_message AS q_error_message,
+                q.earnings_date AS q_earnings_date
             FROM instruments i
             LEFT JOIN quotes q ON q.instrument_id = i.id
         """
@@ -289,6 +296,7 @@ def get_all_instruments_with_quotes(
         inst = _row_to_instrument(row)
         quote: Optional[Quote] = None
         if row["q_id"] is not None:
+            row_keys = row.keys() if hasattr(row, "keys") else []
             quote = Quote(
                 id=row["q_id"],
                 instrument_id=row["q_instrument_id"],
@@ -299,6 +307,7 @@ def get_all_instruments_with_quotes(
                 provider=row["q_provider"] or "",
                 status=_parse_quote_status(row["q_status"]),
                 error_message=row["q_error_message"],
+                earnings_date=_parse_date(row["q_earnings_date"]) if "q_earnings_date" in row_keys else None,
             )
         results.append((inst, quote))
     return results
@@ -317,6 +326,7 @@ def get_quote_by_instrument_id(instrument_id: int, db_path: Optional[str] = None
     if not row:
         return None
 
+    row_keys = row.keys() if hasattr(row, "keys") else []
     return Quote(
         id=row["id"],
         instrument_id=row["instrument_id"],
@@ -327,6 +337,7 @@ def get_quote_by_instrument_id(instrument_id: int, db_path: Optional[str] = None
         provider=row["provider"] or "",
         status=_parse_quote_status(row["status"]),
         error_message=row["error_message"],
+        earnings_date=_parse_date(row["earnings_date"]) if "earnings_date" in row_keys else None,
     )
 
 
@@ -698,7 +709,8 @@ class SqliteWatchlistStore:
                     q.previous_close AS previous_close,
                     q.status         AS quote_status,
                     q.provider       AS quote_provider,
-                    q.fetched_at     AS quote_fetched_at
+                    q.fetched_at     AS quote_fetched_at,
+                    q.earnings_date  AS earnings_date
                 FROM instruments i
                 LEFT JOIN quotes q ON q.instrument_id = i.id
             """
@@ -732,6 +744,9 @@ class SqliteWatchlistStore:
             row_active = row["active"]
             active_bool = bool(row_active) if row_active is not None else True
 
+            row_keys = row.keys() if hasattr(row, "keys") else []
+            earnings_dt = _parse_date(row["earnings_date"]) if "earnings_date" in row_keys else None
+
             positions.append(
                 {
                     "id": row_id_int,
@@ -752,6 +767,7 @@ class SqliteWatchlistStore:
                     "quote_status": clean_opt_str(row["quote_status"]),
                     "quote_provider": clean_opt_str(row["quote_provider"]),
                     "quote_fetched_at": clean_opt_str(row["quote_fetched_at"]),
+                    "earnings_date": earnings_dt.isoformat() if earnings_dt else None,
                     "daily_variation": safe_float(dv.daily_variation),
                     "daily_variation_valid": bool(dv.daily_variation_valid),
                     "variation_since_analysis": safe_float(vsa.variation_since_analysis),
@@ -947,6 +963,7 @@ class SqliteWatchlistStore:
                     provider=quote.provider,
                     status=quote.status,
                     error_message=quote.error_message,
+                    earnings_date=quote.earnings_date,
                 )
                 upsert_quote(q_copy, db_path=self.db_path)
 

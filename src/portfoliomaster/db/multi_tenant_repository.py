@@ -48,9 +48,9 @@ def _parse_bool(v: object) -> bool:
 
 
 # In-memory quote delta tracker to eliminate redundant database writes
-# Bounded LRU mapping {canonical_symbol: (price, previous_close, status)}
+# Bounded LRU mapping {canonical_symbol: (price, previous_close, status, earnings_date)}
 MAX_DELTA_CACHE_ENTRIES = 2048
-_LAST_KNOWN_QUOTES: OrderedDict[str, Tuple[Optional[Decimal], Optional[Decimal], str]] = OrderedDict()
+_LAST_KNOWN_QUOTES: OrderedDict[str, Tuple[Optional[Decimal], Optional[Decimal], str, Optional[date]]] = OrderedDict()
 _DELTA_CACHE_LOCK = threading.Lock()
 
 
@@ -83,17 +83,23 @@ def filter_unchanged_quotes(quotes_data: List[dict]) -> List[dict]:
             raw_prev = item.get("previous_close")
             prev_close = Decimal(str(raw_prev)) if raw_prev is not None and str(raw_prev) != "" else None
             status = str(item.get("status", "FRESH")).upper()
+            earnings_dt = _parse_d(item.get("earnings_date"))
 
             last = _LAST_KNOWN_QUOTES.get(canonical)
             if last is not None:
                 _LAST_KNOWN_QUOTES.move_to_end(canonical)
-                last_price, last_prev, last_status = last
-                if last_price == price and last_prev == prev_close and last_status == status:
+                last_price, last_prev, last_status, last_earnings = last
+                if (
+                    last_price == price
+                    and last_prev == prev_close
+                    and last_status == status
+                    and last_earnings == earnings_dt
+                ):
                     # Unchanged: skip DB write!
                     continue
 
             # Update bounded LRU cache and mark for persistence
-            _LAST_KNOWN_QUOTES[canonical] = (price, prev_close, status)
+            _LAST_KNOWN_QUOTES[canonical] = (price, prev_close, status, earnings_dt)
             _LAST_KNOWN_QUOTES.move_to_end(canonical)
             while len(_LAST_KNOWN_QUOTES) > MAX_DELTA_CACHE_ENTRIES:
                 _LAST_KNOWN_QUOTES.popitem(last=False)
@@ -473,6 +479,7 @@ class MultiTenantWatchlistRepository:
                 MarketQuote.status,
                 MarketQuote.provider,
                 MarketQuote.last_valid_fetched_at,
+                MarketQuote.earnings_date,
             )
             .outerjoin(
                 MarketQuote,
@@ -506,6 +513,7 @@ class MultiTenantWatchlistRepository:
             quote_status,
             quote_provider,
             last_valid_fetched_at,
+            earnings_date,
         ) in rows:
             has_quote = quote_status is not None or latest_price is not None
             daily_res = daily_variation(latest_price, prev_close) if has_quote else None
@@ -534,6 +542,7 @@ class MultiTenantWatchlistRepository:
                     "quote_status": quote_status if quote_status is not None else "UNAVAILABLE",
                     "quote_provider": quote_provider if quote_provider is not None else "",
                     "quote_fetched_at": last_valid_fetched_at.isoformat() if last_valid_fetched_at else None,
+                    "earnings_date": earnings_date.isoformat() if earnings_date else None,
                     "daily_variation": float(daily_res.daily_variation) if daily_res and daily_res.daily_variation_valid else None,
                     "daily_variation_valid": daily_res.daily_variation_valid if daily_res else False,
                     "variation_since_analysis": float(analysis_res.variation_since_analysis) if analysis_res and analysis_res.variation_since_analysis_valid else None,
@@ -572,6 +581,7 @@ class GlobalMarketQuotesRepository:
         currency: Optional[str] = None,
         company_name: Optional[str] = None,
         provider: str = "yahoo",
+        earnings_date: Optional[date] = None,
     ) -> MarketQuote:
         """
         Non-destructive safe quote upsert strictly mirroring Supabase RPC
@@ -602,6 +612,7 @@ class GlobalMarketQuotesRepository:
                 previous_close=previous_close if (is_valid_price and previous_close and previous_close > 0) else None,
                 quote_timestamp=quote_timestamp if is_valid_price else None,
                 last_valid_fetched_at=now if is_valid_price else None,
+                earnings_date=earnings_date,
                 last_attempt_at=now,
                 status=str(status).upper(),
                 error_message=error_message,
@@ -623,6 +634,12 @@ class GlobalMarketQuotesRepository:
                 if quote_timestamp is not None:
                     quote.quote_timestamp = quote_timestamp
                 quote.last_valid_fetched_at = now
+                if earnings_date is not None:
+                    quote.earnings_date = earnings_date
+                elif quote.earnings_date is not None and quote.earnings_date < now.date():
+                    quote.earnings_date = None
+            elif earnings_date is not None:
+                quote.earnings_date = earnings_date
 
             quote.last_attempt_at = now
             quote.status = str(status).upper()
@@ -682,6 +699,7 @@ class GlobalMarketQuotesRepository:
             )
 
             q_ts = item.get("quote_timestamp")
+            earnings_dt = _parse_d(item.get("earnings_date"))
 
             clean_params.append({
                 "provider_symbol": canonical,
@@ -693,6 +711,7 @@ class GlobalMarketQuotesRepository:
                 "previous_close": prev_close if is_valid_price else None,
                 "quote_timestamp": q_ts if is_valid_price else None,
                 "last_valid_fetched_at": now if is_valid_price else None,
+                "earnings_date": earnings_dt,
                 "last_attempt_at": now,
                 "status": status,
                 "error_message": error_message,
@@ -709,6 +728,7 @@ class GlobalMarketQuotesRepository:
                     price=price if is_valid_price else None,
                     previous_close=prev_close if is_valid_price else None,
                     quote_timestamp=q_ts if is_valid_price else None,
+                    earnings_date=earnings_dt,
                     status=status,
                     error_message=error_message,
                 )
@@ -721,11 +741,11 @@ class GlobalMarketQuotesRepository:
             INSERT INTO market_quotes (
                 provider_symbol, exchange, currency, company_name, provider,
                 price, previous_close, quote_timestamp, last_valid_fetched_at,
-                last_attempt_at, status, error_message, created_at
+                earnings_date, last_attempt_at, status, error_message, created_at
             ) VALUES (
                 :provider_symbol, :exchange, :currency, :company_name, :provider,
                 :price, :previous_close, :quote_timestamp, :last_valid_fetched_at,
-                :last_attempt_at, :status, :error_message, :created_at
+                :earnings_date, :last_attempt_at, :status, :error_message, :created_at
             )
             ON CONFLICT (provider_symbol) DO UPDATE SET
                 exchange = CASE 
@@ -753,6 +773,11 @@ class GlobalMarketQuotesRepository:
                 last_valid_fetched_at = CASE 
                     WHEN EXCLUDED.price IS NOT NULL AND EXCLUDED.price > 0 THEN EXCLUDED.last_valid_fetched_at 
                     ELSE market_quotes.last_valid_fetched_at 
+                END,
+                earnings_date = CASE
+                    WHEN EXCLUDED.earnings_date IS NOT NULL THEN EXCLUDED.earnings_date
+                    WHEN EXCLUDED.price IS NOT NULL AND EXCLUDED.price > 0 AND market_quotes.earnings_date IS NOT NULL AND market_quotes.earnings_date < CURRENT_DATE THEN NULL
+                    ELSE market_quotes.earnings_date
                 END,
                 last_attempt_at = EXCLUDED.last_attempt_at,
                 status = EXCLUDED.status,
@@ -991,6 +1016,7 @@ class PostgresWatchlistStore:
                     currency=inst_created.currency,
                     company_name=company_name,
                     provider=fetched_quote.provider or "yahoo",
+                    earnings_date=fetched_quote.earnings_date,
                 )
                 quote_info = {"source": "yahoo", "price": safe_float(fetched_quote.price)}
 
@@ -1404,6 +1430,7 @@ class PostgresWatchlistStore:
                 "error_message": quote.error_message,
                 "provider": quote.provider or "yahoo",
                 "currency": symbol_currencies.get(sym, "EUR"),
+                "earnings_date": quote.earnings_date,
             })
             cnt = symbol_counts.get(sym, 1)
             if quote.is_valid():
@@ -1515,6 +1542,7 @@ class PostgresWatchlistStore:
                             "previous_close": safe_float(quote.previous_close),
                             "status": quote.status,
                             "last_attempt_at": quote.last_attempt_at.isoformat() if quote.last_attempt_at else None,
+                            "earnings_date": quote.earnings_date.isoformat() if quote.earnings_date else None,
                         },
                     }
 
@@ -1548,6 +1576,7 @@ class PostgresWatchlistStore:
                 status=status_str,
                 error_message=fetched_quote.error_message,
                 provider=fetched_quote.provider or "yahoo",
+                earnings_date=fetched_quote.earnings_date,
             )
 
             inst_updates: dict = {}
@@ -1579,6 +1608,7 @@ class PostgresWatchlistStore:
                     "previous_close": safe_float(saved_quote.previous_close),
                     "status": saved_quote.status,
                     "last_attempt_at": saved_quote.last_attempt_at.isoformat() if saved_quote.last_attempt_at else None,
+                    "earnings_date": saved_quote.earnings_date.isoformat() if saved_quote.earnings_date else None,
                 },
             }
 

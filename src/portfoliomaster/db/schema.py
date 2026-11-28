@@ -114,6 +114,7 @@ class MarketQuote(Base):
     previous_close: Mapped[Optional[Decimal]] = mapped_column(Numeric(20, 6), nullable=True)
     quote_timestamp: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
     last_valid_fetched_at: Mapped[Optional[datetime]] = mapped_column(TZDateTime(), nullable=True)
+    earnings_date: Mapped[Optional[date]] = mapped_column(Date, nullable=True)
 
     # Latest Fetch Attempt Audit (NULL until a quote fetch is actually attempted)
     last_attempt_at: Mapped[Optional[datetime]] = mapped_column(
