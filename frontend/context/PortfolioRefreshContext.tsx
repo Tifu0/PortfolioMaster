@@ -4,7 +4,37 @@ import { createContext, use, useCallback, useEffect, useEffectEvent, useMemo, us
 import type { Dispatch, ReactNode, SetStateAction } from 'react';
 import { authFetch, getConfig, refreshAll } from '@/lib/api';
 import { startRefreshSync } from '@/lib/refresh-sync';
-import type { AppConfig, Position, RefreshStreamEvent } from '@/lib/types';
+import type { AppConfig, Position, RefreshProgressEvent, RefreshStreamEvent } from '@/lib/types';
+
+export function applyBatchQuotesDelta(
+  positions: Position[],
+  quotes: NonNullable<RefreshProgressEvent['quotes']>
+): Position[] {
+  let changed = false;
+  const updated = positions.map((position) => {
+    const symbol = (position.provider_symbol || position.user_ticker).trim().toUpperCase();
+    const quote = quotes[symbol];
+    if (quote?.price == null) return position;
+    const latestPrice = Number(quote.price);
+    if (!Number.isFinite(latestPrice)) return position;
+    const previousClose = quote.previous_close == null ? position.previous_close : Number(quote.previous_close);
+    const canCalculateVariation = previousClose != null && previousClose > 0 && latestPrice > 0;
+    const nextEarningsDate =
+      'earnings_date' in quote ? (quote.earnings_date ?? null) : position.earnings_date;
+    changed = true;
+    return {
+      ...position,
+      latest_price: latestPrice,
+      previous_close: previousClose,
+      daily_variation: canCalculateVariation ? Number((((latestPrice - previousClose) / previousClose) * 100).toFixed(2)) : position.daily_variation,
+      daily_variation_valid: canCalculateVariation || position.daily_variation_valid,
+      quote_status: quote.status ?? position.quote_status,
+      quote_fetched_at: quote.quote_timestamp ?? position.quote_fetched_at,
+      earnings_date: nextEarningsDate,
+    };
+  });
+  return changed ? updated : positions;
+}
 
 interface BatchProgress {
   currentBatch: number;
@@ -82,29 +112,7 @@ export function PortfolioRefreshProvider({ children, enabled, initialConfig, ref
       setBatchProgress(readProgress(event));
       const quotes = event.quotes;
       if (!quotes) return;
-      setPositions((positions) => {
-        let changed = false;
-        const updated = positions.map((position) => {
-          const symbol = (position.provider_symbol || position.user_ticker).trim().toUpperCase();
-          const quote = quotes[symbol];
-          if (quote?.price == null) return position;
-          const latestPrice = Number(quote.price);
-          if (!Number.isFinite(latestPrice)) return position;
-          const previousClose = quote.previous_close == null ? position.previous_close : Number(quote.previous_close);
-          const canCalculateVariation = previousClose != null && previousClose > 0 && latestPrice > 0;
-          changed = true;
-          return {
-            ...position,
-            latest_price: latestPrice,
-            previous_close: previousClose,
-            daily_variation: canCalculateVariation ? Number((((latestPrice - previousClose) / previousClose) * 100).toFixed(2)) : position.daily_variation,
-            daily_variation_valid: canCalculateVariation || position.daily_variation_valid,
-            quote_status: quote.status ?? position.quote_status,
-            quote_fetched_at: quote.quote_timestamp ?? position.quote_fetched_at,
-          };
-        });
-        return changed ? updated : positions;
-      });
+      setPositions((positions) => applyBatchQuotesDelta(positions, quotes));
     }
   }, [reconcile, setPositions]);
 
