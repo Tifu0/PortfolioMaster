@@ -2,7 +2,7 @@ import React from 'react';
 
 export default function BackupLoading() {
   return (
-    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col animate-pulse">
+    <div className="min-h-screen bg-zinc-950 text-zinc-100 flex flex-col animate-pulse motion-reduce:animate-none">
       {/* Header skeleton */}
       <header className="border-b border-zinc-800/80 bg-zinc-950/80 sticky top-0 z-50">
         <div className="max-w-[1680px] mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
@@ -15,10 +15,10 @@ export default function BackupLoading() {
       </header>
 
       {/* Main content skeleton */}
-      <main className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
+      <main id="main-content" className="flex-1 max-w-[1680px] w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col gap-6">
         <div className="flex flex-col gap-2">
           <div className="h-7 w-56 bg-zinc-800 rounded-lg" />
-          <div className="h-4 w-96 bg-zinc-850 rounded" />
+          <div className="h-4 w-full max-w-sm bg-zinc-850 rounded" />
         </div>
 
         {/* Content skeleton */}

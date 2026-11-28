@@ -48,6 +48,7 @@ import { usePortfolioDataOptional } from '@/context/PortfolioContext';
 import { usePortfolioRefreshOptional } from '@/context/PortfolioRefreshContext';
 import { useAuth } from '@/context/AuthContext';
 import { useLanguage } from '@/context/LanguageContext';
+import type { TranslationKey } from '@/lib/translations';
 import { useToast } from '@/components/ui/Toast';
 import { formatCurrency } from '@/lib/formatters';
 import type { Position, PortfolioMetrics, AppConfig, RefreshProgressEvent } from '@/lib/types';
@@ -78,17 +79,39 @@ const BackupExportModal = dynamic(
  * - DEFAULT_ROW_HEIGHT (48px): Clean standard table density with balanced breathing room.
  * - MAX_ROW_HEIGHT (88px): Spacious comfortable density for large displays.
  */
-export const MIN_ROW_HEIGHT = 32;
-export const DEFAULT_ROW_HEIGHT = 48;
-export const MAX_ROW_HEIGHT = 88;
-export const ROW_HEIGHT_STORAGE_KEY = 'portfoliomaster_row_height';
-export const SORTING_STORAGE_KEY = 'portfoliomaster_table_sorting';
+const MIN_ROW_HEIGHT = 32;
+const DEFAULT_ROW_HEIGHT = 48;
+const MAX_ROW_HEIGHT = 88;
+const ROW_HEIGHT_STORAGE_KEY = 'portfoliomaster_row_height';
+const SORTING_STORAGE_KEY = 'portfoliomaster_table_sorting';
+
+export const DEFAULT_WATCHLIST_COLUMN_WIDTHS = {
+  analysis_date: 80,
+  user_ticker: 105,
+  company_name: 150,
+  exchange: 82,
+  currency: 66,
+  latest_price: 104,
+  daily_variation: 94,
+  ytd_variation: 98,
+  variation_since_analysis: 106,
+  decline_to_target: 104,
+  target_price: 95,
+  actions: 84,
+} as const;
+
+export function clampRowHeight(value: number): number {
+  if (!Number.isFinite(value)) {
+    return DEFAULT_ROW_HEIGHT;
+  }
+  return Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, Math.round(value)));
+}
 
 // ========================================================================== //
 // Toolbar Configuration Types & Defaults
 // ========================================================================== //
 
-export interface ToolbarConfig {
+interface ToolbarConfig {
   updateQuotes: boolean;
   addInstrument: boolean;
   restoreColumns: boolean;
@@ -98,7 +121,7 @@ export interface ToolbarConfig {
   wipeDatabase: boolean;
 }
 
-export const DEFAULT_TOOLBAR_CONFIG: ToolbarConfig = {
+const DEFAULT_TOOLBAR_CONFIG: ToolbarConfig = {
   updateQuotes: true,
   addInstrument: true,
   restoreColumns: true,
@@ -108,53 +131,53 @@ export const DEFAULT_TOOLBAR_CONFIG: ToolbarConfig = {
   wipeDatabase: false,
 };
 
-export const TOOLBAR_STORAGE_KEY = 'portfoliomaster_toolbar_config';
+const TOOLBAR_STORAGE_KEY = 'portfoliomaster_toolbar_config';
 
 const TOOLBAR_ITEMS: Array<{
   key: keyof ToolbarConfig;
-  label: string;
+  labelKey: TranslationKey;
   icon: React.ComponentType<{ className?: string }>;
   iconColor: string;
 }> = [
   {
     key: 'updateQuotes',
-    label: 'Actualizar Cotizaciones',
+    labelKey: 'refreshQuotes',
     icon: RefreshCw,
     iconColor: 'text-emerald-400',
   },
   {
     key: 'addInstrument',
-    label: 'Añadir Instrumento',
+    labelKey: 'addInstrument',
     icon: PlusCircle,
     iconColor: 'text-emerald-400',
   },
   {
     key: 'restoreColumns',
-    label: 'Restablecer Columnas',
+    labelKey: 'resetColumns',
     icon: RotateCcw,
     iconColor: 'text-zinc-400',
   },
   {
     key: 'rowHeight',
-    label: 'Altura de Filas',
+    labelKey: 'rowHeightLabel',
     icon: Rows3,
     iconColor: 'text-indigo-400',
   },
   {
     key: 'exportBackup',
-    label: 'Exportar / Copia',
+    labelKey: 'exportBackupLabel',
     icon: Download,
     iconColor: 'text-blue-400',
   },
   {
     key: 'importValues',
-    label: 'Importar Valores',
+    labelKey: 'importValuesLabel',
     icon: Upload,
     iconColor: 'text-emerald-400',
   },
   {
     key: 'wipeDatabase',
-    label: 'Borrar Base de Datos',
+    labelKey: 'wipeDatabaseLabel',
     icon: Trash2,
     iconColor: 'text-rose-400',
   },
@@ -269,22 +292,24 @@ function formatDeclineToTarget(
   };
 }
 
-function timeAgo(isoDate: string | null | undefined, now: number): string {
+type TranslateFn = (key: TranslationKey, params?: Record<string, string | number>) => string;
+
+function timeAgo(isoDate: string | null | undefined, now: number, t: TranslateFn): string {
   if (!isoDate) return '';
   try {
     const d = new Date(isoDate);
     if (isNaN(d.getTime())) return '';
     const seconds = Math.floor((now - d.getTime()) / 1000);
-    if (seconds < 60) return 'hace unos segundos';
-    if (seconds < 3600) return `hace ${Math.floor(seconds / 60)}m`;
-    if (seconds < 86400) return `hace ${Math.floor(seconds / 3600)}h`;
-    return `hace ${Math.floor(seconds / 86400)}d`;
+    if (seconds < 60) return t('timeAgoSeconds');
+    if (seconds < 3600) return t('timeAgoMinutes', { n: Math.floor(seconds / 60) });
+    if (seconds < 86400) return t('timeAgoHours', { n: Math.floor(seconds / 3600) });
+    return t('timeAgoDays', { n: Math.floor(seconds / 86400) });
   } catch {
     return '';
   }
 }
 
-function formatStackedDate(isoDate: string | null | undefined): { dayMonth: string; year: string } | null {
+export function formatStackedDate(isoDate: string | null | undefined): { dayMonth: string; year: string } | null {
   if (!isoDate || typeof isoDate !== 'string') return null;
   const parts = isoDate.split('-');
   if (parts.length >= 3 && parts[0] && parts[1] && parts[2]) {
@@ -302,14 +327,14 @@ function formatStackedDate(isoDate: string | null | undefined): { dayMonth: stri
 // Quote Tooltip Helper (Accessible info on hover without visual density / boxes)
 // ========================================================================== //
 
-function getQuoteTooltip(pos: Position, now?: number): string | undefined {
+function getQuoteTooltip(pos: Position, t: TranslateFn, now?: number): string | undefined {
   const s = pos.quote_status ? String(pos.quote_status).toUpperCase() : null;
   const statusMap: Record<string, string> = {
-    FRESH: 'Cotización en tiempo real',
-    DELAYED: 'Cierre de mercado / diferido 15min',
-    STALE: 'Datos desactualizados',
-    UNAVAILABLE: 'Sin cotización disponible',
-    ERROR: 'Error al obtener la cotización',
+    FRESH: t('quoteStatusFresh'),
+    DELAYED: t('quoteStatusDelayed'),
+    STALE: t('quoteStatusStale'),
+    UNAVAILABLE: t('quoteStatusUnavailable'),
+    ERROR: t('quoteStatusError'),
   };
 
   const parts: string[] = [];
@@ -319,9 +344,9 @@ function getQuoteTooltip(pos: Position, now?: number): string | undefined {
     parts.push(s);
   }
   if (pos.quote_provider) {
-    parts.push(`Proveedor: ${pos.quote_provider}`);
+    parts.push(t('quoteProviderLabel', { provider: pos.quote_provider }));
   }
-  const elapsed = now === undefined ? '' : timeAgo(pos.quote_fetched_at, now);
+  const elapsed = now === undefined ? '' : timeAgo(pos.quote_fetched_at, now, t);
   if (elapsed) {
     parts.push(elapsed);
   }
@@ -385,26 +410,43 @@ function WipeDatabaseModal({
   onConfirm: () => void;
   loading: boolean;
 }) {
+  const { t } = useLanguage();
+
+  useEffect(() => {
+    if (!open) return;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading) {
+        onClose();
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [open, loading, onClose]);
+
   if (!open) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center">
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center overscroll-contain"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="wipe-modal-title"
+    >
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Modal */}
-      <div className="relative w-full max-w-md mx-4 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl p-6 animate-in zoom-in-95">
+      <div className="relative w-full max-w-md mx-4 bg-zinc-900 border border-zinc-700 rounded-2xl shadow-2xl p-6 animate-in zoom-in-95 motion-reduce:animate-none overscroll-contain">
         <div className="flex items-start gap-4">
           <div className="w-10 h-10 rounded-full bg-rose-500/10 border border-rose-500/20 flex items-center justify-center shrink-0">
             <AlertTriangle className="w-5 h-5 text-rose-400" />
           </div>
           <div className="flex-1">
-            <h3 className="text-lg font-semibold text-white">
-              Borrar Base de Datos
+            <h3 id="wipe-modal-title" className="text-lg font-semibold text-white">
+              {t('wipeDatabaseLabel')}
             </h3>
             <p className="mt-2 text-sm text-zinc-400 leading-relaxed">
-              Esta acción eliminará <strong className="text-zinc-200">todos los instrumentos y cotizaciones</strong> de
-              la base de datos. Esta acción no se puede deshacer.
+              {t('wipeDatabaseDesc')}
             </p>
           </div>
         </div>
@@ -415,7 +457,7 @@ function WipeDatabaseModal({
             disabled={loading}
             className="px-4 py-2 rounded-lg text-sm font-medium text-zinc-300 bg-zinc-800 border border-zinc-700 hover:bg-zinc-700 transition-colors disabled:opacity-50"
           >
-            Cancelar
+            {t('cancel')}
           </button>
           <button
             onClick={onConfirm}
@@ -424,13 +466,13 @@ function WipeDatabaseModal({
           >
             {loading ? (
               <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                Borrando...
+                <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" />
+                {t('deleting')}
               </>
             ) : (
               <>
                 <Trash2 className="w-4 h-4" />
-                Sí, borrar todo
+                {t('confirmWipeAll')}
               </>
             )}
           </button>
@@ -466,7 +508,7 @@ export function WatchlistTable({
 }: WatchlistTableProps) {
   const portfolioContext = usePortfolioDataOptional();
   const { user, isAuthConfigured, openAuthModal } = useAuth();
-  const { language } = useLanguage();
+  const { language, t } = useLanguage();
   const addToast = useToast();
 
   // Fallback data state used only if rendered outside PortfolioProvider
@@ -532,8 +574,7 @@ export function WatchlistTable({
       if (savedHeight) {
         const parsed = parseInt(savedHeight, 10);
         if (!isNaN(parsed)) {
-          const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, parsed));
-          setRowHeight(clamped);
+          setRowHeight(clampRowHeight(parsed));
         }
       }
     } catch {
@@ -601,7 +642,7 @@ export function WatchlistTable({
   const rowHeightRef = useRef<HTMLDivElement>(null);
 
   const handleRowHeightChange = useCallback((newHeight: number) => {
-    const clamped = Math.max(MIN_ROW_HEIGHT, Math.min(MAX_ROW_HEIGHT, newHeight));
+    const clamped = clampRowHeight(newHeight);
     setRowHeight(clamped);
     try {
       localStorage.setItem(ROW_HEIGHT_STORAGE_KEY, String(clamped));
@@ -631,8 +672,8 @@ export function WatchlistTable({
     } catch {
       // ignore
     }
-    addToast('info', 'Barra de herramientas y altura restablecidas a los valores por defecto');
-  }, [addToast]);
+    addToast('info', t('toolbarAndHeightResetToast'));
+  }, [addToast, t]);
 
   // Click outside and escape key handling for settings popover
   useEffect(() => {
@@ -691,8 +732,8 @@ export function WatchlistTable({
     } catch {
       // ignore
     }
-    addToast('info', 'Ancho de columnas restablecido a los valores por defecto');
-  }, [addToast]);
+    addToast('info', t('columnWidthsResetToast'));
+  }, [addToast, t]);
 
   // Description / Notes states
   const [expandedDescriptionTickers, setExpandedDescriptionTickers] = useState<Set<string>>(new Set());
@@ -754,7 +795,7 @@ export function WatchlistTable({
 
     try {
       await updateInstrument(ticker, { comment: newComment });
-      addToast('success', `Descripción de ${ticker} guardada correctamente`);
+      addToast('success', t('notesSavedToast', { ticker }));
       if (portfolioContext) {
         portfolioContext.refreshPortfolioData({ silent: true });
       }
@@ -765,11 +806,11 @@ export function WatchlistTable({
         onDataChange?.(data, activeMetrics);
       }
       const msg = err instanceof Error ? err.message : String(err);
-      addToast('error', `Error al guardar la descripción de ${ticker}: ${msg}`);
+      addToast('error', t('notesSaveErrorToast', { ticker, error: msg }));
     } finally {
       setSavingCommentTicker(null);
     }
-  }, [commentDrafts, addToast, onDataChange, activeMetrics, portfolioContext, data, setData]);
+  }, [commentDrafts, addToast, onDataChange, activeMetrics, portfolioContext, data, setData, t]);
 
   // ── Reload data from API ────────────────────────────────────────────── //
 
@@ -840,17 +881,21 @@ export function WatchlistTable({
             const histRes = await fetchAnalysisPrice(ticker, cleanNewDate);
             addToast(
               'success',
-              `${ticker}: fecha de análisis actualizada (${cleanNewDate}) y precio histórico obtenido (${formatCurrency(histRes.analysis_reference_price, currency, language)})`
+              t('dateUpdatedToast', {
+                ticker,
+                date: cleanNewDate,
+                price: formatCurrency(histRes.analysis_reference_price, currency, language),
+              })
             );
           } catch (priceErr) {
             const priceMsg = priceErr instanceof Error ? priceErr.message : String(priceErr);
             addToast(
               'info',
-              `${ticker}: fecha guardada (${cleanNewDate}), pero no se pudo obtener precio histórico en Yahoo Finance: ${priceMsg}`
+              t('dateSavedNoYahooToast', { ticker, date: cleanNewDate, error: priceMsg })
             );
           }
         } else {
-          addToast('success', `${ticker}: fecha de análisis eliminada`);
+          addToast('success', t('dateRemovedToast', { ticker }));
         }
 
         if (portfolioContext) {
@@ -865,7 +910,7 @@ export function WatchlistTable({
           onDataChange?.(data, activeMetrics);
         }
         const msg = err instanceof Error ? err.message : String(err);
-        addToast('error', `Error al actualizar la fecha de ${ticker}: ${msg}`);
+        addToast('error', t('dateUpdateErrorToast', { ticker, error: msg }));
       } finally {
         setUpdatingDateTickers((prev) => {
           const next = new Set(prev);
@@ -874,7 +919,7 @@ export function WatchlistTable({
         });
       }
     },
-    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData, data, setData, language]
+    [portfolioContext, activeMetrics, onDataChange, addToast, reloadData, data, setData, language, t]
   );
 
   // ── Batch Refresh (Cotizaciones + Precios de Análisis) ───────────────── //
@@ -893,7 +938,7 @@ export function WatchlistTable({
       if (quotesRes.status === 'fresh') {
         addToast(
           'info',
-          quotesRes.message || 'Precios al día (actualizados recientemente)'
+          quotesRes.message || t('quotesFreshToast')
         );
         return;
       }
@@ -904,20 +949,26 @@ export function WatchlistTable({
       const updatedAnalysis = quotesRes.analysis_prices_updated ?? 0;
       const updatedYtd = quotesRes.ytd_prices_updated ?? 0;
 
-      const failedMsg = failedQuotes > 0 ? ` (${failedQuotes} fallidas)` : '';
-      const analysisMsg = updatedAnalysis > 0 ? ` · ${updatedAnalysis} precios de análisis resueltos` : '';
-      const ytdMsg = updatedYtd > 0 ? ` · ${updatedYtd} precios YTD resueltos` : '';
+      const failedPart = failedQuotes > 0 ? t('batchRefreshFailedPart', { count: failedQuotes }) : '';
+      const analysisPart = updatedAnalysis > 0 ? t('batchRefreshAnalysisPart', { count: updatedAnalysis }) : '';
+      const ytdPart = updatedYtd > 0 ? t('batchRefreshYtdPart', { count: updatedYtd }) : '';
       addToast(
         failedQuotes > 0 ? 'info' : 'success',
-        `${updatedQuotes} de ${totalQuotes} cotizaciones actualizadas${failedMsg}${analysisMsg}${ytdMsg}`
+        t('batchRefreshSummaryToast', {
+          updated: updatedQuotes,
+          total: totalQuotes,
+          failedPart,
+          analysisPart,
+          ytdPart,
+        })
       );
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      addToast('error', `Error al actualizar cotizaciones: ${msg}`);
+      addToast('error', t('batchRefreshErrorToast', { error: msg }));
     } finally {
       setBatchRefreshing(false);
     }
-  }, [batchRefreshing, addToast, reloadData]);
+  }, [batchRefreshing, addToast, reloadData, t]);
 
   // ── Single Row Refresh ──────────────────────────────────────────────── //
 
@@ -928,16 +979,16 @@ export function WatchlistTable({
       try {
         const result = await refreshInstrument(ticker);
         if (result.status === 'ok') {
-          addToast('success', `${ticker}: cotización actualizada`);
+          addToast('success', t('singleQuoteUpdatedToast', { ticker }));
         } else if (result.status === 'fresh') {
-          addToast('info', `${ticker}: ${result.message || 'Precio al día (actualizado recientemente)'}`);
+          addToast('info', `${ticker}: ${result.message || t('singleQuoteFreshFallback')}`);
         } else {
-          addToast('info', `${ticker}: ${result.detail || 'sin cotización'}`);
+          addToast('info', `${ticker}: ${result.detail || t('singleQuoteUnavailableFallback')}`);
         }
         await reloadData();
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
-        addToast('error', `Error al actualizar ${ticker}: ${msg}`);
+        addToast('error', t('singleQuoteErrorToast', { ticker, error: msg }));
       } finally {
         setRefreshingTickers((prev) => {
           const next = new Set(prev);
@@ -946,7 +997,7 @@ export function WatchlistTable({
         });
       }
     },
-    [refreshingTickers, addToast, reloadData]
+    [refreshingTickers, addToast, reloadData, t]
   );
 
   // ── Wipe Database ───────────────────────────────────────────────────── //
@@ -955,7 +1006,7 @@ export function WatchlistTable({
     setWipingDb(true);
     try {
       await wipeDatabase();
-      addToast('success', 'Base de datos borrada correctamente.');
+      addToast('success', t('databaseWipedToast'));
       setData([]);
       if (portfolioContext) {
         portfolioContext.setPositions([]);
@@ -965,12 +1016,12 @@ export function WatchlistTable({
       onDataChange?.([], null);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      addToast('error', `Error al borrar la base de datos: ${msg}`);
+      addToast('error', t('databaseWipeErrorToast', { error: msg }));
     } finally {
       setWipingDb(false);
       setWipeModalOpen(false);
     }
-  }, [addToast, onDataChange, portfolioContext, setData]);
+  }, [addToast, onDataChange, portfolioContext, setData, t]);
 
   // ── Computed filters ────────────────────────────────────────────────── //
 
@@ -1011,7 +1062,7 @@ export function WatchlistTable({
     () => [
       {
         accessorKey: 'analysis_date',
-        size: 85,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.analysis_date,
         minSize: 70,
         maxSize: 160,
         sortingFn: (rowA, rowB, columnId) => {
@@ -1026,12 +1077,12 @@ export function WatchlistTable({
           <button
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
             className="flex items-center justify-center gap-1 mx-auto hover:text-white transition-colors uppercase tracking-wider select-none text-center group/th-date text-inherit cursor-pointer"
-            title={language === 'es' ? 'Ordenar por fecha de análisis' : 'Sort by analysis date'}
+            title={t('sortByAnalysisDate')}
           >
             <div className="flex flex-col items-center leading-tight [word-break:keep-all] whitespace-normal">
-              <span>{language === 'es' ? 'Fecha' : 'Analysis'}</span>
+              <span>{t('colAnalysis')}</span>
               <span className="text-[0.9em] text-zinc-400 font-medium">
-                {language === 'es' ? 'Análisis' : 'Date'}
+                {t('colDate')}
               </span>
             </div>
             <ColumnSortIndicator column={column} />
@@ -1058,6 +1109,7 @@ export function WatchlistTable({
                     }
                   }}
                   type="date"
+                  aria-label={t('analysisDateInputAria', { ticker })}
                   value={editingDateValue}
                   autoFocus
                   onChange={(e) => setEditingDateValue(e.target.value)}
@@ -1087,46 +1139,50 @@ export function WatchlistTable({
 
           if (parsed) {
             return (
-              <div
+              <button
+                type="button"
                 onClick={() => handleStartEditingDate(ticker, pos.analysis_date)}
+                aria-label={t('editAnalysisDateAria', { date: pos.analysis_date || '', ticker })}
                 className="flex flex-col items-center justify-center py-0.5 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
-                title={`Fecha de análisis: ${pos.analysis_date} (Haz clic para editar)`}
+                title={t('clickToEditAnalysisDate', { date: pos.analysis_date || '' })}
               >
                 <div className="flex items-center gap-1">
                   <span className="text-xs font-semibold text-zinc-200 group-hover/date:text-emerald-400 font-mono tabular-nums leading-tight transition-colors">
                     {parsed.dayMonth}
                   </span>
                   {isUpdating && (
-                    <Loader2 className="w-3 h-3 animate-spin text-emerald-400 shrink-0" />
+                    <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none text-emerald-400 shrink-0" />
                   )}
                 </div>
                 <span className="text-[10px] text-zinc-500 font-mono tabular-nums leading-none mt-0.5">
                   {parsed.year}
                 </span>
-              </div>
+              </button>
             );
           }
 
           return (
-            <div
+            <button
+              type="button"
               onClick={() => handleStartEditingDate(ticker, pos.analysis_date)}
+              aria-label={t('assignAnalysisDateAria', { ticker })}
               className="flex items-center justify-center py-0.5 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
-              title="Haz clic para asignar fecha de análisis"
+              title={t('clickToAssignAnalysisDate')}
             >
               {isUpdating ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-emerald-400" />
               ) : (
                 <span className="text-zinc-500 group-hover/date:text-zinc-300 font-mono text-xs tabular-nums transition-colors">
                   —
                 </span>
               )}
-            </div>
+            </button>
           );
         },
       },
       {
         accessorKey: 'user_ticker',
-        size: 130,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.user_ticker,
         minSize: 70,
         maxSize: 350,
         header: ({ column }) => (
@@ -1134,7 +1190,7 @@ export function WatchlistTable({
             onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
             className="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
-            <span className="[word-break:keep-all] whitespace-normal">Ticker</span>
+            <span className="[word-break:keep-all] whitespace-normal">{t('colTicker')}</span>
             <ColumnSortIndicator column={column} />
           </button>
         ),
@@ -1151,11 +1207,14 @@ export function WatchlistTable({
             return (
               <div
                 className="inline-flex flex-col px-2 py-1 rounded-lg bg-emerald-500/20 border border-emerald-400/50 shadow-[0_0_12px_rgba(16,185,129,0.35)] transition-all"
-                title={`¡Precio objetivo alcanzado! Cotización (${formatCurrency(pos.latest_price, pos.currency, language)}) ≤ Objetivo (${formatCurrency(pos.target_price, pos.currency, language)})`}
+                title={t('targetReachedTooltip', {
+                  price: formatCurrency(pos.latest_price, pos.currency, language),
+                  target: formatCurrency(pos.target_price, pos.currency, language),
+                })}
               >
                 <div className="flex items-center gap-1.5">
                   <span className="relative flex h-2 w-2">
-                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                    <span className="animate-ping motion-reduce:animate-none absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
                     <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-400" />
                   </span>
                   <span className="font-bold text-emerald-200 tracking-wide font-mono text-xs">
@@ -1187,7 +1246,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'company_name',
-        size: 240,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.company_name,
         minSize: 85,
         maxSize: 600,
         header: ({ column }) => (
@@ -1196,25 +1255,25 @@ export function WatchlistTable({
             className="flex items-center gap-1 hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal">
-              {language === 'es' ? 'Empresa' : 'Company'}
+              {t('colCompany')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
         ),
         cell: ({ row }) => (
-          <span className="text-zinc-200 font-medium truncate max-w-[200px] block" title={row.original.company_name}>
+          <span className="text-zinc-200 font-medium truncate block w-full" title={row.original.company_name}>
             {row.original.company_name || '—'}
           </span>
         ),
       },
       {
         accessorKey: 'exchange',
-        size: 105,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.exchange,
         minSize: 65,
         maxSize: 220,
         header: () => (
           <span className="uppercase tracking-wider text-inherit [word-break:keep-all] whitespace-normal">
-            {language === 'es' ? 'Mercado' : 'Exchange'}
+            {t('colExchange')}
           </span>
         ),
         cell: ({ row }) => (
@@ -1225,12 +1284,12 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'currency',
-        size: 85,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.currency,
         minSize: 52,
         maxSize: 160,
         header: () => (
           <span className="uppercase tracking-wider text-inherit [word-break:keep-all] whitespace-normal">
-            {language === 'es' ? 'Divisa' : 'Currency'}
+            {t('colCurrency')}
           </span>
         ),
         cell: ({ row }) => (
@@ -1241,7 +1300,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'latest_price',
-        size: 140,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.latest_price,
         minSize: 76,
         maxSize: 320,
         sortingFn: numericSortWithNulls,
@@ -1251,7 +1310,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              {language === 'es' ? 'Último Precio' : 'Last Price'}
+              {t('colLastPrice')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1261,9 +1320,9 @@ export function WatchlistTable({
           return (
             <div
               className="flex items-center justify-end font-mono font-medium text-white tabular-nums leading-tight"
-              title={getQuoteTooltip(pos)}
+              title={getQuoteTooltip(pos, t)}
               onMouseEnter={(event) => {
-                event.currentTarget.title = getQuoteTooltip(pos, Date.now()) ?? '';
+                event.currentTarget.title = getQuoteTooltip(pos, t, Date.now()) ?? '';
               }}
             >
               {formatCurrency(pos.latest_price, pos.currency, language)}
@@ -1273,7 +1332,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'daily_variation',
-        size: 130,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.daily_variation,
         minSize: 70,
         maxSize: 260,
         sortingFn: numericSortWithNulls,
@@ -1283,7 +1342,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              {language === 'es' ? 'Var. Diaria' : 'Day Var.'}
+              {t('colDayVar')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1309,7 +1368,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'ytd_variation',
-        size: 145,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.ytd_variation,
         minSize: 64,
         maxSize: 320,
         sortingFn: numericSortWithNulls,
@@ -1319,7 +1378,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              {language === 'es' ? 'Var. YTD' : 'YTD Var.'}
+              {t('colYtdVar')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1338,7 +1397,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'variation_since_analysis',
-        size: 150,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.variation_since_analysis,
         minSize: 80,
         maxSize: 320,
         sortingFn: numericSortWithNulls,
@@ -1348,7 +1407,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              {language === 'es' ? 'Var. vs Análisis' : 'Var. vs Analysis'}
+              {t('colAnalysisVar')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1371,7 +1430,7 @@ export function WatchlistTable({
             ? row.decline_to_target
             : null,
         id: 'decline_to_target',
-        size: 165,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.decline_to_target,
         minSize: 82,
         maxSize: 320,
         sortingFn: numericSortWithNulls,
@@ -1381,7 +1440,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              {language === 'es' ? 'Caída a Objetivo' : 'To Target'}
+              {t('colToTarget')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1400,7 +1459,7 @@ export function WatchlistTable({
       },
       {
         accessorKey: 'target_price',
-        size: 140,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.target_price,
         minSize: 76,
         maxSize: 260,
         sortingFn: numericSortWithNulls,
@@ -1410,7 +1469,7 @@ export function WatchlistTable({
             className="flex items-center gap-1 justify-end w-full hover:text-white transition-colors uppercase tracking-wider text-inherit cursor-pointer"
           >
             <span className="[word-break:keep-all] whitespace-normal text-right">
-              {language === 'es' ? 'P. Objetivo' : 'Target Price'}
+              {t('colTargetPrice')}
             </span>
             <ColumnSortIndicator column={column} />
           </button>
@@ -1424,8 +1483,8 @@ export function WatchlistTable({
       // Actions column — per-row description, edit & refresh
       {
         id: 'actions',
-        size: 105,
-        minSize: 105,
+        size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.actions,
+        minSize: 78,
         maxSize: 105,
         enableResizing: false,
         header: '',
@@ -1436,11 +1495,13 @@ export function WatchlistTable({
           const hasComment = Boolean(row.original.comment && row.original.comment.trim());
 
           return (
-            <div className="flex items-center justify-end gap-1">
+            <div className="flex items-center justify-end gap-0.5">
               {/* Description toggle button */}
               <button
+                type="button"
                 onClick={() => toggleDescription(ticker)}
-                className={`p-1.5 rounded-lg transition-all relative ${
+                aria-label={t('toggleNotesAria', { ticker })}
+                className={`p-1 rounded-lg transition-all relative ${
                   isExpanded
                     ? 'bg-blue-500/20 text-blue-400 border border-blue-500/40'
                     : hasComment
@@ -1449,34 +1510,40 @@ export function WatchlistTable({
                 }`}
                 title={
                   hasComment
-                    ? `Descripción: "${row.original.comment.slice(0, 60)}${row.original.comment.length > 60 ? '...' : ''}" (clic para ${isExpanded ? 'ocultar' : 'desplegar'})`
-                    : `Añadir descripción para ${ticker}`
+                    ? t('notesPreviewTooltip', {
+                        preview: `${row.original.comment.slice(0, 60)}${row.original.comment.length > 60 ? '...' : ''}`,
+                      })
+                    : t('addNotesTooltip', { ticker })
                 }
               >
                 <FileText className="w-3.5 h-3.5" />
                 {hasComment && (
-                  <span className="absolute top-1 right-1 w-1.5 h-1.5 rounded-full bg-blue-400" />
+                  <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-blue-400" />
                 )}
               </button>
 
               {/* Edit instrument modal button */}
               <button
+                type="button"
                 onClick={() => onEditTicker?.(ticker)}
-                className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-all"
-                title={`Modificar datos de ${ticker}`}
+                aria-label={t('editTickerAria', { ticker })}
+                className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-zinc-200 transition-all"
+                title={t('editTickerTooltip', { ticker })}
               >
                 <Edit3 className="w-3.5 h-3.5" />
               </button>
 
               {/* Refresh quote button */}
               <button
+                type="button"
                 onClick={() => handleSingleRefresh(ticker)}
                 disabled={isRefreshing || batchRefreshing}
-                className="p-1.5 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-emerald-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
-                title={`Actualizar cotización de ${ticker}`}
+                aria-label={t('refreshTickerAria', { ticker })}
+                className="p-1 rounded-lg hover:bg-zinc-800 text-zinc-500 hover:text-emerald-400 transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                title={t('refreshTickerTooltip', { ticker })}
               >
                 {isRefreshing ? (
-                  <Loader2 className="w-3.5 h-3.5 animate-spin text-emerald-400" />
+                  <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none text-emerald-400" />
                 ) : (
                   <RefreshCw className="w-3.5 h-3.5" />
                 )}
@@ -1500,6 +1567,7 @@ export function WatchlistTable({
       expandedDescriptionTickers,
       toggleDescription,
       language,
+      t,
     ]
   );
 
@@ -1557,9 +1625,9 @@ export function WatchlistTable({
   const bottomSpace = rowVirtualizer.getTotalSize() - visibleEnd;
 
   const cellPaddingClass = useMemo(() => {
-    if (rowHeight <= 34) return 'py-1 px-2.5';
-    if (rowHeight <= 42) return 'py-1.5 px-3';
-    return 'py-3 px-4';
+    if (rowHeight <= 34) return 'py-1 px-2';
+    if (rowHeight <= 42) return 'py-1.5 px-2.5';
+    return 'py-3 px-2.5';
   }, [rowHeight]);
 
   return (
@@ -1588,7 +1656,8 @@ export function WatchlistTable({
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-zinc-400 pointer-events-none" />
             <input
               type="text"
-              placeholder={language === 'es' ? 'Buscar ticker o empresa...' : 'Search ticker or company...'}
+              aria-label={t('searchAria')}
+              placeholder={t('searchPlaceholder')}
               value={globalFilter}
               onChange={(e) => setGlobalFilter(e.target.value)}
               className="w-full bg-zinc-950/70 border border-zinc-800 rounded-lg pl-9 pr-3 py-1.5 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-emerald-500 focus:border-emerald-500 transition-all font-sans h-9"
@@ -1598,13 +1667,17 @@ export function WatchlistTable({
           {/* Mercado Filter */}
           <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 h-9 shrink-0">
             <Filter className="w-3.5 h-3.5 text-zinc-400" />
-            <span className="text-xs text-zinc-400">{language === 'es' ? 'Mercado:' : 'Exchange:'}</span>
+            <label htmlFor="watchlist-exchange-filter" className="text-xs text-zinc-400">
+              {t('exchangeFilterLabel')}
+            </label>
             <select
+              id="watchlist-exchange-filter"
+              aria-label={t('exchangeFilterAria')}
               value={selectedExchange}
               onChange={(e) => setSelectedExchange(e.target.value)}
               className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer pr-1"
             >
-              <option value="ALL" className="bg-zinc-900 text-zinc-200">{language === 'es' ? 'Todos' : 'All'}</option>
+              <option value="ALL" className="bg-zinc-900 text-zinc-200">{t('allExchanges')}</option>
               {exchanges.map((ex) => (
                 <option key={ex} value={ex} className="bg-zinc-900 text-zinc-200">
                   {ex}
@@ -1615,13 +1688,17 @@ export function WatchlistTable({
 
           {/* Divisa Filter */}
           <div className="flex items-center gap-1.5 bg-zinc-950/50 border border-zinc-800 rounded-lg px-2.5 h-9 shrink-0">
-            <span className="text-xs text-zinc-400">{language === 'es' ? 'Divisa:' : 'Currency:'}</span>
+            <label htmlFor="watchlist-currency-filter" className="text-xs text-zinc-400">
+              {t('currencyFilterLabel')}
+            </label>
             <select
+              id="watchlist-currency-filter"
+              aria-label={t('currencyFilterAria')}
               value={selectedCurrency}
               onChange={(e) => setSelectedCurrency(e.target.value)}
               className="bg-transparent text-xs text-zinc-200 font-medium focus:outline-none cursor-pointer pr-1"
             >
-              <option value="ALL" className="bg-zinc-900 text-zinc-200">{language === 'es' ? 'Todas' : 'All'}</option>
+              <option value="ALL" className="bg-zinc-900 text-zinc-200">{t('allCurrencies')}</option>
               {currencies.map((curr) => (
                 <option key={curr} value={curr} className="bg-zinc-900 text-zinc-200">
                   {curr}
@@ -1632,9 +1709,9 @@ export function WatchlistTable({
 
           {/* Counter Badge */}
           <div className="inline-flex items-center text-xs text-zinc-400 px-2.5 h-9 font-mono whitespace-nowrap shrink-0 bg-zinc-950/40 border border-zinc-800/80 rounded-lg">
-            {language === 'es' ? 'Mostrando' : 'Showing'}{' '}
+            {t('showingLabel')}{' '}
             <span className="text-zinc-200 font-semibold mx-1">{filteredData.length}</span>{' '}
-            {language === 'es' ? 'de' : 'of'}{' '}
+            {t('ofLabel')}{' '}
             <span className="text-zinc-200 font-semibold ml-1">{data.length}</span>
           </div>
         </div>
@@ -1648,10 +1725,10 @@ export function WatchlistTable({
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
                 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-              title={language === 'es' ? 'Añadir un nuevo valor manualmente' : 'Add new instrument manually'}
+              title={t('addInstrumentTooltip')}
             >
               <PlusCircle className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">{language === 'es' ? 'Añadir Valor' : 'Add Instrument'}</span>
+              <span className="hidden sm:inline">{t('addInstrument')}</span>
             </button>
           )}
 
@@ -1662,10 +1739,10 @@ export function WatchlistTable({
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
                 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-              title={language === 'es' ? 'Importar valores desde hojas de cálculo CSV o Excel' : 'Import instruments from CSV or Excel spreadsheet'}
+              title={t('importValuesTooltip')}
             >
               <Upload className="w-4 h-4 text-emerald-400" />
-              <span className="hidden sm:inline">{language === 'es' ? 'Importar' : 'Import'}</span>
+              <span className="hidden sm:inline">{t('import')}</span>
             </button>
           )}
 
@@ -1676,10 +1753,10 @@ export function WatchlistTable({
               className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
                 bg-zinc-800/90 text-zinc-200 border border-zinc-700
                 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm shrink-0"
-              title={language === 'es' ? 'Exportar datos a Excel, CSV, JSON o gestionar copias de seguridad' : 'Export data to Excel, CSV, JSON or manage backups'}
+              title={t('exportBackupTooltip')}
             >
               <Download className="w-4 h-4 text-blue-400" />
-              <span className="hidden sm:inline">{language === 'es' ? 'Exportar / Copia' : 'Export / Backup'}</span>
+              <span className="hidden sm:inline">{t('exportBackupLabel')}</span>
             </button>
           )}
 
@@ -1705,12 +1782,12 @@ export function WatchlistTable({
               }`}
               title={
                 hasCustomColumnSizing
-                  ? (language === 'es' ? 'Restablecer el ancho de las columnas a los valores por defecto' : 'Reset column widths to default values')
-                  : (language === 'es' ? 'Las columnas ya tienen su ancho por defecto' : 'Columns already have default widths')
+                  ? t('resetColumnsTooltip')
+                  : t('columnsAlreadyDefaultTooltip')
               }
             >
               <RotateCcw className="w-3.5 h-3.5" />
-              <span className="hidden xl:inline">{language === 'es' ? 'Restablecer Columnas' : 'Reset Columns'}</span>
+              <span className="hidden xl:inline">{t('resetColumns')}</span>
             </button>
           )}
 
@@ -1719,22 +1796,22 @@ export function WatchlistTable({
             <div className="relative" ref={rowHeightRef}>
               <button
                 onClick={() => setRowHeightOpen((prev) => !prev)}
-                aria-label={language === 'es' ? 'Ajustar altura de filas' : 'Adjust row height'}
+                aria-label={t('adjustRowHeightAria')}
                 aria-expanded={rowHeightOpen}
                 className={`h-9 inline-flex items-center gap-1.5 px-2.5 sm:px-3 rounded-lg text-xs font-medium transition-all shrink-0 border cursor-pointer ${
                   rowHeightOpen
                     ? 'bg-zinc-800 text-indigo-400 border-zinc-600 ring-1 ring-indigo-500/40 shadow-sm'
                     : 'bg-zinc-800/90 text-zinc-200 border border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm'
                 }`}
-                title={language === 'es' ? 'Ajustar altura y densidad vertical de las filas' : 'Adjust table row height and vertical density'}
+                title={t('adjustRowHeightTooltip')}
               >
                 <Rows3 className="w-3.5 h-3.5 text-indigo-400" />
-                <span>{language === 'es' ? 'Altura' : 'Row Height'} · {rowHeight}px</span>
+                <span>{t('rowHeightShort')} · {rowHeight}px</span>
               </button>
 
               {rowHeightOpen && (
                 <div
-                  className="absolute right-0 top-full mt-2 w-84 sm:w-96 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl p-4 z-[100] animate-in fade-in zoom-in-95 duration-150 space-y-3.5"
+                  className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 rounded-2xl bg-zinc-900 border border-zinc-800 shadow-2xl p-4 z-[100] animate-in fade-in zoom-in-95 motion-reduce:animate-none duration-150 space-y-3.5"
                 >
                   {/* Popover Header */}
                   <div className="flex items-center justify-between pb-2.5 border-b border-zinc-800/80">
@@ -1744,26 +1821,30 @@ export function WatchlistTable({
                       </div>
                       <div>
                         <span className="text-xs font-semibold text-white tracking-tight">
-                          {language === 'es' ? 'Altura de Filas' : 'Row Height'}
+                          {t('rowHeightLabel')}
                         </span>
                         <span className="text-[10px] text-zinc-400 font-mono ml-2">
-                          {rowHeight <= 36 ? (language === 'es' ? 'Compacta' : 'Compact') : rowHeight <= 54 ? (language === 'es' ? 'Estándar' : 'Standard') : (language === 'es' ? 'Espaciosa' : 'Spacious')}
+                          {rowHeight <= 36 ? t('densityCompact') : rowHeight <= 54 ? t('densityStandard') : t('densitySpacious')}
                         </span>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
+                        type="button"
                         onClick={() => handleRowHeightChange(DEFAULT_ROW_HEIGHT)}
+                        aria-label={t('rowHeightResetAria')}
                         className="text-[11px] text-zinc-400 hover:text-indigo-400 font-medium flex items-center gap-1 transition-colors cursor-pointer"
-                        title={language === 'es' ? 'Restablecer a 48px' : 'Reset to 48px'}
+                        title={t('rowHeightResetTitle')}
                       >
                         <RotateCcw className="w-3 h-3" />
                         <span>48px</span>
                       </button>
                       <button
+                        type="button"
                         onClick={() => setRowHeightOpen(false)}
+                        aria-label={t('closeRowHeightAria')}
                         className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors cursor-pointer"
-                        title={language === 'es' ? 'Cerrar' : 'Close'}
+                        title={t('close')}
                       >
                         <X className="w-3.5 h-3.5" />
                       </button>
@@ -1773,10 +1854,14 @@ export function WatchlistTable({
                   {/* Slider & Numeric Input */}
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-xs">
-                      <span className="text-zinc-400 font-medium">{language === 'es' ? 'Densidad vertical:' : 'Vertical density:'}</span>
+                      <label htmlFor="watchlist-row-height-number" className="text-zinc-400 font-medium">
+                        {t('verticalDensity')}
+                      </label>
                       <div className="flex items-center gap-1.5 bg-zinc-950 border border-zinc-800 rounded-lg px-2.5 py-1 focus-within:border-indigo-500/80 focus-within:ring-1 focus-within:ring-indigo-500">
                         <input
+                          id="watchlist-row-height-number"
                           type="number"
+                          aria-label={t('rowHeightNumberAria')}
                           min={MIN_ROW_HEIGHT}
                           max={MAX_ROW_HEIGHT}
                           value={rowHeight}
@@ -1794,6 +1879,7 @@ export function WatchlistTable({
 
                     <input
                       type="range"
+                      aria-label={t('rowHeightSliderAria')}
                       min={MIN_ROW_HEIGHT}
                       max={MAX_ROW_HEIGHT}
                       step={1}
@@ -1803,18 +1889,18 @@ export function WatchlistTable({
                     />
 
                     <div className="flex justify-between text-[10px] text-zinc-500 font-mono">
-                      <span>{MIN_ROW_HEIGHT}px ({language === 'es' ? 'Mín' : 'Min'})</span>
-                      <span>{DEFAULT_ROW_HEIGHT}px ({language === 'es' ? 'Defecto' : 'Default'})</span>
-                      <span>{MAX_ROW_HEIGHT}px ({language === 'es' ? 'Máx' : 'Max'})</span>
+                      <span>{MIN_ROW_HEIGHT}px ({t('minLabel')})</span>
+                      <span>{DEFAULT_ROW_HEIGHT}px ({t('defaultLabel')})</span>
+                      <span>{MAX_ROW_HEIGHT}px ({t('maxLabel')})</span>
                     </div>
                   </div>
 
                   {/* Preset Buttons */}
                   <div className="flex items-center gap-1.5">
                     {[
-                      { label: language === 'es' ? 'Compacto' : 'Compact', val: 34 },
-                      { label: language === 'es' ? 'Estándar' : 'Standard', val: 48 },
-                      { label: language === 'es' ? 'Espacioso' : 'Spacious', val: 64 },
+                      { label: t('densityCompact'), val: 34 },
+                      { label: t('densityStandard'), val: 48 },
+                      { label: t('densitySpacious'), val: 64 },
                     ].map((preset) => (
                       <button
                         key={preset.val}
@@ -1832,16 +1918,13 @@ export function WatchlistTable({
 
                   {/* Minimum Warning Notice */}
                   {rowHeight <= MIN_ROW_HEIGHT && (
-                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs animate-in fade-in duration-150">
+                    <div className="flex items-start gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/25 text-amber-300 text-xs animate-in fade-in motion-reduce:animate-none duration-150">
                       <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
                       <div className="leading-relaxed">
                         <span className="font-semibold text-amber-200">
-                          {/* Altura mínima alcanzada */}
-                          {language === 'es' ? 'Altura mínima alcanzada' : 'Minimum row height reached'} ({MIN_ROW_HEIGHT}px).
+                          {t('minRowHeightReached')} ({MIN_ROW_HEIGHT}px).
                         </span>{' '}
-                        {language === 'es'
-                          ? 'Valores menores están deshabilitados para evitar el solapamiento o recorte de controles interactivos, fechas y distintivos.'
-                          : 'Smaller values are disabled to avoid overlapping or clipping of interactive controls, dates, and badges.'}
+                        {t('minRowHeightDesc')}
                       </div>
                     </div>
                   )}
@@ -1850,7 +1933,7 @@ export function WatchlistTable({
                   <div className="pt-2 border-t border-zinc-800/80 space-y-1.5">
                     <div className="flex items-center justify-between">
                       <span className="text-[10px] font-semibold text-zinc-400 uppercase tracking-wider">
-                        {language === 'es' ? 'Vista previa en directo (2 filas)' : 'Live preview (2 rows)'}
+                        {t('livePreviewRows')}
                       </span>
                       <span className="text-[10px] text-zinc-500 font-mono">
                         {rowHeight}px
@@ -1861,10 +1944,10 @@ export function WatchlistTable({
                       <table className="w-full text-left text-xs text-zinc-300 table-fixed">
                         <thead className="bg-zinc-900/90 text-[10px] text-zinc-400 border-b border-zinc-800 uppercase tracking-wider">
                           <tr>
-                            <th className="py-1 px-2.5 w-[34%]">Ticker</th>
-                            <th className="py-1 px-2 text-right w-[24%]">{language === 'es' ? 'Precio' : 'Price'}</th>
+                            <th className="py-1 px-2.5 w-[34%]">{t('colTicker')}</th>
+                            <th className="py-1 px-2 text-right w-[24%]">{t('colPriceShort')}</th>
                             <th className="py-1 px-2 text-right w-[24%]">Var.</th>
-                            <th className="py-1 px-2 text-center w-[18%]">{language === 'es' ? 'Acciones' : 'Actions'}</th>
+                            <th className="py-1 px-2 text-center w-[18%]">{t('colActions')}</th>
                           </tr>
                         </thead>
                         <tbody className="divide-y divide-zinc-800/60 font-sans">
@@ -1961,10 +2044,10 @@ export function WatchlistTable({
                 bg-rose-500/5 text-zinc-500 border border-zinc-800
                 hover:bg-rose-500/10 hover:text-rose-400 hover:border-rose-500/30
                 disabled:opacity-30 disabled:cursor-not-allowed shrink-0"
-              title={language === 'es' ? 'Borrar todos los datos de la base de datos' : 'Wipe all data from the database'}
+              title={t('wipeDatabaseTooltip')}
             >
               <Trash2 className="w-4 h-4" />
-              <span className="hidden sm:inline">{language === 'es' ? 'Borrar BD' : 'Wipe DB'}</span>
+              <span className="hidden sm:inline">{t('wipeDb')}</span>
             </button>
           )}
 
@@ -1972,70 +2055,58 @@ export function WatchlistTable({
           <div className="relative" ref={settingsRef}>
             <button
               onClick={() => setSettingsOpen((prev) => !prev)}
-              aria-label={language === 'es' ? 'Personalizar barra de herramientas' : 'Customize toolbar'}
+              aria-label={t('customizeToolbarAria')}
               aria-expanded={settingsOpen}
               className={`h-9 w-9 inline-flex items-center justify-center rounded-lg text-xs font-medium transition-all shrink-0 border cursor-pointer ${
                 settingsOpen
                   ? 'bg-zinc-800 text-emerald-400 border-zinc-600 ring-1 ring-emerald-500/40'
                   : 'bg-zinc-800/90 text-zinc-300 border border-zinc-700 hover:bg-zinc-700 hover:text-white hover:border-zinc-600 shadow-sm'
               }`}
-              title={language === 'es' ? 'Personalizar botones de la barra de herramientas' : 'Customize toolbar buttons'}
+              title={t('customizeToolbarTooltip')}
             >
               <SlidersHorizontal className="w-4 h-4" />
             </button>
 
             {settingsOpen && (
               <div
-                className="absolute right-0 top-full mt-2 w-72 sm:w-80 rounded-xl bg-zinc-900 border border-zinc-800 shadow-2xl p-3.5 z-[100] animate-in fade-in zoom-in-95 duration-150"
+                className="absolute right-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-80 rounded-xl bg-zinc-900 border border-zinc-800 shadow-2xl p-3.5 z-[100] animate-in fade-in zoom-in-95 motion-reduce:animate-none duration-150"
               >
                 <div className="flex items-center justify-between pb-2.5 border-b border-zinc-800/80">
                   <div className="flex items-center gap-2">
                     <SlidersHorizontal className="w-3.5 h-3.5 text-emerald-400" />
                     <span className="text-xs font-semibold text-white tracking-tight">
-                      {language === 'es' ? 'Personalizar Barra' : 'Customize Toolbar'}
+                      {t('customizeToolbar')}
                     </span>
                   </div>
                   <button
+                    type="button"
                     onClick={() => setSettingsOpen(false)}
+                    aria-label={t('closeToolbarSettingsAria')}
                     className="p-1 rounded text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60 transition-colors cursor-pointer"
-                    title={language === 'es' ? 'Cerrar' : 'Close'}
+                    title={t('close')}
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
 
                 <p className="text-[11px] text-zinc-400 mt-2 mb-2 leading-relaxed">
-                  {language === 'es'
-                    ? 'Activa o desactiva las acciones visibles en la barra principal:'
-                    : 'Toggle visible action buttons in the main toolbar:'}
+                  {t('customizeToolbarDesc')}
                 </p>
 
                 <div className="space-y-1">
                   {TOOLBAR_ITEMS.map((item) => {
                     const isEnabled = toolbarConfig[item.key];
                     const Icon = item.icon;
-                    const itemLabel =
-                      language === 'es'
-                        ? item.label
-                        : item.key === 'updateQuotes'
-                        ? 'Refresh Quotes'
-                        : item.key === 'addInstrument'
-                        ? 'Add Instrument'
-                        : item.key === 'restoreColumns'
-                        ? 'Reset Columns'
-                        : item.key === 'rowHeight'
-                        ? 'Row Height'
-                        : item.key === 'exportBackup'
-                        ? 'Export / Backup'
-                        : item.key === 'importValues'
-                        ? 'Import Values'
-                        : 'Wipe Database';
+                    const itemLabel = t(item.labelKey);
 
                     return (
-                      <div
+                      <button
                         key={item.key}
+                        type="button"
+                        role="switch"
+                        aria-checked={isEnabled}
                         onClick={() => handleToggleToolbarAction(item.key)}
-                        className="flex items-center justify-between p-2 rounded-lg hover:bg-zinc-800/60 cursor-pointer select-none transition-colors group"
+                        className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-zinc-800/60 cursor-pointer select-none transition-colors group text-left"
                       >
                         <div className="flex items-center gap-2.5 min-w-0 pr-2">
                           <Icon className={`w-3.5 h-3.5 shrink-0 ${item.iconColor}`} />
@@ -2044,17 +2115,17 @@ export function WatchlistTable({
                           </span>
                         </div>
                         <div
-                          className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors duration-200 ease-in-out ${
+                          className={`relative inline-flex h-5 w-9 shrink-0 rounded-full border-2 border-transparent transition-colors motion-reduce:transition-none duration-200 ease-in-out ${
                             isEnabled ? 'bg-emerald-600' : 'bg-zinc-800 border border-zinc-700'
                           }`}
                         >
                           <span
-                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition duration-200 ease-in-out ${
+                            className={`pointer-events-none inline-block h-4 w-4 transform rounded-full bg-white shadow-md ring-0 transition motion-reduce:transition-none duration-200 ease-in-out ${
                               isEnabled ? 'translate-x-4' : 'translate-x-0'
                             }`}
                           />
                         </div>
-                      </div>
+                      </button>
                     );
                   })}
                 </div>
@@ -2063,10 +2134,10 @@ export function WatchlistTable({
                   <button
                     onClick={handleResetToolbarConfig}
                     className="text-[11px] text-zinc-400 hover:text-emerald-400 font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
-                    title={language === 'es' ? 'Restablecer visibilidad a los valores originales' : 'Reset toolbar visibility to default values'}
+                    title={t('resetToolbarTooltip')}
                   >
                     <RotateCcw className="w-3 h-3" />
-                    <span>{language === 'es' ? 'Restablecer por defecto' : 'Reset to defaults'}</span>
+                    <span>{t('resetDefaults')}</span>
                   </button>
                   <span className="text-[10px] text-zinc-600 font-mono">localStorage</span>
                 </div>
@@ -2135,7 +2206,7 @@ export function WatchlistTable({
                               ? 'opacity-100'
                               : 'opacity-0'
                           }`}
-                          title="Arrastra para redimensionar (doble clic para valor por defecto)"
+                          title={t('resizerTooltip')}
                         >
                           <div
                             className={`w-[2px] transition-all rounded-full ${
@@ -2185,7 +2256,9 @@ export function WatchlistTable({
                         width: `${cell.column.getSize()}px`,
                         height: `${rowHeight}px`,
                       }}
-                      className={`${cellPaddingClass} align-middle overflow-hidden`}
+                      className={`${cellPaddingClass} ${
+                        cell.column.id === 'actions' ? '!px-1.5' : ''
+                      } align-middle overflow-hidden`}
                     >
                       {flexRender(
                         cell.column.columnDef.cell,
@@ -2200,7 +2273,7 @@ export function WatchlistTable({
                       colSpan={row.getVisibleCells().length}
                       className="px-4 py-3.5 sm:px-6"
                     >
-                      <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3 shadow-lg animate-in fade-in-50 duration-150">
+                      <div className="rounded-xl border border-zinc-800 bg-zinc-950/70 p-4 space-y-3 shadow-lg animate-in fade-in-50 motion-reduce:animate-none duration-150">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-2.5">
                             <div className="w-7 h-7 rounded-lg bg-blue-500/10 border border-blue-500/20 flex items-center justify-center text-blue-400">
@@ -2208,7 +2281,7 @@ export function WatchlistTable({
                             </div>
                             <div>
                               <span className="text-xs font-semibold text-white">
-                                Descripción de la Empresa
+                                {t('companyNotesTitle')}
                               </span>
                               <span className="text-xs text-zinc-400 ml-2 font-mono">
                                 {row.original.user_ticker} · {row.original.company_name}
@@ -2216,9 +2289,11 @@ export function WatchlistTable({
                             </div>
                           </div>
                           <button
+                            type="button"
                             onClick={() => toggleDescription(ticker)}
+                            aria-label={t('closeNotesAria', { ticker })}
                             className="text-zinc-500 hover:text-zinc-300 p-1 rounded-lg hover:bg-zinc-800 transition"
-                            title="Cerrar panel de descripción"
+                            title={t('closeNotesTooltip')}
                           >
                             <X className="w-4 h-4" />
                           </button>
@@ -2226,24 +2301,21 @@ export function WatchlistTable({
 
                         <textarea
                           value={currentComment}
+                          aria-label={t('notesTextareaAria', { ticker })}
                           onChange={(e) =>
                             handleCommentChange(ticker, e.target.value)
                           }
-                          placeholder={
-                            language === 'es'
-                              ? `Escribe aquí la descripción, notas o tesis de inversión de ${row.original.company_name}...`
-                              : `Write description, notes, or investment thesis for ${row.original.company_name}...`
-                          }
+                          placeholder={t('notesPlaceholder', { company: row.original.company_name })}
                           rows={3}
                           className="w-full bg-zinc-900/90 border border-zinc-800 rounded-lg p-3 text-xs sm:text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-blue-500 focus:border-blue-500 transition-all font-sans leading-relaxed resize-y"
                         />
 
                         <div className="flex items-center justify-between text-xs pt-0.5">
                           <span className="text-zinc-500 text-[11px] font-mono">
-                            {currentComment.length} {language === 'es' ? 'caracteres' : 'characters'}
+                            {currentComment.length} {t('charactersLabel')}
                             {hasUnsavedChanges && (
                               <span className="ml-2 text-amber-400">
-                                • {language === 'es' ? 'Cambios sin guardar' : 'Unsaved changes'}
+                                • {t('unsavedChanges')}
                               </span>
                             )}
                           </span>
@@ -2252,7 +2324,7 @@ export function WatchlistTable({
                               onClick={() => toggleDescription(ticker)}
                               className="px-3 py-1.5 rounded-lg text-xs font-medium text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800 transition"
                             >
-                              {language === 'es' ? 'Cerrar' : 'Close'}
+                              {t('close')}
                             </button>
                             <button
                               onClick={() => handleSaveComment(row.original)}
@@ -2261,13 +2333,13 @@ export function WatchlistTable({
                             >
                               {savingCommentTicker === ticker ? (
                                 <>
-                                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                                  {language === 'es' ? 'Guardando...' : 'Saving...'}
+                                  <Loader2 className="w-3.5 h-3.5 animate-spin motion-reduce:animate-none" />
+                                  {t('saving')}
                                 </>
                               ) : (
                                 <>
                                   <Check className="w-3.5 h-3.5" />
-                                  {language === 'es' ? 'Guardar Descripción' : 'Save Description'}
+                                  {t('saveDescription')}
                                 </>
                               )}
                             </button>
@@ -2286,51 +2358,45 @@ export function WatchlistTable({
               <tr>
                 <td
                   colSpan={columns.length}
-                  className="py-16 text-center text-zinc-400"
+                  className="py-12 sm:py-16 px-4 text-center text-zinc-400"
                 >
                   {isAuthConfigured && !user && data.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center gap-3 max-w-sm mx-auto py-6">
+                    <div className="sticky left-4 sm:static flex flex-col items-center justify-center gap-3 max-w-[calc(100vw-3rem)] sm:max-w-sm mx-auto py-4">
                       <div className="w-12 h-12 rounded-2xl bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center text-emerald-400 shadow-sm">
                         <LogIn className="w-6 h-6" />
                       </div>
                       <p className="text-sm font-semibold text-white">
-                        {language === 'es' ? 'Inicia sesión para ver tu cartera' : 'Sign in to view your portfolio'}
+                        {t('signInPortfolioTitle')}
                       </p>
                       <p className="text-xs text-zinc-400 text-center leading-relaxed">
-                        {language === 'es'
-                          ? 'Accede con tu cuenta para visualizar tus posiciones, cotizaciones en tiempo real y métricas financieras.'
-                          : 'Log in with your account to view your positions, real-time quotes, and financial metrics.'}
+                        {t('signInPortfolioDesc')}
                       </p>
                       <button
                         onClick={() => openAuthModal()}
                         className="mt-2 inline-flex items-center gap-2 px-4 py-2 rounded-xl text-xs font-semibold text-zinc-950 bg-emerald-400 hover:bg-emerald-300 transition-colors shadow-lg shadow-emerald-950/40"
                       >
                         <LogIn className="w-4 h-4" />
-                        {language === 'es' ? 'Iniciar Sesión' : 'Sign In'}
+                        {t('signIn')}
                       </button>
                     </div>
                   ) : portfolioContext && !portfolioContext.isInitialized && data.length === 0 ? (
-                    <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
-                      <Loader2 className="w-8 h-8 text-emerald-400 animate-spin" />
+                    <div className="sticky left-4 sm:static flex flex-col items-center justify-center gap-2.5 max-w-[calc(100vw-3rem)] sm:max-w-sm mx-auto">
+                      <Loader2 className="w-8 h-8 text-emerald-400 animate-spin motion-reduce:animate-none" />
                       <p className="text-sm font-medium text-zinc-300">
-                        {language === 'es' ? 'Cargando tu lista de seguimiento...' : 'Loading your watchlist...'}
+                        {t('loadingWatchlist')}
                       </p>
                       <p className="text-xs text-zinc-500">
-                        {language === 'es' ? 'Sincronizando cotizaciones con el servidor...' : 'Syncing quotes with server...'}
+                        {t('syncingQuotes')}
                       </p>
                     </div>
                   ) : (
-                    <div className="flex flex-col items-center justify-center gap-2.5 max-w-sm mx-auto">
+                    <div className="sticky left-4 sm:static flex flex-col items-center justify-center gap-2.5 max-w-[calc(100vw-3rem)] sm:max-w-sm mx-auto">
                       <Info className="w-8 h-8 text-zinc-600" />
                       <p className="text-sm font-medium text-zinc-300">
-                        {data.length === 0
-                          ? (language === 'es' ? 'La lista de seguimiento está vacía.' : 'The watchlist is empty.')
-                          : (language === 'es' ? 'No se encontraron valores con los filtros actuales.' : 'No instruments found with current filters.')}
+                        {data.length === 0 ? t('emptyWatchlist') : t('emptyFilters')}
                       </p>
                       <p className="text-xs text-zinc-500">
-                        {data.length === 0
-                          ? (language === 'es' ? 'Añade valores manualmente o importa un archivo CSV/Excel.' : 'Add instruments manually or import a CSV/Excel file.')
-                          : (language === 'es' ? 'Prueba a cambiar los criterios de búsqueda o el filtro de mercado/divisa.' : 'Try changing your search criteria or the market/currency filter.')}
+                        {data.length === 0 ? t('emptyWatchlistHint') : t('emptyFiltersHint')}
                       </p>
                       {data.length === 0 && onAddInstrument && (
                         <button
@@ -2338,7 +2404,7 @@ export function WatchlistTable({
                           className="mt-3 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-500 transition-colors shadow-lg shadow-emerald-950/40"
                         >
                           <PlusCircle className="w-4 h-4" />
-                          {language === 'es' ? 'Añadir Primer Valor' : 'Add First Instrument'}
+                          {t('addFirstInstrument')}
                         </button>
                       )}
                     </div>
@@ -2360,23 +2426,21 @@ export function WatchlistTable({
                 tabIndex={0}
                 role="button"
                 className="group cursor-pointer border-t-2 border-dashed border-zinc-800/80 bg-zinc-950/30 hover:bg-emerald-500/[0.07] hover:border-emerald-500/30 transition-all select-none focus:outline-none focus:bg-emerald-500/[0.09]"
-                title={language === 'es' ? "Añadir un nuevo valor manualmente al watchlist" : "Add a new instrument manually to the watchlist"}
+                title={t('addNewInstrumentRowTitle')}
               >
                 <td
                   colSpan={columns.length}
                   className="py-3 px-4 text-left"
                 >
                   <div className="flex items-center gap-3">
-                    <span className="w-6 h-6 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center group-hover:bg-emerald-500/20 group-hover:border-emerald-500/40 group-hover:scale-105 transition-all text-emerald-400 shrink-0">
+                    <span className="w-6 h-6 rounded-lg bg-emerald-500/10 border border-emerald-500/20 flex items-center justify-center group-hover:bg-emerald-500/20 group-hover:border-emerald-500/40 group-hover:scale-105 motion-reduce:group-hover:scale-100 transition-all text-emerald-400 shrink-0">
                       <PlusCircle className="w-3.5 h-3.5" />
                     </span>
                     <span className="text-xs font-semibold text-emerald-400 group-hover:text-emerald-300 transition-colors">
-                      {language === 'es' ? 'Añadir un nuevo valor' : 'Add new instrument'}
+                      {t('addNewInstrumentRow')}
                     </span>
                     <span className="hidden sm:inline text-[11px] text-zinc-500 group-hover:text-zinc-400 transition-colors">
-                      {language === 'es'
-                        ? '— Haz clic aquí para registrar un instrumento o cotización manualmente'
-                        : '— Click here to manually register an instrument or quote'}
+                      {t('addNewInstrumentRowHint')}
                     </span>
                   </div>
                 </td>
@@ -2390,9 +2454,9 @@ export function WatchlistTable({
       {batchRefreshing && (
         <div className="absolute inset-0 bg-zinc-950/20 rounded-xl flex items-center justify-center pointer-events-none z-10">
           <div className="flex items-center gap-3 bg-zinc-900/95 border border-zinc-700 rounded-xl px-5 py-3 shadow-2xl">
-            <Loader2 className="w-5 h-5 animate-spin text-emerald-400" />
+            <Loader2 className="w-5 h-5 animate-spin motion-reduce:animate-none text-emerald-400" />
             <span className="text-sm text-zinc-200 font-medium">
-              {language === 'es' ? 'Actualizando Yahoo Finance...' : 'Updating Yahoo Finance...'}
+              {t('updatingYahoo')}
             </span>
           </div>
         </div>
@@ -2408,7 +2472,7 @@ function WatchlistRefreshButton({ appConfig, batchRefreshing, isEmpty, onRefresh
   onRefresh: (onProgress?: (event: RefreshProgressEvent) => void) => Promise<void>;
 }) {
   const refresh = usePortfolioRefreshOptional();
-  const { language } = useLanguage();
+  const { t } = useLanguage();
   const config = refresh?.config ?? appConfig;
   const isAnyRefreshing = batchRefreshing || (refresh ? refresh.isRefreshing : Boolean(config?.is_refreshing));
   const currentBatch = refresh?.batchProgress?.currentBatch ?? config?.current_batch ?? 0;
@@ -2419,25 +2483,26 @@ function WatchlistRefreshButton({ appConfig, batchRefreshing, isEmpty, onRefresh
     <button
       onClick={() => onRefresh(refresh?.applyStreamEvent)}
       disabled={isAnyRefreshing || isEmpty}
+      aria-label={t('refreshQuotes')}
       className="h-9 inline-flex items-center gap-1.5 px-3 rounded-lg text-xs font-medium transition-all
         bg-emerald-500/10 text-emerald-400 border border-emerald-500/20
         hover:bg-emerald-500/20 hover:text-emerald-300 hover:border-emerald-500/40
         disabled:opacity-40 disabled:cursor-not-allowed shrink-0"
-      title={language === 'es' ? 'Actualizar todas las cotizaciones y precios de análisis desde Yahoo Finance' : 'Refresh all quotes and analysis prices from Yahoo Finance'}
+      title={t('refreshQuotesTooltip')}
     >
       {isAnyRefreshing ? (
         <>
-          <Loader2 className="w-4 h-4 animate-spin text-amber-400" />
+          <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none text-amber-400" />
           <span className="hidden sm:inline text-amber-300">
             {currentBatch > 0 && totalBatches > 0
-              ? `${language === 'es' ? 'Actualizando' : 'Updating'} ${currentBatch}/${totalBatches} (${processed}/${total})...`
-              : `${language === 'es' ? 'Actualizando...' : 'Refreshing...'}`}
+              ? t('updatingProgress', { current: currentBatch, total: totalBatches, processed, symbols: total })
+              : t('refreshing')}
           </span>
         </>
       ) : (
         <>
           <RefreshCw className="w-4 h-4" />
-          <span className="hidden sm:inline">{language === 'es' ? 'Actualizar Cotizaciones' : 'Refresh Quotes'}</span>
+          <span className="hidden sm:inline">{t('refreshQuotes')}</span>
         </>
       )}
     </button>
