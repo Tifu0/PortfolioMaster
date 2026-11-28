@@ -39,12 +39,7 @@ def wipe_database(db_path: Optional[str] = None):
     conn.close()
 
 
-def upsert_instrument(instrument: Instrument, db_path: Optional[str] = None):
-    """Insert or update an instrument by user_ticker."""
-    conn = get_connection(db_path)
-    cursor = conn.cursor()
-    cursor.execute(
-        """
+_UPSERT_INSTRUMENT_SQL = """
         INSERT INTO instruments (
             user_ticker, provider_symbol, exchange, currency, company_name,
             analysis_date, analysis_reference_price, start_of_year_date, start_of_year_price,
@@ -64,24 +59,55 @@ def upsert_instrument(instrument: Instrument, db_path: Optional[str] = None):
             comment = excluded.comment,
             active = excluded.active,
             updated_at = CURRENT_TIMESTAMP
-        """,
-        (
-            instrument.user_ticker,
-            instrument.provider_symbol,
-            _exchange_value(instrument.exchange),
-            instrument.currency,
-            instrument.company_name,
-            _sql_value(instrument.analysis_date),
-            _sql_value(instrument.analysis_reference_price),
-            _sql_value(instrument.start_of_year_date),
-            _sql_value(instrument.start_of_year_price),
-            _sql_value(instrument.target_price),
-            instrument.comment,
-            int(instrument.active),
-        ),
+        """
+
+
+def _instrument_params(instrument: Instrument) -> tuple:
+    return (
+        instrument.user_ticker,
+        instrument.provider_symbol,
+        _exchange_value(instrument.exchange),
+        instrument.currency,
+        instrument.company_name,
+        _sql_value(instrument.analysis_date),
+        _sql_value(instrument.analysis_reference_price),
+        _sql_value(instrument.start_of_year_date),
+        _sql_value(instrument.start_of_year_price),
+        _sql_value(instrument.target_price),
+        instrument.comment,
+        int(instrument.active),
     )
-    conn.commit()
-    conn.close()
+
+
+def upsert_instrument(instrument: Instrument, db_path: Optional[str] = None):
+    """Insert or update an instrument by user_ticker."""
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.execute(_UPSERT_INSTRUMENT_SQL, _instrument_params(instrument))
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def upsert_instruments_batch(instruments: List[Instrument], db_path: Optional[str] = None) -> int:
+    """Insert or update a batch of instruments in a single SQLite transaction."""
+    if not instruments:
+        return 0
+    conn = get_connection(db_path)
+    try:
+        cursor = conn.cursor()
+        cursor.executemany(
+            _UPSERT_INSTRUMENT_SQL,
+            [_instrument_params(inst) for inst in instruments],
+        )
+        conn.commit()
+        return len(instruments)
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def update_instrument_by_id(instrument: Instrument, db_path: Optional[str] = None):
@@ -196,6 +222,69 @@ def get_instrument_by_ticker(ticker: str, db_path: Optional[str] = None) -> Inst
     return None
 
 
+def _parse_quote_status(raw_status) -> QuoteStatus:
+    try:
+        if raw_status is None:
+            return QuoteStatus.UNAVAILABLE
+        if isinstance(raw_status, int) or (isinstance(raw_status, str) and raw_status.isdigit()):
+            return QuoteStatus(int(raw_status))
+        if str(raw_status) in QuoteStatus.__members__:
+            return QuoteStatus[str(raw_status)]
+    except (KeyError, ValueError):
+        pass
+    return QuoteStatus.UNAVAILABLE
+
+
+def get_all_instruments_with_quotes(
+    include_inactive: bool = False, db_path: Optional[str] = None
+) -> List[tuple[Instrument, Optional[Quote]]]:
+    """Retrieve all instruments paired with their latest quotes in a single LEFT JOIN query."""
+    conn = get_connection(db_path)
+    try:
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        sql = """
+            SELECT
+                i.*,
+                q.id AS q_id,
+                q.instrument_id AS q_instrument_id,
+                q.price AS q_price,
+                q.previous_close AS q_previous_close,
+                q.quote_timestamp AS q_quote_timestamp,
+                q.fetched_at AS q_fetched_at,
+                q.provider AS q_provider,
+                q.status AS q_status,
+                q.error_message AS q_error_message
+            FROM instruments i
+            LEFT JOIN quotes q ON q.instrument_id = i.id
+        """
+        if not include_inactive:
+            sql += " WHERE i.active = 1"
+        cursor.execute(sql)
+        rows = cursor.fetchall()
+    finally:
+        conn.close()
+
+    results: List[tuple[Instrument, Optional[Quote]]] = []
+    for row in rows:
+        inst = _row_to_instrument(row)
+        quote: Optional[Quote] = None
+        if row["q_id"] is not None:
+            quote = Quote(
+                id=row["q_id"],
+                instrument_id=row["q_instrument_id"],
+                price=_safe_decimal(row["q_price"]),
+                previous_close=_safe_decimal(row["q_previous_close"]),
+                quote_timestamp=_parse_datetime(row["q_quote_timestamp"]),
+                fetched_at=_parse_datetime(row["q_fetched_at"]),
+                provider=row["q_provider"] or "",
+                status=_parse_quote_status(row["q_status"]),
+                error_message=row["q_error_message"],
+            )
+        results.append((inst, quote))
+    return results
+
+
 def get_quote_by_instrument_id(instrument_id: int, db_path: Optional[str] = None) -> Quote | None:
     """Retrieve the latest quote for an instrument by instrument_id."""
     if not instrument_id:
@@ -209,19 +298,6 @@ def get_quote_by_instrument_id(instrument_id: int, db_path: Optional[str] = None
     if not row:
         return None
 
-    try:
-        raw_status = row["status"]
-        if raw_status is None:
-            status_enum = QuoteStatus.UNAVAILABLE
-        elif isinstance(raw_status, int) or (isinstance(raw_status, str) and raw_status.isdigit()):
-            status_enum = QuoteStatus(int(raw_status))
-        elif str(raw_status) in QuoteStatus.__members__:
-            status_enum = QuoteStatus[str(raw_status)]
-        else:
-            status_enum = QuoteStatus.UNAVAILABLE
-    except (KeyError, ValueError):
-        status_enum = QuoteStatus.UNAVAILABLE
-
     return Quote(
         id=row["id"],
         instrument_id=row["instrument_id"],
@@ -230,7 +306,7 @@ def get_quote_by_instrument_id(instrument_id: int, db_path: Optional[str] = None
         quote_timestamp=_parse_datetime(row["quote_timestamp"]),
         fetched_at=_parse_datetime(row["fetched_at"]),
         provider=row["provider"] or "",
-        status=status_enum,
+        status=_parse_quote_status(row["status"]),
         error_message=row["error_message"],
     )
 

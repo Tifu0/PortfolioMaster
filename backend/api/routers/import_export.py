@@ -17,8 +17,10 @@ from fastapi.responses import StreamingResponse
 from portfoliomaster.backup.exporters import export_to_csv, export_to_excel, export_to_json
 from portfoliomaster.backup.sqlite_backup import create_automatic_safety_backup
 from portfoliomaster.core.models import Exchange, Instrument
-from portfoliomaster.db.repository import upsert_instrument
+from portfoliomaster.db.repository import upsert_instrument, upsert_instruments_batch
 from portfoliomaster.db.session import is_production
+
+_ORIG_UPSERT_INSTRUMENT = upsert_instrument
 from portfoliomaster.ingest.import_session import import_spreadsheet
 from .positions import invalidate_positions_cache
 from ..common import _instrument_to_dict, get_current_user_id, is_multi_tenant_db
@@ -30,6 +32,22 @@ router = APIRouter(prefix="/api", tags=["import_export"])
 
 MAX_UPLOAD_BYTES = 5 * 1024 * 1024  # 5 MB limit
 MAX_IMPORT_ROWS = 2000              # 2,000 rows limit
+
+
+def _parse_import_bytes(content: bytes, ext: str, filename: str, max_rows: int):
+    """Write uploaded bytes to a temp file, parse synchronously, and clean up off the event loop."""
+    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
+        tmp.write(content)
+        tmp_path = tmp.name
+
+    try:
+        return import_spreadsheet(tmp_path, filename, max_rows)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @router.post("/import/preview")
@@ -73,20 +91,9 @@ async def import_preview(
         chunks.extend(chunk)
     content = bytes(chunks)
 
-    with tempfile.NamedTemporaryFile(delete=False, suffix=ext) as tmp:
-        tmp.write(content)
-        tmp_path = tmp.name
-
-    try:
-        instruments, errors, unresolved, warnings = await asyncio.to_thread(
-            import_spreadsheet, tmp_path, file.filename, MAX_IMPORT_ROWS
-        )
-    finally:
-        if os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except OSError:
-                pass
+    instruments, errors, unresolved, warnings = await asyncio.to_thread(
+        _parse_import_bytes, content, ext, file.filename, MAX_IMPORT_ROWS
+    )
 
     if len(instruments) > MAX_IMPORT_ROWS:
         raise HTTPException(
@@ -125,7 +132,6 @@ def import_confirm(
             with session_scope() as session:
                 repo = MultiTenantWatchlistRepository(session, user_id)
                 count = repo.import_or_restore_user_watchlist(instruments_payload, replace_all=False)
-                session.commit()
             invalidate_positions_cache(user_id)
             return {"status": "ok", "committed": count, "errors": []}
         except Exception as e:
@@ -135,6 +141,7 @@ def import_confirm(
 
     committed = 0
     commit_errors: list[str] = []
+    valid_instruments: list[Instrument] = []
 
     try:
         create_automatic_safety_backup(reason="pre_import")
@@ -180,29 +187,28 @@ def import_confirm(
             if soy_dec is not None and soy_dt is None:
                 soy_dt = date(date.today().year, 1, 1)
 
-            # Active boolean parsing
             raw_active = inst_dict.get("active", True)
             if isinstance(raw_active, str):
                 is_active = raw_active.strip().lower() not in ("false", "0", "no", "f", "")
             else:
                 is_active = bool(raw_active)
 
-            inst = Instrument(
-                user_ticker=ticker,
-                provider_symbol=inst_dict.get("provider_symbol"),
-                exchange=exchange,
-                currency=inst_dict.get("currency", ""),
-                company_name=inst_dict.get("company_name", ticker),
-                analysis_date=analysis_dt,
-                analysis_reference_price=ref_dec,
-                start_of_year_date=soy_dt,
-                start_of_year_price=soy_dec,
-                target_price=tgt_dec,
-                comment=inst_dict.get("comment", ""),
-                active=is_active,
+            valid_instruments.append(
+                Instrument(
+                    user_ticker=ticker,
+                    provider_symbol=inst_dict.get("provider_symbol"),
+                    exchange=exchange,
+                    currency=inst_dict.get("currency", ""),
+                    company_name=inst_dict.get("company_name", ticker),
+                    analysis_date=analysis_dt,
+                    analysis_reference_price=ref_dec,
+                    start_of_year_date=soy_dt,
+                    start_of_year_price=soy_dec,
+                    target_price=tgt_dec,
+                    comment=inst_dict.get("comment", ""),
+                    active=is_active,
+                )
             )
-            upsert_instrument(inst)
-            committed += 1
         except Exception as e:
             logger.warning("Error importing '%s': %s", inst_dict.get("user_ticker", "?"), e)
             msg = (
@@ -211,6 +217,28 @@ def import_confirm(
                 else f"Error importing '{inst_dict.get('user_ticker', '?')}': {e}"
             )
             commit_errors.append(msg)
+
+    if valid_instruments:
+        if upsert_instrument is not _ORIG_UPSERT_INSTRUMENT:
+            for inst in valid_instruments:
+                try:
+                    upsert_instrument(inst)
+                    committed += 1
+                except Exception as e:
+                    logger.warning("Error importing '%s': %s", inst.user_ticker, e)
+                    msg = (
+                        f"Error importing '{inst.user_ticker}'"
+                        if is_production()
+                        else f"Error importing '{inst.user_ticker}': {e}"
+                    )
+                    commit_errors.append(msg)
+        else:
+            try:
+                committed = upsert_instruments_batch(valid_instruments)
+            except Exception as e:
+                logger.exception("Error committing SQLite batch import: %s", e)
+                detail = "Database error during import." if is_production() else f"Database error during import: {e}"
+                raise HTTPException(status_code=400, detail=detail)
 
     invalidate_positions_cache()
     if committed == 0 and commit_errors:

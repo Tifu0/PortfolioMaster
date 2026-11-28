@@ -2,7 +2,8 @@ import inspect
 import concurrent.futures
 import logging
 import math
-from datetime import datetime, date, timedelta
+import threading
+from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import os
 import tempfile
@@ -44,6 +45,7 @@ try:
     import time
     import yfinance.data as _yd
 
+    _CRUMB_LOCK = threading.Lock()
     _CRUMB_RATE_LIMITED_UNTIL = time.time() + 86400.0 if os.environ.get("RENDER") else 0.0
     _orig_get_cookie_and_crumb = _yd.YfData._get_cookie_and_crumb
 
@@ -58,7 +60,9 @@ try:
     def _resilient_get_cookie_and_crumb(self, timeout=30):
         global _CRUMB_RATE_LIMITED_UNTIL
         now = time.time()
-        if now < _CRUMB_RATE_LIMITED_UNTIL:
+        with _CRUMB_LOCK:
+            rate_limited_until = _CRUMB_RATE_LIMITED_UNTIL
+        if now < rate_limited_until:
             return None, self._cookie_strategy
 
         crumb_timeout = min(timeout, 2)
@@ -66,17 +70,20 @@ try:
             crumb, strategy = _orig_get_cookie_and_crumb(self, timeout=crumb_timeout)
             if crumb is not None and not _sanitize_crumb_val(crumb):
                 self._crumb = None
-                _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
+                with _CRUMB_LOCK:
+                    _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
                 return None, strategy
             return crumb, strategy
         except _yd.YFRateLimitError:
             self._crumb = None
-            _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
+            with _CRUMB_LOCK:
+                _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
             return None, self._cookie_strategy
         except Exception as e:
             self._crumb = None
             if "429" in str(e) or "Too Many Requests" in str(e) or "timeout" in str(e).lower():
-                _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
+                with _CRUMB_LOCK:
+                    _CRUMB_RATE_LIMITED_UNTIL = time.time() + 900.0
                 return None, self._cookie_strategy
             raise
 
@@ -93,13 +100,13 @@ from ..core.config import (
     PREFIX_TO_YAHOO_SUFFIX,
 )
 
-_RESILIENT_SESSION: Optional[requests.Session] = None
+_THREAD_LOCAL = threading.local()
 
 
 def get_resilient_session() -> requests.Session:
-    """Singleton requests session with retry strategy and browser user agent for Yahoo Finance."""
-    global _RESILIENT_SESSION
-    if _RESILIENT_SESSION is None:
+    """Thread-local requests session with retry strategy and browser user agent for Yahoo Finance."""
+    session = getattr(_THREAD_LOCAL, "resilient_session", None)
+    if session is None:
         session = requests.Session()
         retry_strategy = Retry(
             total=3,
@@ -118,8 +125,8 @@ def get_resilient_session() -> requests.Session:
                 "Chrome/124.0.0.0 Safari/537.36"
             )
         })
-        _RESILIENT_SESSION = session
-    return _RESILIENT_SESSION
+        _THREAD_LOCAL.resilient_session = session
+    return session
 
 
 def _create_ticker(symbol: str, session: Optional[requests.Session] = None) -> yf.Ticker:
@@ -341,9 +348,11 @@ class YahooAdapter(MarketDataProvider):
                         rm_time = meta.get("regularMarketTime")
                         if rm_time:
                             if isinstance(rm_time, datetime):
-                                quote_timestamp = rm_time
+                                quote_timestamp = (
+                                    rm_time if rm_time.tzinfo else rm_time.replace(tzinfo=timezone.utc)
+                                )
                             elif isinstance(rm_time, (int, float)):
-                                quote_timestamp = datetime.fromtimestamp(rm_time)
+                                quote_timestamp = datetime.fromtimestamp(rm_time, tz=timezone.utc)
                 except Exception as meta_err:
                     self.logger.debug(f"Metadata extract failed: {meta_err}")
 
@@ -357,11 +366,12 @@ class YahooAdapter(MarketDataProvider):
                 qt = _fi_get(fi, "last_update", "lastUpdate")
                 if qt is not None:
                     if hasattr(qt, "to_pydatetime"):
-                        quote_timestamp = qt.to_pydatetime()
+                        py_dt = qt.to_pydatetime()
+                        quote_timestamp = py_dt if py_dt.tzinfo else py_dt.replace(tzinfo=timezone.utc)
                     elif isinstance(qt, (int, float)):
-                        quote_timestamp = datetime.fromtimestamp(qt)
+                        quote_timestamp = datetime.fromtimestamp(qt, tz=timezone.utc)
                     elif isinstance(qt, datetime):
-                        quote_timestamp = qt
+                        quote_timestamp = qt if qt.tzinfo else qt.replace(tzinfo=timezone.utc)
         except Exception as e:
             self.logger.debug(f"fast_info falló: {e}")
 
@@ -500,14 +510,16 @@ class YahooAdapter(MarketDataProvider):
                 freshness_config = FRESHNESS_PER_EXCHANGE.get(
                     exchange, FreshnessConfig()
                 )
-                quote_ts = data["quote_timestamp"] or datetime.now()
+                quote_ts = data["quote_timestamp"] or datetime.now(timezone.utc)
+                if quote_ts.tzinfo is None:
+                    quote_ts = quote_ts.replace(tzinfo=timezone.utc)
                 status = freshness_config.freshness_state_naive(quote_ts)
 
                 results[symbol] = Quote(
                     price=data["price"],
                     previous_close=data["previous_close"],
                     quote_timestamp=quote_ts,
-                    fetched_at=datetime.now(),
+                    fetched_at=datetime.now(timezone.utc),
                     provider="Yahoo",
                     status=status,
                 )

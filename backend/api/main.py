@@ -73,6 +73,45 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+def _has_active_instruments() -> bool:
+    """Synchronously check whether at least one active instrument exists in DB."""
+    if is_multi_tenant_db():
+        from portfoliomaster.db.session import session_scope
+        from portfoliomaster.db.schema import UserInstrument
+        from sqlalchemy import func, select
+        try:
+            with session_scope() as session:
+                cnt = session.scalar(
+                    select(func.count()).select_from(UserInstrument).where(UserInstrument.active.is_(True))
+                )
+                return bool(cnt and cnt > 0)
+        except Exception as ex:
+            logger.warning("[AutoRefresh] Could not query active instruments: %s", ex)
+            return False
+    instruments = get_all_instruments()
+    return bool(instruments)
+
+
+def _verify_startup_db() -> None:
+    """Verify database readiness on startup outside the async event loop."""
+    if is_multi_tenant_db():
+        from portfoliomaster.db.session import session_scope
+        from sqlalchemy import text
+        try:
+            with session_scope() as session:
+                session.execute(text("SELECT 1"))
+            logger.info("[Startup] Connected successfully to PostgreSQL database.")
+        except Exception as e:
+            logger.error("[Startup] Failed to connect to PostgreSQL database: %s", e)
+            if os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod") or os.environ.get("RENDER", "").lower() == "true":
+                raise
+    else:
+        try:
+            init_db()
+        except Exception as e:
+            logger.warning("[Startup] Local SQLite init_db skipped or non-fatal: %s", e)
+
+
 async def background_refresh_loop():
     """Background worker that periodically refreshes market data quotes."""
     await asyncio.sleep(2)
@@ -103,22 +142,7 @@ async def background_refresh_loop():
                 await asyncio.sleep(60)
                 continue
 
-            has_instruments = False
-            if is_multi_tenant_db():
-                from portfoliomaster.db.session import session_scope
-                from portfoliomaster.db.schema import UserInstrument
-                from sqlalchemy import func, select
-                try:
-                    with session_scope() as session:
-                        cnt = session.scalar(
-                            select(func.count()).select_from(UserInstrument).where(UserInstrument.active.is_(True))
-                        )
-                        has_instruments = bool(cnt and cnt > 0)
-                except Exception as ex:
-                    logger.warning("[AutoRefresh] Could not query active instruments: %s", ex)
-            else:
-                instruments = get_all_instruments()
-                has_instruments = bool(instruments)
+            has_instruments = await asyncio.to_thread(_has_active_instruments)
 
             if not has_instruments:
                 logger.info("[AutoRefresh] No active instruments registered. Skipping scheduled refresh.")
@@ -142,22 +166,7 @@ async def background_refresh_loop():
 async def lifespan(application: FastAPI):
     """Initialise database on startup and run background refresh worker."""
     validate_auth_configuration()
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from sqlalchemy import text
-        try:
-            with session_scope() as session:
-                session.execute(text("SELECT 1"))
-            logger.info("[Startup] Connected successfully to PostgreSQL database.")
-        except Exception as e:
-            logger.error("[Startup] Failed to connect to PostgreSQL database: %s", e)
-            if os.environ.get("ENVIRONMENT", "").lower() in ("production", "prod") or os.environ.get("RENDER", "").lower() == "true":
-                raise
-    else:
-        try:
-            init_db()
-        except Exception as e:
-            logger.warning("[Startup] Local SQLite init_db skipped or non-fatal: %s", e)
+    await asyncio.to_thread(_verify_startup_db)
 
     enable_bg = os.environ.get("ENABLE_BACKGROUND_REFRESH", "true").lower() not in ("false", "0", "no")
     task = None

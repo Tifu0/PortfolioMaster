@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from contextlib import contextmanager
 from typing import Generator, Optional
 
@@ -14,6 +15,8 @@ from .schema import Base
 
 _ENGINE: Optional[Engine] = None
 _SESSION_FACTORY: Optional[sessionmaker[Session]] = None
+_ENGINE_LOCK = threading.Lock()
+_SESSION_FACTORY_LOCK = threading.Lock()
 
 
 def is_production() -> bool:
@@ -68,9 +71,11 @@ def get_engine(db_url: Optional[str] = None, echo: bool = False) -> Engine:
     """Get or create singleton SQLAlchemy Engine with driver-safe connect_args."""
     global _ENGINE
     url = normalize_database_url(db_url) if db_url else get_database_url()
-    
-    # Always create new engine if custom URL is provided or if none exists
-    if db_url or _ENGINE is None:
+
+    if not db_url and _ENGINE is not None:
+        return _ENGINE
+
+    def _build_engine() -> Engine:
         is_sqlite = url.startswith("sqlite")
         connect_args = {"check_same_thread": False} if is_sqlite else psycopg_connect_args(url)
         engine_kwargs: dict = {
@@ -90,23 +95,29 @@ def get_engine(db_url: Optional[str] = None, echo: bool = False) -> Engine:
             max_overflow = os.environ.get("DB_MAX_OVERFLOW")
             if max_overflow:
                 engine_kwargs["max_overflow"] = int(max_overflow)
+        return create_engine(url, **engine_kwargs)
 
-        engine = create_engine(url, **engine_kwargs)
-        if not db_url:
-            _ENGINE = engine
-        return engine
-    return _ENGINE
+    if db_url:
+        return _build_engine()
+
+    with _ENGINE_LOCK:
+        if _ENGINE is None:
+            _ENGINE = _build_engine()
+        return _ENGINE
 
 
 def get_session_factory(engine: Optional[Engine] = None) -> sessionmaker[Session]:
-    """Get or create sessionmaker factory."""
+    """Get or create sessionmaker factory (thread-safe singleton)."""
     global _SESSION_FACTORY
-    eng = engine or get_engine()
-    if engine or _SESSION_FACTORY is None:
-        factory = sessionmaker(bind=eng, autoflush=False, autocommit=False, expire_on_commit=False)
-        if not engine:
-            _SESSION_FACTORY = factory
-        return factory
+    if engine is not None:
+        return sessionmaker(bind=engine, autoflush=False, autocommit=False, expire_on_commit=False)
+    if _SESSION_FACTORY is None:
+        eng = get_engine()
+        with _SESSION_FACTORY_LOCK:
+            if _SESSION_FACTORY is None:
+                _SESSION_FACTORY = sessionmaker(
+                    bind=eng, autoflush=False, autocommit=False, expire_on_commit=False
+                )
     return _SESSION_FACTORY
 
 

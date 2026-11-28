@@ -22,8 +22,7 @@ from ..core.calculations import (
 from ..core.models import Exchange, Instrument, Quote, QuoteStatus
 from ..db.connection import get_connection
 from ..db.repository import (
-    get_all_instruments,
-    get_quote_by_instrument_id,
+    get_all_instruments_with_quotes,
 )
 from .sqlite_backup import create_automatic_safety_backup, get_target_db_path
 
@@ -62,14 +61,13 @@ def _sanitize_formula(val: Any) -> Any:
 
 def get_export_records(db_path: Optional[str] = None) -> List[dict]:
     """
-    Retrieve all instruments with latest quotes and server-computed variations.
+    Retrieve all instruments with latest quotes and server-computed variations in a single query.
     Scoped explicitly to db_path when provided.
     """
-    instruments = get_all_instruments(include_inactive=False, db_path=db_path)
+    pairs = get_all_instruments_with_quotes(include_inactive=False, db_path=db_path)
 
     records = []
-    for inst in instruments:
-        quote = get_quote_by_instrument_id(inst.id, db_path=db_path) if inst.id else None
+    for inst, quote in pairs:
 
         # Calculate derived metrics
         daily_res = daily_variation(quote.price, quote.previous_close) if quote else None

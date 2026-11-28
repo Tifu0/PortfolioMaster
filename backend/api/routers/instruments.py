@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import math
 import uuid
@@ -191,7 +192,7 @@ def list_instruments(
 
         with session_scope() as session:
             repo = MultiTenantWatchlistRepository(session, user_id)
-            instruments = repo.get_instruments(active_only=True)
+            instruments = repo.get_instruments(active_only=True, include_quote=False)
             return {
                 "instruments": [_instrument_to_dict(inst) for inst in instruments],
                 "count": len(instruments),
@@ -491,7 +492,7 @@ def create_instrument_endpoint(
 
         with session_scope() as session:
             repo = MultiTenantWatchlistRepository(session, user_id)
-            existing = repo.get_instrument_by_ticker(ticker)
+            existing = repo.get_instrument_by_ticker(ticker, include_quote=False)
             if existing:
                 raise HTTPException(
                     status_code=400,
@@ -538,7 +539,10 @@ def create_instrument_endpoint(
 
             instrument = _instrument_to_dict(inst_created)
 
-        invalidate_positions_cache(user_id)
+        if fetched_quote is not None and manual_price is None:
+            invalidate_positions_cache()
+        else:
+            invalidate_positions_cache(user_id)
         return {"status": "ok", "instrument": instrument, "quote": quote_info}
 
     existing = get_instrument_by_ticker(ticker)
@@ -579,8 +583,8 @@ def create_instrument_endpoint(
                 if data.manual_previous_close and data.manual_previous_close > 0
                 else None
             ),
-            quote_timestamp=datetime.now(),
-            fetched_at=datetime.now(),
+            quote_timestamp=datetime.now(timezone.utc),
+            fetched_at=datetime.now(timezone.utc),
             provider="Manual",
             status=QuoteStatus.FRESH,
         )
@@ -645,7 +649,7 @@ def update_instrument_endpoint(
 
         with session_scope() as session:
             repo = MultiTenantWatchlistRepository(session, user_id)
-            inst = repo.get_instrument_by_ticker(ticker)
+            inst = repo.get_instrument_by_ticker(ticker, include_quote=False)
             if not inst:
                 raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
 
@@ -653,7 +657,7 @@ def update_instrument_endpoint(
             new_ticker_val = None
             if "new_ticker" in fields_set and data.new_ticker and data.new_ticker.strip().upper() != inst.user_ticker:
                 new_t = data.new_ticker.strip().upper()
-                existing = repo.get_instrument_by_ticker(new_t)
+                existing = repo.get_instrument_by_ticker(new_t, include_quote=False)
                 if existing and existing.id != inst.id:
                     raise HTTPException(
                         status_code=400,
@@ -758,10 +762,10 @@ def update_instrument_endpoint(
                         exchange=updated.exchange,
                         currency=updated.currency,
                         company_name=updated.company_name,
+                        last_attempt_at=None,
                     )
                     session.add(mq)
 
-            session.commit()
             invalidate_positions_cache(user_id)
             return {
                 "status": "ok",
@@ -856,8 +860,8 @@ def update_instrument_endpoint(
                 if data.previous_close and data.previous_close > 0
                 else None
             ),
-            quote_timestamp=datetime.now(),
-            fetched_at=datetime.now(),
+            quote_timestamp=datetime.now(timezone.utc),
+            fetched_at=datetime.now(timezone.utc),
             provider="Manual",
             status=QuoteStatus.FRESH,
         )
@@ -911,14 +915,27 @@ def fetch_analysis_price_endpoint(
 ):
     """Fetch historical quote from Yahoo Finance for instrument's analysis_date."""
     if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
+        import portfoliomaster.db.session as db_session
+        from portfoliomaster.db.schema import UserInstrument
+        from sqlalchemy import func, select, update
 
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            inst = repo.get_instrument_by_ticker(ticker)
-            if not inst:
+        clean_ticker = ticker.strip()
+        with db_session.session_scope() as session:
+            row = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.user_ticker,
+                    UserInstrument.provider_symbol,
+                    UserInstrument.analysis_date,
+                )
+                .where(
+                    UserInstrument.user_id == user_id,
+                    func.upper(UserInstrument.user_ticker) == clean_ticker.upper(),
+                )
+            ).first()
+            if not row:
                 raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
+            inst_id, inst_ticker, provider_symbol, inst_analysis_date = row
 
             parsed_target_date: Optional[date] = None
             if target_date and target_date.strip():
@@ -926,33 +943,39 @@ def fetch_analysis_price_endpoint(
                     parsed_target_date = date.fromisoformat(target_date.strip())
                 except ValueError:
                     raise HTTPException(status_code=400, detail=f"Invalid date format '{target_date}'. Expected YYYY-MM-DD.")
-            elif inst.analysis_date:
-                parsed_target_date = inst.analysis_date
+            elif inst_analysis_date:
+                parsed_target_date = inst_analysis_date
             else:
                 raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no analysis_date configured.")
 
-            if not inst.provider_symbol:
+            if not provider_symbol:
                 raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol resolved.")
 
-            res = _fetch_historical_quote_and_date(inst.provider_symbol, parsed_target_date, window_days=10)
-            if not res:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No market quote found on Yahoo Finance for {inst.provider_symbol} on or near {parsed_target_date}.",
+        res = _fetch_historical_quote_and_date(provider_symbol, parsed_target_date, window_days=10)
+        if not res:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No market quote found on Yahoo Finance for {provider_symbol} on or near {parsed_target_date}.",
+            )
+
+        price, actual_dt = res
+        with db_session.session_scope() as session:
+            session.execute(
+                update(UserInstrument)
+                .where(UserInstrument.id == inst_id, UserInstrument.user_id == user_id)
+                .values(
+                    analysis_reference_price=Decimal(str(price)),
+                    analysis_date=actual_dt,
                 )
+            )
 
-            price, actual_dt = res
-            inst.analysis_reference_price = Decimal(str(price))
-            inst.analysis_date = actual_dt
-            session.commit()
-
-            invalidate_positions_cache(user_id)
-            return {
-                "status": "ok",
-                "ticker": inst.user_ticker,
-                "analysis_date": actual_dt.isoformat(),
-                "analysis_reference_price": price,
-            }
+        invalidate_positions_cache(user_id)
+        return {
+            "status": "ok",
+            "ticker": inst_ticker,
+            "analysis_date": actual_dt.isoformat(),
+            "analysis_reference_price": price,
+        }
 
     inst = get_instrument_by_ticker(ticker)
     if not inst:
@@ -1001,38 +1024,57 @@ def fetch_ytd_price_endpoint(
 ):
     """Fetch start of year quote from Yahoo Finance for instrument for the given year."""
     if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
+        import portfoliomaster.db.session as db_session
+        from portfoliomaster.db.schema import UserInstrument
+        from sqlalchemy import func, select, update
 
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            inst = repo.get_instrument_by_ticker(ticker)
-            if not inst:
+        clean_ticker = ticker.strip()
+        with db_session.session_scope() as session:
+            row = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.user_ticker,
+                    UserInstrument.provider_symbol,
+                    UserInstrument.start_of_year_date,
+                )
+                .where(
+                    UserInstrument.user_id == user_id,
+                    func.upper(UserInstrument.user_ticker) == clean_ticker.upper(),
+                )
+            ).first()
+            if not row:
                 raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
+            inst_id, inst_ticker, provider_symbol, inst_soy_date = row
 
-            y = target_year or (inst.start_of_year_date.year if inst.start_of_year_date else date.today().year)
-            if not inst.provider_symbol:
+            y = target_year or (inst_soy_date.year if inst_soy_date else date.today().year)
+            if not provider_symbol:
                 raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol resolved.")
 
-            res = _fetch_start_of_year_quote(inst.provider_symbol, y)
-            if not res:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"No start-of-year quote found on Yahoo Finance for {inst.provider_symbol} in year {y}.",
+        res = _fetch_start_of_year_quote(provider_symbol, y)
+        if not res:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No start-of-year quote found on Yahoo Finance for {provider_symbol} in year {y}.",
+            )
+
+        price, actual_dt = res
+        with db_session.session_scope() as session:
+            session.execute(
+                update(UserInstrument)
+                .where(UserInstrument.id == inst_id, UserInstrument.user_id == user_id)
+                .values(
+                    start_of_year_price=Decimal(str(price)),
+                    start_of_year_date=actual_dt,
                 )
+            )
 
-            price, actual_dt = res
-            inst.start_of_year_price = Decimal(str(price))
-            inst.start_of_year_date = actual_dt
-            session.commit()
-
-            invalidate_positions_cache(user_id)
-            return {
-                "status": "ok",
-                "ticker": inst.user_ticker,
-                "start_of_year_date": actual_dt.isoformat(),
-                "start_of_year_price": price,
-            }
+        invalidate_positions_cache(user_id)
+        return {
+            "status": "ok",
+            "ticker": inst_ticker,
+            "start_of_year_date": actual_dt.isoformat(),
+            "start_of_year_price": price,
+        }
 
     inst = get_instrument_by_ticker(ticker)
     if not inst:
@@ -1063,28 +1105,205 @@ def fetch_ytd_price_endpoint(
     }
 
 
-def _resolve_price_for_instrument(
-    inst: Any,
-    is_multi_tenant: bool,
-    fetch_fn: Callable[[], Optional[tuple[float, date]]],
-    target_attr_price: str,
-    target_attr_date: str,
-) -> bool:
-    """Helper to resolve and persist missing price/date on an instrument object."""
-    if not inst.provider_symbol:
-        return False
-    try:
-        res = fetch_fn()
-        if res:
-            p_val, actual_dt = res
-            setattr(inst, target_attr_price, Decimal(str(p_val)))
-            setattr(inst, target_attr_date, actual_dt)
-            if not is_multi_tenant:
-                update_instrument_by_id(inst)
-            return True
-    except Exception as e:
-        logger.debug(f"Error resolving price for {getattr(inst, 'user_ticker', '?')}: {e}")
-    return False
+def _resolve_candidates_parallel(
+    candidates: list[tuple[Any, Callable[[], Optional[tuple[float, date]]]]],
+) -> tuple[list[tuple[Any, float, date]], int]:
+    """Execute Yahoo historical lookups concurrently outside DB sessions."""
+    if not candidates:
+        return [], 0
+
+    def _run_one(item):
+        key, fn = item
+        try:
+            res = fn()
+            if res:
+                return key, res[0], res[1]
+        except Exception as e:
+            logger.debug("Error resolving historical price: %s", e)
+        return key, None, None
+
+    resolved: list[tuple[Any, float, date]] = []
+    failed = 0
+    max_workers = min(8, len(candidates))
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        for key, price_val, dt_val in pool.map(_run_one, candidates):
+            if price_val is not None and dt_val is not None:
+                resolved.append((key, price_val, dt_val))
+            else:
+                failed += 1
+    return resolved, failed
+
+
+def _resolve_missing_analysis_prices_sync(user_id: Optional[uuid.UUID] = None) -> dict:
+    """Resolve missing analysis reference prices for a tenant (PG) or local SQLite DB."""
+    if is_multi_tenant_db():
+        if user_id is None:
+            return {"status": "ok", "updated": 0, "failed": 0, "skipped": 0, "total": 0}
+        import portfoliomaster.db.session as db_session
+        from portfoliomaster.db.schema import UserInstrument
+        from sqlalchemy import select, update
+
+        with db_session.session_scope() as session:
+            rows = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.provider_symbol,
+                    UserInstrument.analysis_date,
+                    UserInstrument.analysis_reference_price,
+                ).where(
+                    UserInstrument.user_id == user_id,
+                    UserInstrument.active.is_(True),
+                )
+            ).all()
+
+        total = len(rows)
+        candidates = [
+            (
+                row_id,
+                lambda s=prov_sym, d=an_dt: _fetch_historical_quote_and_date(s, d, window_days=10),
+            )
+            for row_id, prov_sym, an_dt, an_price in rows
+            if an_dt and not an_price and prov_sym
+        ]
+        missing_sym_failed = sum(
+            1 for _, prov_sym, an_dt, an_price in rows if an_dt and not an_price and not prov_sym
+        )
+        resolved, fetch_failed = _resolve_candidates_parallel(candidates)
+        if resolved:
+            with db_session.session_scope() as session:
+                for row_id, price_val, dt_val in resolved:
+                    session.execute(
+                        update(UserInstrument)
+                        .where(UserInstrument.id == row_id, UserInstrument.user_id == user_id)
+                        .values(
+                            analysis_reference_price=Decimal(str(price_val)),
+                            analysis_date=dt_val,
+                        )
+                    )
+        invalidate_positions_cache(user_id)
+        return {
+            "status": "ok",
+            "updated": len(resolved),
+            "failed": fetch_failed + missing_sym_failed,
+            "skipped": total - len(candidates) - missing_sym_failed,
+            "total": total,
+        }
+
+    active_instruments = get_all_instruments(include_inactive=False)
+    total = len(active_instruments)
+    inst_by_id: dict[int, Instrument] = {}
+    candidates = []
+    missing_sym_failed = 0
+    for inst in active_instruments:
+        if inst.analysis_date and not inst.analysis_reference_price:
+            if not inst.provider_symbol or not inst.id:
+                missing_sym_failed += 1
+                continue
+            inst_by_id[inst.id] = inst
+            candidates.append(
+                (
+                    inst.id,
+                    lambda s=inst.provider_symbol, d=inst.analysis_date: _fetch_historical_quote_and_date(s, d, window_days=10),
+                )
+            )
+
+    resolved, fetch_failed = _resolve_candidates_parallel(candidates)
+    for inst_id, price_val, dt_val in resolved:
+        inst = inst_by_id[inst_id]
+        inst.analysis_reference_price = Decimal(str(price_val))
+        inst.analysis_date = dt_val
+        update_instrument_by_id(inst)
+
+    invalidate_positions_cache()
+    return {
+        "status": "ok",
+        "updated": len(resolved),
+        "failed": fetch_failed + missing_sym_failed,
+        "skipped": total - len(candidates) - missing_sym_failed,
+        "total": total,
+    }
+
+
+def _resolve_missing_ytd_prices_sync(user_id: Optional[uuid.UUID] = None) -> dict:
+    """Resolve missing YTD reference prices for a tenant (PG) or local SQLite DB."""
+    current_year = date.today().year
+    if is_multi_tenant_db():
+        if user_id is None:
+            return {"status": "ok", "updated": 0, "failed": 0, "skipped": 0, "total": 0}
+        import portfoliomaster.db.session as db_session
+        from portfoliomaster.db.schema import UserInstrument
+        from sqlalchemy import select, update
+
+        with db_session.session_scope() as session:
+            rows = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.provider_symbol,
+                    UserInstrument.start_of_year_price,
+                ).where(
+                    UserInstrument.user_id == user_id,
+                    UserInstrument.active.is_(True),
+                )
+            ).all()
+
+        total = len(rows)
+        candidates = [
+            (row_id, lambda s=prov_sym, y=current_year: _fetch_start_of_year_quote(s, y))
+            for row_id, prov_sym, soy_price in rows
+            if not soy_price and prov_sym
+        ]
+        missing_sym_failed = sum(1 for _, prov_sym, soy_price in rows if not soy_price and not prov_sym)
+        resolved, fetch_failed = _resolve_candidates_parallel(candidates)
+        if resolved:
+            with db_session.session_scope() as session:
+                for row_id, price_val, dt_val in resolved:
+                    session.execute(
+                        update(UserInstrument)
+                        .where(UserInstrument.id == row_id, UserInstrument.user_id == user_id)
+                        .values(
+                            start_of_year_price=Decimal(str(price_val)),
+                            start_of_year_date=dt_val,
+                        )
+                    )
+        invalidate_positions_cache(user_id)
+        return {
+            "status": "ok",
+            "updated": len(resolved),
+            "failed": fetch_failed + missing_sym_failed,
+            "skipped": total - len(candidates) - missing_sym_failed,
+            "total": total,
+        }
+
+    active_instruments = get_all_instruments(include_inactive=False)
+    total = len(active_instruments)
+    inst_by_id: dict[int, Instrument] = {}
+    candidates = []
+    missing_sym_failed = 0
+    for inst in active_instruments:
+        if not inst.start_of_year_price:
+            if not inst.provider_symbol or not inst.id:
+                missing_sym_failed += 1
+                continue
+            inst_by_id[inst.id] = inst
+            candidates.append(
+                (inst.id, lambda s=inst.provider_symbol, y=current_year: _fetch_start_of_year_quote(s, y))
+            )
+
+    resolved, fetch_failed = _resolve_candidates_parallel(candidates)
+    for inst_id, price_val, dt_val in resolved:
+        inst = inst_by_id[inst_id]
+        inst.start_of_year_price = Decimal(str(price_val))
+        inst.start_of_year_date = dt_val
+        update_instrument_by_id(inst)
+
+    invalidate_positions_cache()
+    return {
+        "status": "ok",
+        "updated": len(resolved),
+        "failed": fetch_failed + missing_sym_failed,
+        "skipped": total - len(candidates) - missing_sym_failed,
+        "total": total,
+    }
 
 
 @router.post("/resolve-missing-analysis-prices")
@@ -1092,67 +1311,7 @@ def resolve_missing_analysis_prices(
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     """Batch resolve missing analysis reference prices for instruments having analysis_date."""
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            instruments = repo.get_instruments(active_only=True)
-            candidates = [i for i in instruments if i.analysis_date and not i.analysis_reference_price]
-            updated, failed = 0, 0
-            for inst in candidates:
-                if not inst.analysis_date:
-                    failed += 1
-                    continue
-                ok = _resolve_price_for_instrument(
-                    inst,
-                    is_multi_tenant=True,
-                    fetch_fn=lambda s=inst.provider_symbol, d=inst.analysis_date: _fetch_historical_quote_and_date(s, d, window_days=10),
-                    target_attr_price="analysis_reference_price",
-                    target_attr_date="analysis_date",
-                )
-                if ok:
-                    updated += 1
-                else:
-                    failed += 1
-            session.commit()
-            invalidate_positions_cache(user_id)
-            return {
-                "status": "ok",
-                "updated": updated,
-                "failed": failed,
-                "skipped": len(instruments) - len(candidates),
-                "total": len(instruments),
-            }
-
-    active_instruments = get_all_instruments(include_inactive=False)
-    candidates = [i for i in active_instruments if i.analysis_date and not i.analysis_reference_price]
-    updated, failed = 0, 0
-    for inst in candidates:
-        if not inst.analysis_date:
-            failed += 1
-            continue
-        ok = _resolve_price_for_instrument(
-            inst,
-            is_multi_tenant=False,
-            fetch_fn=lambda s=inst.provider_symbol, d=inst.analysis_date: _fetch_historical_quote_and_date(s, d, window_days=10),
-            target_attr_price="analysis_reference_price",
-            target_attr_date="analysis_date",
-        )
-        if ok:
-            updated += 1
-        else:
-            failed += 1
-
-    invalidate_positions_cache()
-    return {
-        "status": "ok",
-        "updated": updated,
-        "failed": failed,
-        "skipped": len(active_instruments) - len(candidates),
-        "total": len(active_instruments),
-    }
+    return _resolve_missing_analysis_prices_sync(user_id=user_id)
 
 
 @router.post("/resolve-missing-ytd-prices")
@@ -1160,60 +1319,4 @@ def resolve_missing_ytd_prices(
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     """Batch resolve missing start-of-year prices for instruments for the current year."""
-    current_year = date.today().year
-
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            instruments = repo.get_instruments(active_only=True)
-            candidates = [i for i in instruments if not i.start_of_year_price]
-            updated, failed = 0, 0
-            for inst in candidates:
-                ok = _resolve_price_for_instrument(
-                    inst,
-                    is_multi_tenant=True,
-                    fetch_fn=lambda s=inst.provider_symbol, y=current_year: _fetch_start_of_year_quote(s, y),
-                    target_attr_price="start_of_year_price",
-                    target_attr_date="start_of_year_date",
-                )
-                if ok:
-                    updated += 1
-                else:
-                    failed += 1
-            session.commit()
-            invalidate_positions_cache(user_id)
-            return {
-                "status": "ok",
-                "updated": updated,
-                "failed": failed,
-                "skipped": len(instruments) - len(candidates),
-                "total": len(instruments),
-            }
-
-    active_instruments = get_all_instruments(include_inactive=False)
-    candidates = [i for i in active_instruments if not i.start_of_year_price]
-    updated, failed = 0, 0
-    for inst in candidates:
-        ok = _resolve_price_for_instrument(
-            inst,
-            is_multi_tenant=False,
-            fetch_fn=lambda s=inst.provider_symbol, y=current_year: _fetch_start_of_year_quote(s, y),
-            target_attr_price="start_of_year_price",
-            target_attr_date="start_of_year_date",
-        )
-        if ok:
-            updated += 1
-        else:
-            failed += 1
-
-    invalidate_positions_cache()
-    return {
-        "status": "ok",
-        "updated": updated,
-        "failed": failed,
-        "skipped": len(active_instruments) - len(candidates),
-        "total": len(active_instruments),
-    }
+    return _resolve_missing_ytd_prices_sync(user_id=user_id)

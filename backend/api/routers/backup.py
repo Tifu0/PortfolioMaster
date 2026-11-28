@@ -49,7 +49,6 @@ def wipe_db(
 
         with session_scope() as session:
             session.execute(delete(UserInstrument).where(UserInstrument.user_id == user_id))
-            session.commit()
         invalidate_positions_cache(user_id)
         return {"status": "ok", "detail": "Tenant instruments wiped successfully"}
 
