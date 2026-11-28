@@ -103,3 +103,26 @@ export function useLanguage(): LanguageContextType {
   }
   return context;
 }
+
+export function TranslatedText({
+  tKey,
+  params,
+}: {
+  tKey: TranslationKey;
+  params?: Record<string, string | number>;
+}) {
+  const { t } = useLanguage();
+  return <>{t(tKey, params)}</>;
+}
+
+export function SkipToContentLink() {
+  const { t } = useLanguage();
+  return (
+    <a
+      href="#main-content"
+      className="sr-only focus:not-sr-only focus:fixed focus:top-2 focus:left-2 focus:z-[300] focus:px-3 focus:py-2 focus:rounded-lg focus:bg-emerald-600 focus:text-white focus:text-xs focus:font-semibold focus:shadow-lg"
+    >
+      {t('skipToContent')}
+    </a>
+  );
+}
