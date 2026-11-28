@@ -28,7 +28,7 @@ function Toast({ notification, onDismiss }: {
 }) {
   const { id, type, message, durationMs } = notification;
   const { Icon, colors } = variants[type];
-  const { language } = useLanguage();
+  const { t } = useLanguage();
 
   useEffect(() => {
     if (durationMs === null) return;
@@ -45,7 +45,7 @@ function Toast({ notification, onDismiss }: {
       <button
         type="button"
         onClick={() => onDismiss(id)}
-        aria-label={language === 'es' ? 'Cerrar notificación' : 'Dismiss notification'}
+        aria-label={t('dismissNotification')}
         className="shrink-0 rounded p-1 text-zinc-300 transition-colors hover:bg-white/10 hover:text-white"
       >
         <X className="size-4" aria-hidden="true" />
@@ -68,13 +68,15 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
   return (
     <ToastContext value={addToast}>
       {children}
-      {notifications.length > 0 && (
-        <div className="pointer-events-none fixed inset-x-4 top-20 z-[200] ml-auto flex max-h-[calc(100dvh-6rem)] max-w-sm flex-col gap-2 overflow-y-auto sm:left-auto sm:w-full">
-          {notifications.map((notification) => (
-            <Toast key={notification.id} notification={notification} onDismiss={dismissToast} />
-          ))}
-        </div>
-      )}
+      <div
+        aria-live="polite"
+        aria-atomic="false"
+        className="pointer-events-none fixed inset-x-4 bottom-4 z-[200] ml-auto flex max-h-[calc(100dvh-6rem)] max-w-sm flex-col gap-2 overflow-y-auto overscroll-contain sm:left-auto sm:right-4 sm:bottom-6 sm:w-full"
+      >
+        {notifications.map((notification) => (
+          <Toast key={notification.id} notification={notification} onDismiss={dismissToast} />
+        ))}
+      </div>
     </ToastContext>
   );
 }
