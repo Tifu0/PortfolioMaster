@@ -64,8 +64,13 @@ def init_db():
             provider TEXT,
             status TEXT,
             error_message TEXT,
+            earnings_date DATE,
             FOREIGN KEY (instrument_id) REFERENCES instruments (id)
         )
     """)
+    cursor.execute("PRAGMA table_info(quotes)")
+    quote_columns = [row[1] for row in cursor.fetchall()]
+    if "earnings_date" not in quote_columns:
+        cursor.execute("ALTER TABLE quotes ADD COLUMN earnings_date DATE")
     conn.commit()
     conn.close()

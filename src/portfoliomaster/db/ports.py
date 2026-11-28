@@ -100,6 +100,7 @@ def quote_to_dict(quote: Any) -> Optional[dict[str, object]]:
         else str(status_raw) if status_raw else "UNAVAILABLE"
     )
     error_msg = getattr(quote, "error_message", None)
+    earnings_dt = getattr(quote, "earnings_date", None)
 
     return {
         "id": quote_id,
@@ -111,6 +112,7 @@ def quote_to_dict(quote: Any) -> Optional[dict[str, object]]:
         "provider": provider,
         "status": status_str,
         "error_message": error_msg,
+        "earnings_date": earnings_dt.isoformat() if hasattr(earnings_dt, "isoformat") else (str(earnings_dt) if earnings_dt else None),
     }
 
 

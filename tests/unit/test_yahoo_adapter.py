@@ -145,3 +145,98 @@ def test_yahoo_adapter_resilient_session_isolated_per_thread():
         s1 = f1.result()
         s2 = f2.result()
     assert s1 is not s2
+
+
+def test_yahoo_adapter_extracts_closest_future_earnings_date_and_filters_past(monkeypatch):
+    """YahooAdapter extracts the closest future earnings_date >= today and normalizes past/missing to None."""
+    from portfoliomaster.providers.yahoo_adapter import clear_earnings_cache
+
+    clear_earnings_cache()
+    adapter = YahooAdapter()
+    today = date(2026, 11, 28)
+
+    # 1. Mix of past and multiple future dates in calendar dict -> picks closest future
+    t_future = MagicMock()
+    t_future.fast_info = {"last_price": 210.0, "previous_close": 208.0, "last_update": 1700000000}
+    t_future.get_history_metadata.return_value = {"regularMarketPrice": 210.0, "chartPreviousClose": 208.0, "regularMarketTime": 1700000000}
+    t_future.calendar = {
+        "Earnings Date": [date(2026, 8, 1), pd.Timestamp("2027-04-30"), date(2027, 1, 28)]
+    }
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._create_ticker", lambda sym: t_future)
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._utc_today", lambda: today)
+
+    res = adapter.fetch(["AAPL"])
+    assert res["AAPL"].price == Decimal("210.0")
+    assert res["AAPL"].earnings_date == date(2027, 1, 28)
+
+    # 2. Only past dates -> None
+    clear_earnings_cache()
+    t_past = MagicMock()
+    t_past.fast_info = {"last_price": 50.0, "previous_close": 49.0, "last_update": 1700000000}
+    t_past.get_history_metadata.return_value = {"regularMarketPrice": 50.0, "chartPreviousClose": 49.0, "regularMarketTime": 1700000000}
+    t_past.calendar = {"Earnings Date": [date(2026, 10, 15), date(2026, 11, 27)]}
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._create_ticker", lambda sym: t_past)
+
+    res_past = adapter.fetch(["PAST"])
+    assert res_past["PAST"].price == Decimal("50.0")
+    assert res_past["PAST"].earnings_date is None
+
+    # 3. ETF / empty calendar -> None
+    clear_earnings_cache()
+    t_etf = MagicMock()
+    t_etf.fast_info = {"last_price": 500.0, "previous_close": 498.0, "last_update": 1700000000}
+    t_etf.get_history_metadata.return_value = {"regularMarketPrice": 500.0, "chartPreviousClose": 498.0, "regularMarketTime": 1700000000}
+    t_etf.calendar = {}
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._create_ticker", lambda sym: t_etf)
+
+    res_etf = adapter.fetch(["SPY"])
+    assert res_etf["SPY"].price == Decimal("500.0")
+    assert res_etf["SPY"].earnings_date is None
+
+
+def test_yahoo_adapter_isolates_earnings_errors_and_supports_dataframe_fallback(monkeypatch):
+    """Earnings lookup failures never degrade quote fetch; get_earnings_dates DataFrame fallback works."""
+    from portfoliomaster.providers.yahoo_adapter import clear_earnings_cache
+
+    today = date(2026, 11, 28)
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._utc_today", lambda: today)
+
+    # 1. Both calendar and get_earnings_dates raise -> quote still succeeds with earnings_date=None
+    clear_earnings_cache()
+
+    class BrokenCalendarTicker:
+        fast_info = {"last_price": 125.0, "previous_close": 124.0, "last_update": 1700000000}
+
+        @property
+        def calendar(self):
+            raise RuntimeError("HTTP 401 Invalid Crumb")
+
+        def get_earnings_dates(self, limit=8):
+            raise RuntimeError("Scrape timeout")
+
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._create_ticker", lambda sym: BrokenCalendarTicker())
+    res_err = YahooAdapter().fetch(["MSFT"])
+    assert res_err["MSFT"].price == Decimal("125.0")
+    assert res_err["MSFT"].status != QuoteStatus.ERROR
+    assert res_err["MSFT"].earnings_date is None
+
+    # 2. calendar raises, get_earnings_dates returns DataFrame with NaT + past + future
+    clear_earnings_cache()
+
+    class FallbackEarningsTicker:
+        fast_info = {"last_price": 300.0, "previous_close": 295.0, "last_update": 1700000000}
+
+        @property
+        def calendar(self):
+            raise RuntimeError("Crumb blocked")
+
+        def get_earnings_dates(self, limit=8):
+            return pd.DataFrame(
+                {"EPS Estimate": [1.0, 1.1, 1.2]},
+                index=pd.DatetimeIndex([pd.Timestamp("2026-05-01"), pd.Timestamp("2027-02-15"), pd.NaT]),
+            )
+
+    monkeypatch.setattr("portfoliomaster.providers.yahoo_adapter._create_ticker", lambda sym: FallbackEarningsTicker())
+    res_fb = YahooAdapter().fetch(["NVDA"])
+    assert res_fb["NVDA"].price == Decimal("300.0")
+    assert res_fb["NVDA"].earnings_date == date(2027, 2, 15)

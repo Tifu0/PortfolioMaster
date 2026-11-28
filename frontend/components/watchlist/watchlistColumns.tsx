@@ -18,13 +18,16 @@ import type { Language } from '@/lib/translations';
 import type { Position } from '@/lib/types';
 import {
   DEFAULT_WATCHLIST_COLUMN_WIDTHS,
+  compareIsoDates,
   formatDeclineToTarget,
   formatPercent,
+  formatStackedDate,
   getQuoteTooltip,
+  normalizeIsoDateForSort,
   numericSortWithNulls,
   type TranslateFn,
 } from '@/lib/watchlist-formatters';
-import { InlineDateCell } from './InlineDateCell';
+import { InlineDateCell, StackedDateText } from './InlineDateCell';
 
 function ColumnSortIndicator({
   column,
@@ -433,6 +436,48 @@ export function buildWatchlistColumns({
           {formatCurrency(row.original.target_price, row.original.currency, language)}
         </div>
       ),
+    },
+    {
+      accessorFn: (row) => normalizeIsoDateForSort(row.earnings_date),
+      id: 'earnings_date',
+      size: DEFAULT_WATCHLIST_COLUMN_WIDTHS.earnings_date,
+      minSize: 70,
+      maxSize: 160,
+      sortUndefined: 'last',
+      sortingFn: (rowA, rowB, columnId) =>
+        compareIsoDates(
+          rowA.getValue<string | undefined>(columnId),
+          rowB.getValue<string | undefined>(columnId)
+        ),
+      header: ({ column }) => (
+        <button
+          type="button"
+          onClick={() => column.toggleSorting(column.getIsSorted() === 'asc')}
+          className="flex items-center justify-center gap-1 mx-auto hover:text-white transition-colors uppercase tracking-wider select-none text-center text-inherit cursor-pointer"
+          title={t('sortByEarningsDate')}
+        >
+          <div className="flex flex-col items-center leading-tight [word-break:keep-all] whitespace-normal">
+            <span>{t('colEarnings')}</span>
+            <span className="text-[0.9em] text-zinc-400 font-medium">{t('colEarningsDate')}</span>
+          </div>
+          <ColumnSortIndicator column={column} />
+        </button>
+      ),
+      cell: ({ row }) => {
+        const parsed = formatStackedDate(row.original.earnings_date);
+        if (parsed) {
+          return (
+            <div className="flex flex-col items-center justify-center py-0.5 px-1 select-none text-center mx-auto">
+              <StackedDateText parsed={parsed} />
+            </div>
+          );
+        }
+        return (
+          <div className="flex items-center justify-center py-0.5 px-1 select-none text-center mx-auto">
+            <span className="text-zinc-500 font-mono text-xs tabular-nums">N/A</span>
+          </div>
+        );
+      },
     },
     {
       id: 'actions',

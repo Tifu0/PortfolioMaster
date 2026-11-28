@@ -92,6 +92,36 @@ function DateEditorInput({
   );
 }
 
+export const StackedDateText = React.memo(function StackedDateText({
+  parsed,
+  isUpdating = false,
+  interactive = false,
+}: {
+  parsed: { dayMonth: string; year: string };
+  isUpdating?: boolean;
+  interactive?: boolean;
+}) {
+  return (
+    <>
+      <div className="flex items-center gap-1">
+        <span
+          className={`text-xs font-semibold text-zinc-200 font-mono tabular-nums leading-tight ${
+            interactive ? 'group-hover/date:text-emerald-400 transition-colors' : ''
+          }`}
+        >
+          {parsed.dayMonth}
+        </span>
+        {isUpdating && (
+          <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none text-emerald-400 shrink-0" />
+        )}
+      </div>
+      <span className="text-[10px] text-zinc-500 font-mono tabular-nums leading-none mt-0.5">
+        {parsed.year}
+      </span>
+    </>
+  );
+});
+
 export const InlineDateCell = React.memo(function InlineDateCell({
   ticker,
   analysisDate,
@@ -128,17 +158,7 @@ export const InlineDateCell = React.memo(function InlineDateCell({
         className="flex flex-col items-center justify-center py-0.5 px-1 rounded-md hover:bg-zinc-800/60 cursor-pointer group/date transition-colors select-none text-center mx-auto"
         title={t('clickToEditAnalysisDate', { date: analysisDate || '' })}
       >
-        <div className="flex items-center gap-1">
-          <span className="text-xs font-semibold text-zinc-200 group-hover/date:text-emerald-400 font-mono tabular-nums leading-tight transition-colors">
-            {parsed.dayMonth}
-          </span>
-          {isUpdating && (
-            <Loader2 className="w-3 h-3 animate-spin motion-reduce:animate-none text-emerald-400 shrink-0" />
-          )}
-        </div>
-        <span className="text-[10px] text-zinc-500 font-mono tabular-nums leading-none mt-0.5">
-          {parsed.year}
-        </span>
+        <StackedDateText parsed={parsed} isUpdating={isUpdating} interactive />
       </button>
     );
   }

@@ -1,13 +1,15 @@
+from collections import OrderedDict
 import inspect
 import concurrent.futures
 import logging
 import math
 import threading
+import time
 from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal
 import os
 import tempfile
-from typing import Dict, List, Optional, Any
+from typing import Dict, Iterable, List, Optional, Any
 import warnings
 import pandas as pd
 import requests
@@ -93,7 +95,7 @@ except Exception:
 
 from .base import MarketDataProvider
 from ..core.models import Quote, QuoteStatus, FreshnessConfig, Exchange
-from ..core.parsing import parse_decimal
+from ..core.parsing import parse_date, parse_decimal
 from ..core.config import (
     FRESHNESS_PER_EXCHANGE,
     YAHOO_SUFFIXES,
@@ -102,6 +104,146 @@ from ..core.config import (
 )
 
 _THREAD_LOCAL = threading.local()
+
+MAX_EARNINGS_CACHE_ENTRIES = 2048
+EARNINGS_CACHE_TTL_SECONDS = float(os.environ.get("EARNINGS_CACHE_TTL_SECONDS", str(6 * 3600)))
+_EARNINGS_CACHE: OrderedDict[str, tuple[Optional[date], float]] = OrderedDict()
+_EARNINGS_CACHE_LOCK = threading.Lock()
+
+
+def _utc_today() -> date:
+    """Return current UTC calendar date (isolated helper for deterministic tests)."""
+    return datetime.now(timezone.utc).date()
+
+
+def clear_earnings_cache(symbols: Optional[Iterable[str]] = None) -> None:
+    """Clear the bounded in-memory earnings_date cache globally or for specific symbols."""
+    with _EARNINGS_CACHE_LOCK:
+        if symbols is None:
+            _EARNINGS_CACHE.clear()
+        else:
+            for sym in symbols:
+                key = str(sym).strip().upper()
+                if key:
+                    _EARNINGS_CACHE.pop(key, None)
+
+
+def _get_cached_earnings_date(symbol: str, now_monotonic: Optional[float] = None) -> tuple[bool, Optional[date]]:
+    """Lookup cached earnings_date if present and within TTL."""
+    if EARNINGS_CACHE_TTL_SECONDS <= 0:
+        return False, None
+    key = symbol.strip().upper()
+    now_ts = time.monotonic() if now_monotonic is None else now_monotonic
+    with _EARNINGS_CACHE_LOCK:
+        entry = _EARNINGS_CACHE.get(key)
+        if entry is None:
+            return False, None
+        val, cached_at = entry
+        if now_ts - cached_at >= EARNINGS_CACHE_TTL_SECONDS:
+            _EARNINGS_CACHE.pop(key, None)
+            return False, None
+        _EARNINGS_CACHE.move_to_end(key)
+        return True, val
+
+
+def _set_cached_earnings_date(symbol: str, value: Optional[date], now_monotonic: Optional[float] = None) -> None:
+    """Store earnings_date in bounded LRU+TTL cache."""
+    if EARNINGS_CACHE_TTL_SECONDS <= 0:
+        return
+    key = symbol.strip().upper()
+    if not key:
+        return
+    now_ts = time.monotonic() if now_monotonic is None else now_monotonic
+    with _EARNINGS_CACHE_LOCK:
+        _EARNINGS_CACHE[key] = (value, now_ts)
+        _EARNINGS_CACHE.move_to_end(key)
+        while len(_EARNINGS_CACHE) > MAX_EARNINGS_CACHE_ENTRIES:
+            _EARNINGS_CACHE.popitem(last=False)
+
+
+def _coerce_to_date(value: Any) -> Optional[date]:
+    """Coerce Timestamp, datetime, date, epoch seconds, or date string into date."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        if pd.isna(value):
+            return None
+    except Exception:
+        pass
+    if isinstance(value, pd.Timestamp):
+        try:
+            return value.date()
+        except Exception:
+            return None
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, (int, float)):
+        if math.isnan(float(value)) or math.isinf(float(value)):
+            return None
+        try:
+            return datetime.fromtimestamp(float(value), tz=timezone.utc).date()
+        except (ValueError, OSError, OverflowError):
+            return None
+    return parse_date(value)
+
+
+def normalize_next_earnings_date(raw_values: Any, *, today: Optional[date] = None) -> Optional[date]:
+    """Extract the closest upcoming earnings date (>= today) from heterogeneous values."""
+    if raw_values is None:
+        return None
+
+    ref_today = today or _utc_today()
+    items: list[Any]
+    if isinstance(raw_values, (list, tuple, set, pd.Series, pd.Index)):
+        items = list(raw_values)
+    else:
+        items = [raw_values]
+
+    future_dates: list[date] = []
+    for item in items:
+        parsed = _coerce_to_date(item)
+        if parsed is not None and parsed >= ref_today:
+            future_dates.append(parsed)
+
+    return min(future_dates) if future_dates else None
+
+
+def _extract_next_earnings_date(ticker: Any, *, today: Optional[date] = None) -> Optional[date]:
+    """Safely extract upcoming earnings_date from yfinance Ticker without failing quote fetch."""
+    ref_today = today or _utc_today()
+    calendar_failed = False
+
+    try:
+        cal = getattr(ticker, "calendar", None)
+        if isinstance(cal, dict):
+            for key in ("Earnings Date", "earningsDate", "earnings_date"):
+                if key in cal:
+                    return normalize_next_earnings_date(cal.get(key), today=ref_today)
+            return None
+        if isinstance(cal, pd.DataFrame):
+            if "Earnings Date" in cal.columns:
+                return normalize_next_earnings_date(cal["Earnings Date"], today=ref_today)
+            if "Earnings Date" in cal.index:
+                return normalize_next_earnings_date(cal.loc["Earnings Date"], today=ref_today)
+            return None
+    except Exception:
+        calendar_failed = True
+
+    if calendar_failed:
+        try:
+            get_ed = getattr(ticker, "get_earnings_dates", None)
+            if callable(get_ed):
+                df = get_ed(limit=8)
+                if isinstance(df, pd.DataFrame) and not df.empty:
+                    if "Earnings Date" in df.columns:
+                        return normalize_next_earnings_date(df["Earnings Date"], today=ref_today)
+                    return normalize_next_earnings_date(df.index, today=ref_today)
+        except Exception:
+            pass
+
+    return None
 
 
 def get_resilient_session() -> requests.Session:
@@ -273,6 +415,23 @@ class YahooAdapter(MarketDataProvider):
     def resolve_company_name(self, symbol: str, ticker: Optional[yf.Ticker] = None) -> Optional[str]:
         """Resolve display company name for a Yahoo symbol."""
         return resolve_company_name(symbol, ticker)
+
+    def fetch_next_earnings_date(self, symbol: str) -> Optional[date]:
+        """Fetch next upcoming earnings date (>= UTC today) for a symbol with TTL cache."""
+        if not symbol or not str(symbol).strip():
+            return None
+        y_sym = self._normalize_symbol_for_yahoo(symbol)
+        hit, cached = _get_cached_earnings_date(y_sym)
+        if hit:
+            return cached
+        try:
+            t = _create_ticker(y_sym)
+            resolved = _extract_next_earnings_date(t)
+        except Exception as ex:
+            self.logger.debug("Error fetching earnings date for %s: %s", y_sym, ex)
+            resolved = None
+        _set_cached_earnings_date(y_sym, resolved)
+        return resolved
 
     def fetch_start_of_year_quote(
         self, provider_symbol: str, year: Optional[int] = None
@@ -589,21 +748,53 @@ class YahooAdapter(MarketDataProvider):
             s for s in unique_yahoo_symbols
             if not batch_quotes_data.get(s) or batch_quotes_data[s].get("price") is None
         ]
+        created_tickers: Dict[str, Any] = {}
 
         if missing_symbols:
-            def _fetch_one_symbol(y_sym: str) -> tuple[str, Dict[str, Any]]:
+            def _fetch_one_symbol(y_sym: str) -> tuple[str, Dict[str, Any], Optional[Any]]:
                 try:
                     t = _create_ticker(y_sym)
-                    return y_sym, self._extract_quote_data(t)
+                    return y_sym, self._extract_quote_data(t), t
                 except Exception as ex:
                     self.logger.debug(f"Error fetching quote for {y_sym}: {ex}")
-                    return y_sym, {"price": None, "previous_close": None, "quote_timestamp": None}
+                    return y_sym, {"price": None, "previous_close": None, "quote_timestamp": None}, None
 
             max_workers = min(12, len(missing_symbols))
             with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
-                for y_sym, data in executor.map(_fetch_one_symbol, missing_symbols):
+                for y_sym, data, ticker_obj in executor.map(_fetch_one_symbol, missing_symbols):
+                    if ticker_obj is not None:
+                        created_tickers[y_sym] = ticker_obj
                     if data and data.get("price") is not None:
                         batch_quotes_data[y_sym] = data
+
+        # Resolve upcoming earnings_date in bounded parallel with TTL cache (errors isolated)
+        earnings_map: Dict[str, Optional[date]] = {}
+        earnings_targets = [
+            y_sym for y_sym in unique_yahoo_symbols
+            if batch_quotes_data.get(y_sym) and batch_quotes_data[y_sym].get("price") is not None
+        ]
+        uncached_earnings: List[str] = []
+        for y_sym in earnings_targets:
+            hit, cached_dt = _get_cached_earnings_date(y_sym)
+            if hit:
+                earnings_map[y_sym] = cached_dt
+            else:
+                uncached_earnings.append(y_sym)
+
+        if uncached_earnings:
+            def _fetch_earnings_one(y_sym: str) -> tuple[str, Optional[date]]:
+                try:
+                    t = created_tickers.get(y_sym) or _create_ticker(y_sym)
+                    return y_sym, _extract_next_earnings_date(t)
+                except Exception as ex:
+                    self.logger.debug("Error fetching earnings date for %s: %s", y_sym, ex)
+                    return y_sym, None
+
+            max_earn_workers = min(8, len(uncached_earnings))
+            with concurrent.futures.ThreadPoolExecutor(max_workers=max_earn_workers) as executor:
+                for y_sym, ed_val in executor.map(_fetch_earnings_one, uncached_earnings):
+                    earnings_map[y_sym] = ed_val
+                    _set_cached_earnings_date(y_sym, ed_val)
 
         for symbol in symbols:
             try:
@@ -633,6 +824,7 @@ class YahooAdapter(MarketDataProvider):
                     fetched_at=datetime.now(timezone.utc),
                     provider="Yahoo",
                     status=status,
+                    earnings_date=earnings_map.get(yahoo_symbol),
                 )
 
             except Exception as e:

@@ -14,7 +14,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from alembic.script import ScriptDirectory
-from sqlalchemy import Numeric
+from sqlalchemy import Date, Numeric
 from sqlalchemy.dialects import postgresql
 
 from portfoliomaster.db.schema import MarketQuote, RefreshRun, UserInstrument
@@ -115,6 +115,8 @@ def test_schema_numeric_precision_nullability_and_status_type():
 
     assert UserInstrument.__table__.c.company_name.nullable is True
     assert UserInstrument.__table__.c.comment.nullable is True
+    assert isinstance(MarketQuote.__table__.c.earnings_date.type, Date)
+    assert MarketQuote.__table__.c.earnings_date.nullable is True
     assert MarketQuote.__table__.c.status.type.compile(dialect=postgresql.dialect()).upper() == "VARCHAR(20)"
 
 
@@ -151,10 +153,14 @@ def test_alembic_single_head_and_offline_sql_hardening():
     heads = script.get_heads()
     assert len(heads) == 1
     head_rev = script.get_revision(heads[0])
-    assert head_rev is not None and head_rev.revision != "2a8b9c0d1e2f"
-    assert head_rev.down_revision == "2a8b9c0d1e2f"
+    assert head_rev is not None and head_rev.revision != "3c9d4e5f6a7b"
+    assert head_rev.down_revision == "3c9d4e5f6a7b"
+    u2_rev = script.get_revision("3c9d4e5f6a7b")
+    assert u2_rev is not None and u2_rev.down_revision == "2a8b9c0d1e2f"
 
     sql_lower = _run_offline_sql(command.upgrade, "head").lower()
+    assert "add column if not exists earnings_date date" in sql_lower
+    assert "mq.earnings_date" in sql_lower
     for redundant in ("ix_refresh_runs_status", "ix_refresh_runs_user_id", "ix_user_instruments_user_id"):
         assert f"drop index if exists public.{redundant}" in sql_lower or f"drop index if exists {redundant}" in sql_lower
 
@@ -198,14 +204,19 @@ def test_alembic_single_head_and_offline_sql_hardening():
 
 
 def test_alembic_offline_downgrade_and_sqlite_roundtrip(tmp_path):
-    sql_lower = _run_offline_sql(command.downgrade, "head:2a8b9c0d1e2f").lower()
-    assert "drop trigger if exists trg_ensure_market_quote" in sql_lower
-    assert "drop view if exists public.user_positions_view" in sql_lower
-    assert "numeric(18, 6)" in sql_lower
+    sql_lower = _run_offline_sql(command.downgrade, "head:3c9d4e5f6a7b").lower()
+    assert "drop column if exists earnings_date" in sql_lower
+
+    sql_u2_downgrade = _run_offline_sql(command.downgrade, "3c9d4e5f6a7b:2a8b9c0d1e2f").lower()
+    assert "drop trigger if exists trg_ensure_market_quote" in sql_u2_downgrade
+    assert "drop view if exists public.user_positions_view" in sql_u2_downgrade
+    assert "numeric(18, 6)" in sql_u2_downgrade
 
     db_path = tmp_path / "alembic_roundtrip.db"
     cfg = Config("alembic.ini")
     with patch.dict(os.environ, {"DATABASE_URL": f"sqlite:///{db_path}"}):
+        command.upgrade(cfg, "head")
+        command.downgrade(cfg, "3c9d4e5f6a7b")
         command.upgrade(cfg, "head")
         command.downgrade(cfg, "2a8b9c0d1e2f")
         command.upgrade(cfg, "head")

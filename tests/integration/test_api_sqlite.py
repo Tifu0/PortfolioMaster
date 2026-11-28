@@ -60,6 +60,8 @@ class TestRootAndPositions:
         assert pos["variation_since_analysis_valid"] is True
         assert pos["decline_to_target_valid"] is True
         assert pos["ytd_variation_valid"] is True and pos["ytd_variation"] == 20.0
+        assert "earnings_date" in pos
+        assert pos["earnings_date"] is None
 
     def test_returns_positions_without_quotes_and_metrics(self, sqlite_api_client):
         sqlite_api_client.post("/api/import/confirm", json={

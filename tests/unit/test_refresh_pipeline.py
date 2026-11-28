@@ -138,3 +138,32 @@ def test_delta_filter_skips_unchanged_quotes():
     filtered_4 = filter_unchanged_quotes(quotes_fourth)
     assert len(filtered_4) == 1
     assert filtered_4[0]["status"] == "ERROR"
+
+
+def test_delta_filter_detects_earnings_date_change():
+    from datetime import date
+
+    clear_quote_delta_cache()
+    initial = [
+        {
+            "provider_symbol": "AAPL",
+            "price": Decimal("230.00"),
+            "previous_close": Decimal("225.00"),
+            "status": "FRESH",
+            "earnings_date": None,
+        }
+    ]
+    assert len(filter_unchanged_quotes(initial)) == 1
+    assert len(filter_unchanged_quotes(initial)) == 0
+
+    with_earnings = [
+        {
+            "provider_symbol": "AAPL",
+            "price": Decimal("230.00"),
+            "previous_close": Decimal("225.00"),
+            "status": "FRESH",
+            "earnings_date": date(2027, 1, 28),
+        }
+    ]
+    assert len(filter_unchanged_quotes(with_earnings)) == 1
+    assert len(filter_unchanged_quotes(with_earnings)) == 0

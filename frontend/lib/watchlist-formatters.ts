@@ -15,18 +15,19 @@ export const SORTING_STORAGE_KEY = 'portfoliomaster_table_sorting';
 export const COLUMN_SIZING_STORAGE_KEY = 'portfoliomaster_column_sizing';
 
 export const DEFAULT_WATCHLIST_COLUMN_WIDTHS = {
-  analysis_date: 80,
-  user_ticker: 105,
-  company_name: 150,
-  exchange: 82,
-  currency: 66,
-  latest_price: 104,
-  daily_variation: 94,
-  ytd_variation: 98,
-  variation_since_analysis: 106,
-  decline_to_target: 104,
-  target_price: 95,
-  actions: 84,
+  analysis_date: 78,
+  user_ticker: 98,
+  company_name: 132,
+  exchange: 74,
+  currency: 58,
+  latest_price: 94,
+  daily_variation: 88,
+  ytd_variation: 88,
+  variation_since_analysis: 96,
+  decline_to_target: 96,
+  target_price: 86,
+  earnings_date: 90,
+  actions: 82,
 } as const;
 
 export type TranslateFn = (key: TranslationKey, params?: Record<string, string | number>) => string;
@@ -143,6 +144,29 @@ export function formatStackedDate(
     }
   }
   return null;
+}
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+export function normalizeIsoDateForSort(
+  isoDate: string | null | undefined
+): string | undefined {
+  if (typeof isoDate !== 'string') return undefined;
+  const candidate = isoDate.trim().slice(0, 10);
+  if (!ISO_DATE_RE.test(candidate)) return undefined;
+  return candidate;
+}
+
+export function compareIsoDates(
+  a: string | null | undefined,
+  b: string | null | undefined
+): number {
+  const normA = normalizeIsoDateForSort(a);
+  const normB = normalizeIsoDateForSort(b);
+  if (!normA && !normB) return 0;
+  if (!normA) return 1;
+  if (!normB) return -1;
+  return normA.localeCompare(normB);
 }
 
 export function getQuoteTooltip(pos: Position, t: TranslateFn, now?: number): string | undefined {

@@ -186,3 +186,56 @@ def test_refresh_with_yfinance_network():
     instruments = get_all_instruments()
     quotes = runner.run([inst.provider_symbol for inst in instruments if inst.provider_symbol])
     assert "AAPL" in quotes and quotes["AAPL"].price is not None
+
+
+def test_batch_refresh_sse_delta_and_positions_include_earnings_date(sqlite_api_client):
+    """SSE batch delta and /api/positions propagate earnings_date without requiring page reload."""
+    sqlite_api_client.post(
+        "/api/instruments",
+        json={"user_ticker": "AAPL", "currency": "USD", "fetch_yahoo": False},
+    )
+    sqlite_api_client.post(
+        "/api/instruments",
+        json={"user_ticker": "SPY", "currency": "USD", "fetch_yahoo": False},
+    )
+
+    from datetime import date
+
+    mock_adapter = MagicMock()
+    mock_adapter.fetch.return_value = {
+        "AAPL": Quote(
+            price=Decimal("225.00"),
+            previous_close=Decimal("220.00"),
+            status=QuoteStatus.FRESH,
+            provider="Yahoo",
+            earnings_date=date(2027, 2, 4),
+        ),
+        "SPY": Quote(
+            price=Decimal("600.00"),
+            previous_close=Decimal("598.00"),
+            status=QuoteStatus.FRESH,
+            provider="Yahoo",
+            earnings_date=None,
+        ),
+    }
+    app.dependency_overrides[get_yahoo_provider] = lambda: mock_adapter
+
+    events: list[dict] = []
+    res = refresh._execute_refresh_all(
+        on_batch_progress=events.append,
+        force=True,
+        provider=mock_adapter,
+    )
+    assert res["status"] == "ok"
+    batch_events = [e for e in events if e.get("type") == "batch"]
+    assert len(batch_events) == 1
+    quotes_delta = batch_events[0]["quotes"]
+    assert quotes_delta["AAPL"]["earnings_date"] == "2027-02-04"
+    assert quotes_delta["SPY"]["earnings_date"] is None
+
+    positions = {
+        p["user_ticker"]: p
+        for p in sqlite_api_client.get("/api/positions").json()["positions"]
+    }
+    assert positions["AAPL"]["earnings_date"] == "2027-02-04"
+    assert positions["SPY"]["earnings_date"] is None

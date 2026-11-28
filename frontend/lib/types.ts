@@ -77,6 +77,7 @@ export interface Quote {
   provider: string;
   status: QuoteStatus | string;
   error_message: string | null;
+  earnings_date?: string | null; // ISO Date YYYY-MM-DD
 }
 
 export interface Position {
@@ -91,6 +92,7 @@ export interface Position {
   start_of_year_date?: string | null;
   start_of_year_price?: number | null;
   target_price: number | null;
+  earnings_date?: string | null; // ISO Date YYYY-MM-DD
   comment: string;
   active: boolean;
 
@@ -291,6 +293,7 @@ export interface RefreshProgressEvent {
     previous_close?: number | string | null;
     status?: string;
     quote_timestamp?: string;
+    earnings_date?: string | null;
   }>;
 }
 
