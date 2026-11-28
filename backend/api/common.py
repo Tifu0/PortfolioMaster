@@ -7,6 +7,7 @@ import logging
 import math
 import os
 import re
+import threading
 import uuid
 from typing import Any, Optional
 
@@ -32,17 +33,23 @@ class AuthenticatedUser:
 
 
 _JWKS_CLIENT: Optional[jwt.PyJWKClient] = None
+_JWKS_CLIENT_LOCK = threading.Lock()
 
 
 def get_jwks_client(supabase_url: str) -> jwt.PyJWKClient:
-    """Retrieve or initialize cached PyJWKClient for asymmetric signing keys."""
+    """Retrieve or initialize cached PyJWKClient for asymmetric signing keys (thread-safe)."""
     global _JWKS_CLIENT
     clean_url = supabase_url.strip().rstrip("/")
-    if _JWKS_CLIENT is None or getattr(_JWKS_CLIENT, "_supabase_url", None) != clean_url:
-        jwks_url = f"{clean_url}/auth/v1/.well-known/jwks.json"
-        _JWKS_CLIENT = jwt.PyJWKClient(jwks_url, cache_jwk_set=True, lifespan=3600)
-        setattr(_JWKS_CLIENT, "_supabase_url", clean_url)
-    return _JWKS_CLIENT
+    client = _JWKS_CLIENT
+    if client is None or getattr(client, "_supabase_url", None) != clean_url:
+        with _JWKS_CLIENT_LOCK:
+            client = _JWKS_CLIENT
+            if client is None or getattr(client, "_supabase_url", None) != clean_url:
+                jwks_url = f"{clean_url}/auth/v1/.well-known/jwks.json"
+                client = jwt.PyJWKClient(jwks_url, cache_jwk_set=True, lifespan=3600)
+                setattr(client, "_supabase_url", clean_url)
+                _JWKS_CLIENT = client
+    return client
 
 
 def _configured_jwt_secret() -> str | None:
