@@ -10,15 +10,17 @@ from __future__ import annotations
 from collections import OrderedDict
 import threading
 import uuid
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
-from typing import Dict, Iterable, List, Optional, Set, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Set, Tuple
 
 from sqlalchemy import delete, func, select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session, noload
 
+from . import session as db_session
+from .ports import instrument_to_dict, quote_to_dict
 from .schema import MarketQuote, RefreshRun, UserInstrument
 from ..core.calculations import (
     daily_variation,
@@ -26,42 +28,23 @@ from ..core.calculations import (
     variation_since_analysis,
     ytd_variation,
 )
+from ..core.models import Quote
+from ..core.parsing import parse_bool, parse_date, parse_positive_decimal, safe_float
 
 
 def _parse_d(v: object) -> Optional[date]:
-    """Safe parsing for dates from various string/date representations."""
-    if not v:
-        return None
-    if isinstance(v, date):
-        return v
-    try:
-        return date.fromisoformat(str(v).split("T")[0].split(" ")[0].strip())
-    except Exception:
-        return None
+    """Safe parsing for dates delegating to canonical core.parsing.parse_date."""
+    return parse_date(v)
 
 
 def _parse_dec(v: object) -> Optional[Decimal]:
-    """Safe parsing for Decimals from numeric or string values.
-    
-    Returns positive Decimal or None. DB constraints prohibit 0 or negative prices.
-    """
-    if v is None or v == "":
-        return None
-    try:
-        d = Decimal(str(v).strip())
-        return d if d > 0 else None
-    except Exception:
-        return None
+    """Safe parsing for positive Decimals delegating to canonical core.parsing."""
+    return parse_positive_decimal(v)
 
 
 def _parse_bool(v: object) -> bool:
-    """Safe parsing for boolean values."""
-    if v is None:
-        return True
-    if isinstance(v, bool):
-        return v
-    val_str = str(v).strip().lower()
-    return val_str not in ("false", "0", "no", "f", "off")
+    """Safe parsing for boolean values delegating to canonical core.parsing."""
+    return parse_bool(v, default=True)
 
 
 # In-memory quote delta tracker to eliminate redundant database writes
@@ -905,3 +888,711 @@ class RefreshRunRepository:
                 return False, f"Please wait {wait_sec} seconds before requesting another refresh."
 
         return True, None
+
+
+class PostgresWatchlistStore:
+    """PortfolioStore implementation backed by multi-tenant PostgreSQL (SQLAlchemy)."""
+
+    supports_sqlite_file_backups: bool = False
+
+    def __init__(self, user_id: Optional[uuid.UUID | str] = None) -> None:
+        if user_id is None:
+            self.user_id: Optional[uuid.UUID] = None
+        elif isinstance(user_id, uuid.UUID):
+            self.user_id = user_id
+        else:
+            self.user_id = uuid.UUID(str(user_id))
+
+    def _require_user_id(self) -> uuid.UUID:
+        if self.user_id is None:
+            raise ValueError("user_id is required for tenant-scoped operations.")
+        return self.user_id
+
+    def count_active_instruments(self) -> int:
+        with db_session.session_scope() as session:
+            cnt = session.scalar(
+                select(func.count()).select_from(UserInstrument).where(UserInstrument.active.is_(True))
+            )
+            return int(cnt or 0)
+
+    def list_instruments(self, active_only: bool = True) -> List[dict]:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            instruments = repo.get_instruments(active_only=active_only, include_quote=False)
+            return [instrument_to_dict(inst) for inst in instruments]
+
+    def get_instrument_detail(self, ticker: str) -> Optional[tuple[dict, Optional[dict]]]:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            inst = repo.get_instrument_by_ticker(ticker, include_quote=True)
+            if not inst:
+                return None
+            return instrument_to_dict(inst), quote_to_dict(inst.quote)
+
+    def instrument_exists(self, ticker: str) -> bool:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            return repo.get_instrument_by_ticker(ticker, include_quote=False) is not None
+
+    def create_instrument(
+        self,
+        payload: dict,
+        fetched_quote: Optional[Quote],
+        manual_price: Optional[float],
+        manual_previous_close: Optional[float] = None,
+    ) -> tuple[dict, Optional[dict]]:
+        uid = self._require_user_id()
+        ticker = str(payload["user_ticker"]).strip()
+        exch_raw = payload.get("exchange", "UNKNOWN")
+        exch_str = exch_raw.value if hasattr(exch_raw, "value") else str(exch_raw)
+        provider_symbol = str(payload.get("provider_symbol") or ticker).strip().upper()
+        currency = str(payload.get("currency") or "EUR")
+        company_name = str(payload.get("company_name") or ticker)
+
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            if repo.get_instrument_by_ticker(ticker, include_quote=False):
+                raise ValueError(f"Instrument with ticker '{ticker}' already exists in database.")
+
+            inst_created = repo.create_instrument(
+                user_ticker=ticker,
+                provider_symbol=provider_symbol,
+                exchange=exch_str,
+                currency=currency,
+                company_name=company_name,
+                analysis_date=payload.get("analysis_date"),
+                analysis_reference_price=payload.get("analysis_reference_price"),
+                start_of_year_date=payload.get("start_of_year_date"),
+                start_of_year_price=payload.get("start_of_year_price"),
+                target_price=payload.get("target_price"),
+                comment=str(payload.get("comment") or ""),
+                active=bool(payload.get("active", True)),
+            )
+
+            quote_info: Optional[dict] = None
+            if manual_price is not None and manual_price > 0:
+                quote_info = {"source": "manual", "price": manual_price}
+            elif fetched_quote is not None:
+                GlobalMarketQuotesRepository(session).upsert_market_quote_safe(
+                    provider_symbol=provider_symbol,
+                    price=fetched_quote.price,
+                    previous_close=fetched_quote.previous_close,
+                    quote_timestamp=fetched_quote.quote_timestamp,
+                    status=(
+                        fetched_quote.status.name
+                        if hasattr(fetched_quote.status, "name")
+                        else str(fetched_quote.status)
+                    ),
+                    error_message=fetched_quote.error_message,
+                    exchange=inst_created.exchange,
+                    currency=inst_created.currency,
+                    company_name=company_name,
+                    provider=fetched_quote.provider or "yahoo",
+                )
+                quote_info = {"source": "yahoo", "price": safe_float(fetched_quote.price)}
+
+            return instrument_to_dict(inst_created), quote_info
+
+    def get_instrument_snapshot_for_update(self, ticker: str) -> Optional[dict]:
+        """Read current instrument metadata needed to compute provider_symbol before update."""
+        uid = self._require_user_id()
+        with db_session.get_session_factory()() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            inst = repo.get_instrument_by_ticker(ticker, include_quote=False)
+            if not inst:
+                return None
+            return {
+                "id": inst.id,
+                "user_ticker": inst.user_ticker,
+                "provider_symbol": inst.provider_symbol,
+                "exchange": inst.exchange,
+                "currency": inst.currency,
+            }
+
+    def update_instrument(
+        self,
+        ticker: str,
+        fields_set: set[str],
+        updates: dict,
+    ) -> dict:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            inst = repo.get_instrument_by_ticker(ticker, include_quote=False)
+            if not inst:
+                raise KeyError(f"Instrument '{ticker}' not found")
+
+            new_ticker_val = updates.get("new_ticker")
+            if "new_ticker" in fields_set and new_ticker_val and new_ticker_val.strip().upper() != inst.user_ticker:
+                new_t = new_ticker_val.strip().upper()
+                existing = repo.get_instrument_by_ticker(new_t, include_quote=False)
+                if existing and existing.id != inst.id:
+                    raise ValueError(
+                        f"Cannot rename to '{new_t}': another instrument already uses that ticker."
+                    )
+                new_ticker_val = new_t
+            else:
+                new_ticker_val = None
+
+            exch_val = updates.get("exchange")
+            if hasattr(exch_val, "value"):
+                exch_val = exch_val.value
+
+            updated = repo.update_instrument(
+                ticker=ticker,
+                fields_set=set(fields_set),
+                new_ticker=new_ticker_val,
+                provider_symbol=updates.get("provider_symbol"),
+                exchange=exch_val,
+                currency=updates.get("currency"),
+                company_name=updates.get("company_name"),
+                analysis_date=updates.get("analysis_date"),
+                analysis_reference_price=updates.get("analysis_reference_price"),
+                start_of_year_date=updates.get("start_of_year_date"),
+                start_of_year_price=updates.get("start_of_year_price"),
+                target_price=updates.get("target_price"),
+                comment=updates.get("comment"),
+                active=updates.get("active"),
+            )
+            if not updated:
+                raise KeyError(f"Instrument '{ticker}' not found")
+
+            provider_symbol_val = updated.provider_symbol
+            if provider_symbol_val:
+                mq = session.get(MarketQuote, provider_symbol_val)
+                if not mq:
+                    session.add(
+                        MarketQuote(
+                            provider_symbol=provider_symbol_val,
+                            exchange=updated.exchange,
+                            currency=updated.currency,
+                            company_name=updated.company_name,
+                            last_attempt_at=None,
+                        )
+                    )
+            return instrument_to_dict(updated)
+
+    def delete_instrument(self, ticker: str) -> bool:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            return repo.delete_instrument(ticker)
+
+    def get_analysis_lookup_target(
+        self, ticker: str
+    ) -> Optional[tuple[Any, str, Optional[date], Optional[str]]]:
+        uid = self._require_user_id()
+        clean_ticker = ticker.strip()
+        with db_session.session_scope() as session:
+            row = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.user_ticker,
+                    UserInstrument.analysis_date,
+                    UserInstrument.provider_symbol,
+                ).where(
+                    UserInstrument.user_id == uid,
+                    func.upper(UserInstrument.user_ticker) == clean_ticker.upper(),
+                )
+            ).first()
+            return tuple(row) if row else None  # type: ignore[return-value]
+
+    def save_analysis_price(self, target_id: Any, price: Decimal, actual_date: date) -> None:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            session.execute(
+                update(UserInstrument)
+                .where(UserInstrument.id == target_id, UserInstrument.user_id == uid)
+                .values(analysis_reference_price=price, analysis_date=actual_date)
+            )
+
+    def get_ytd_lookup_target(
+        self, ticker: str
+    ) -> Optional[tuple[Any, str, Optional[date], Optional[str]]]:
+        uid = self._require_user_id()
+        clean_ticker = ticker.strip()
+        with db_session.session_scope() as session:
+            row = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.user_ticker,
+                    UserInstrument.start_of_year_date,
+                    UserInstrument.provider_symbol,
+                ).where(
+                    UserInstrument.user_id == uid,
+                    func.upper(UserInstrument.user_ticker) == clean_ticker.upper(),
+                )
+            ).first()
+            return tuple(row) if row else None  # type: ignore[return-value]
+
+    def save_ytd_price(self, target_id: Any, price: Decimal, actual_date: date) -> None:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            session.execute(
+                update(UserInstrument)
+                .where(UserInstrument.id == target_id, UserInstrument.user_id == uid)
+                .values(start_of_year_price=price, start_of_year_date=actual_date)
+            )
+
+    def list_missing_analysis_candidates(
+        self,
+    ) -> tuple[int, List[tuple[Any, str, date]], int]:
+        if self.user_id is None:
+            return 0, [], 0
+        uid = self.user_id
+        with db_session.session_scope() as session:
+            rows = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.provider_symbol,
+                    UserInstrument.analysis_date,
+                    UserInstrument.analysis_reference_price,
+                ).where(
+                    UserInstrument.user_id == uid,
+                    UserInstrument.active.is_(True),
+                )
+            ).all()
+        candidates: List[tuple[Any, str, date]] = []
+        missing_sym_failed = 0
+        for row_id, prov_sym, an_dt, an_price in rows:
+            if an_dt and not an_price:
+                if prov_sym:
+                    candidates.append((row_id, prov_sym, an_dt))
+                else:
+                    missing_sym_failed += 1
+        return len(rows), candidates, missing_sym_failed
+
+    def save_missing_analysis_prices(
+        self, resolved: List[tuple[Any, Decimal, date]]
+    ) -> None:
+        if not resolved or self.user_id is None:
+            return
+        uid = self.user_id
+        with db_session.session_scope() as session:
+            for row_id, price_val, dt_val in resolved:
+                session.execute(
+                    update(UserInstrument)
+                    .where(UserInstrument.id == row_id, UserInstrument.user_id == uid)
+                    .values(analysis_reference_price=price_val, analysis_date=dt_val)
+                )
+
+    def list_missing_ytd_candidates(self) -> tuple[int, List[tuple[Any, str]], int]:
+        if self.user_id is None:
+            return 0, [], 0
+        uid = self.user_id
+        with db_session.session_scope() as session:
+            rows = session.execute(
+                select(
+                    UserInstrument.id,
+                    UserInstrument.provider_symbol,
+                    UserInstrument.start_of_year_price,
+                ).where(
+                    UserInstrument.user_id == uid,
+                    UserInstrument.active.is_(True),
+                )
+            ).all()
+        candidates: List[tuple[Any, str]] = []
+        missing_sym_failed = 0
+        for row_id, prov_sym, soy_price in rows:
+            if not soy_price:
+                if prov_sym:
+                    candidates.append((row_id, prov_sym))
+                else:
+                    missing_sym_failed += 1
+        return len(rows), candidates, missing_sym_failed
+
+    def save_missing_ytd_prices(
+        self, resolved: List[tuple[Any, Decimal, date]]
+    ) -> None:
+        if not resolved or self.user_id is None:
+            return
+        uid = self.user_id
+        with db_session.session_scope() as session:
+            for row_id, price_val, dt_val in resolved:
+                session.execute(
+                    update(UserInstrument)
+                    .where(UserInstrument.id == row_id, UserInstrument.user_id == uid)
+                    .values(start_of_year_price=price_val, start_of_year_date=dt_val)
+                )
+
+    def get_positions(self, active_only: bool = False) -> List[dict]:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            return repo.get_positions_with_calculations(active_only=active_only)
+
+    def get_metrics_rows(
+        self,
+    ) -> List[tuple[str, str, str, Optional[float], Optional[float]]]:
+        uid = self._require_user_id()
+        rows_data: List[tuple[str, str, str, Optional[float], Optional[float]]] = []
+        with db_session.session_scope() as session:
+            stmt = (
+                select(
+                    UserInstrument.user_ticker,
+                    UserInstrument.company_name,
+                    UserInstrument.currency,
+                    MarketQuote.price,
+                    MarketQuote.previous_close,
+                )
+                .outerjoin(
+                    MarketQuote,
+                    UserInstrument.provider_symbol == MarketQuote.provider_symbol,
+                )
+                .where(UserInstrument.user_id == uid)
+            )
+            for ticker, company, curr, price, prev_close in session.execute(stmt).all():
+                rows_data.append(
+                    (
+                        ticker,
+                        company or ticker,
+                        curr or "EUR",
+                        float(price) if price is not None else None,
+                        float(prev_close) if prev_close is not None else None,
+                    )
+                )
+        return rows_data
+
+    def import_watchlist(self, items: List[dict], replace_all: bool = False) -> int:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            return repo.import_or_restore_user_watchlist(items, replace_all=replace_all)
+
+    def export_records(self) -> List[dict]:
+        return self.get_positions(active_only=False)
+
+    def wipe_all(self) -> None:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            session.execute(delete(UserInstrument).where(UserInstrument.user_id == uid))
+
+    def check_and_prepare_batch_refresh(
+        self, now_utc: datetime, force: bool, stale_seconds: int
+    ) -> dict:
+        run_id = None
+        symbol_counts: Dict[str, int] = {}
+        symbol_currencies: Dict[str, str] = {}
+        stale_symbols: List[str] = []
+
+        with db_session.session_scope() as session:
+            run_repo = RefreshRunRepository(session)
+            cutoff = now_utc - timedelta(minutes=10)
+            try:
+                stale_runs = session.scalars(
+                    select(RefreshRun).where(
+                        RefreshRun.status == "RUNNING",
+                        RefreshRun.started_at < cutoff,
+                    )
+                ).all()
+                for sr in stale_runs:
+                    sr.status = "TIMEOUT"
+                    sr.diagnostic_summary = "Timed out after 10 minutes without completion."
+                if stale_runs:
+                    session.flush()
+            except Exception:
+                pass
+
+            if self.user_id is not None:
+                can_rf, cooldown_msg = run_repo.can_user_refresh(
+                    self.user_id, cooldown_seconds=stale_seconds
+                )
+                if not can_rf:
+                    if cooldown_msg and "already have a refresh in progress" in cooldown_msg:
+                        return {"state": "in_progress", "detail": cooldown_msg}
+                    if not force:
+                        return {"state": "fresh", "detail": cooldown_msg, "total_symbols": 0}
+            elif run_repo.is_running(scope="GLOBAL"):
+                return {
+                    "state": "in_progress",
+                    "detail": "Refresh is already in progress across instances.",
+                }
+
+            stmt = select(
+                UserInstrument.provider_symbol,
+                UserInstrument.user_ticker,
+                UserInstrument.currency,
+            ).where(UserInstrument.active.is_(True))
+            if self.user_id is not None:
+                stmt = stmt.where(UserInstrument.user_id == self.user_id)
+
+            rows = session.execute(stmt).all()
+            if not rows:
+                return {"state": "empty", "total_symbols": 0}
+
+            for prov_sym, usr_ticker, curr in rows:
+                sym = (prov_sym or usr_ticker or "").strip().upper()
+                if sym:
+                    symbol_counts[sym] = symbol_counts.get(sym, 0) + 1
+                    if curr and sym not in symbol_currencies:
+                        symbol_currencies[sym] = curr
+
+            unique_symbols = list(symbol_counts.keys())
+            total_symbols = len(unique_symbols)
+            if force:
+                clear_quote_delta_cache(symbols=unique_symbols)
+
+            quotes_stmt = select(MarketQuote.provider_symbol, MarketQuote.last_attempt_at).where(
+                MarketQuote.provider_symbol.in_(unique_symbols)
+            )
+            existing_attempts = {sym: last_at for sym, last_at in session.execute(quotes_stmt).all()}
+            existing_quote_symbols = set(existing_attempts.keys())
+
+            for sym in unique_symbols:
+                if force:
+                    stale_symbols.append(sym)
+                    continue
+                last_attempt = existing_attempts.get(sym)
+                if last_attempt is None:
+                    stale_symbols.append(sym)
+                else:
+                    last_ts = last_attempt if last_attempt.tzinfo else last_attempt.replace(tzinfo=timezone.utc)
+                    if (now_utc - last_ts).total_seconds() >= stale_seconds:
+                        stale_symbols.append(sym)
+
+            if not stale_symbols:
+                return {"state": "fresh", "total_symbols": total_symbols}
+
+            try:
+                run = run_repo.start_run(
+                    total_symbols=len(stale_symbols),
+                    trigger_type="manual" if self.user_id is not None else "batch_worker",
+                    user_id=self.user_id,
+                )
+                run_id = run.id
+            except Exception:
+                pass
+
+        return {
+            "state": "ready",
+            "run_id": run_id,
+            "stale_symbols": stale_symbols,
+            "total_symbols": total_symbols,
+            "symbol_counts": symbol_counts,
+            "symbol_currencies": symbol_currencies,
+            "existing_quote_symbols": existing_quote_symbols,
+            "instrument_map": {},
+        }
+
+    def persist_refresh_batch(
+        self,
+        run_id: Any,
+        chunk_quotes: Dict[str, Quote],
+        symbol_counts: Dict[str, int],
+        symbol_currencies: Dict[str, str],
+        existing_quote_symbols: set[str],
+        instrument_map: Dict[str, List[int]],
+        processed_count: int,
+        updated: int,
+        failed: int,
+    ) -> tuple[int, int, int, int]:
+        batch_updated = 0
+        batch_failed = 0
+        batch_quotes_payload = []
+
+        for sym, quote in chunk_quotes.items():
+            status_str = quote.status.name if hasattr(quote.status, "name") else str(quote.status)
+            batch_quotes_payload.append({
+                "provider_symbol": sym,
+                "price": quote.price,
+                "previous_close": quote.previous_close,
+                "quote_timestamp": quote.quote_timestamp,
+                "status": status_str,
+                "error_message": quote.error_message,
+                "provider": quote.provider or "yahoo",
+                "currency": symbol_currencies.get(sym, "EUR"),
+            })
+            cnt = symbol_counts.get(sym, 1)
+            if quote.is_valid():
+                updated += cnt
+                batch_updated += cnt
+            else:
+                failed += cnt
+                batch_failed += cnt
+            processed_count += 1
+
+        deltas_to_write = filter_unchanged_quotes(batch_quotes_payload)
+        delta_syms = {d["provider_symbol"] for d in deltas_to_write}
+        unchanged_existing_syms: list[str] = []
+        for item in batch_quotes_payload:
+            psym = item["provider_symbol"]
+            if psym not in delta_syms:
+                if psym in existing_quote_symbols:
+                    unchanged_existing_syms.append(psym)
+                else:
+                    deltas_to_write.append(item)
+                    existing_quote_symbols.add(psym)
+
+        with db_session.session_scope() as batch_session:
+            quotes_repo = GlobalMarketQuotesRepository(batch_session)
+            if deltas_to_write:
+                quotes_repo.upsert_market_quotes_batch(deltas_to_write)
+                existing_quote_symbols.update(d["provider_symbol"] for d in deltas_to_write)
+            if unchanged_existing_syms:
+                quotes_repo.touch_last_attempt_at(unchanged_existing_syms, datetime.now(timezone.utc))
+            if run_id:
+                try:
+                    RefreshRunRepository(batch_session).update_progress(
+                        run_id=run_id,
+                        processed=processed_count,
+                        successful=updated,
+                        failed=failed,
+                    )
+                except Exception:
+                    pass
+
+        return processed_count, updated, failed, batch_updated
+
+    def complete_refresh_run(
+        self,
+        run_id: Any,
+        status: str,
+        diagnostic_summary: Optional[str] = None,
+        error_message: Optional[str] = None,
+    ) -> None:
+        if not run_id:
+            return
+        with db_session.session_scope() as session:
+            RefreshRunRepository(session).complete_run(
+                run_id=run_id,
+                status=status,
+                diagnostic_summary=diagnostic_summary,
+                error_message=error_message,
+            )
+
+    def get_active_refresh_run(self) -> Optional[dict]:
+        with db_session.get_session_factory()() as session:
+            active_run = session.scalars(
+                select(RefreshRun)
+                .where(RefreshRun.status == "RUNNING")
+                .order_by(RefreshRun.started_at.desc())
+                .limit(1)
+            ).first()
+            if active_run is None:
+                return None
+            return {
+                "is_refreshing": True,
+                "processed_symbols": active_run.processed_symbols,
+                "total_symbols": active_run.total_symbols,
+            }
+
+    def get_single_refresh_target(
+        self,
+        ticker: str,
+        now_utc: datetime,
+        force: bool,
+        single_cooldown_seconds: int,
+    ) -> Optional[dict]:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            repo = MultiTenantWatchlistRepository(session, uid)
+            inst = repo.get_instrument_by_ticker(ticker)
+            if not inst:
+                return None
+
+            symbol = (inst.provider_symbol or inst.user_ticker).strip().upper()
+            quote = inst.quote
+            fresh_payload: Optional[dict] = None
+            if not force and quote and quote.last_attempt_at:
+                last_ts = quote.last_attempt_at if quote.last_attempt_at.tzinfo else quote.last_attempt_at.replace(tzinfo=timezone.utc)
+                if (now_utc - last_ts).total_seconds() < single_cooldown_seconds:
+                    fresh_payload = {
+                        "status": "fresh",
+                        "message": f"Cotización de {ticker} actualizada recientemente",
+                        "refreshed_count": 0,
+                        "ticker": ticker,
+                        "price": safe_float(quote.price),
+                        "previous_close": safe_float(quote.previous_close),
+                        "analysis_reference_price": safe_float(inst.analysis_reference_price),
+                        "start_of_year_price": safe_float(inst.start_of_year_price),
+                        "provider": quote.provider,
+                        "quote_status": quote.status,
+                        "quote": {
+                            "price": safe_float(quote.price),
+                            "previous_close": safe_float(quote.previous_close),
+                            "status": quote.status,
+                            "last_attempt_at": quote.last_attempt_at.isoformat() if quote.last_attempt_at else None,
+                        },
+                    }
+
+            return {
+                "inst_id": inst.id,
+                "user_ticker": inst.user_ticker,
+                "symbol": symbol,
+                "analysis_date": inst.analysis_date,
+                "analysis_reference_price": inst.analysis_reference_price,
+                "start_of_year_price": inst.start_of_year_price,
+                "fresh_payload": fresh_payload,
+            }
+
+    def save_single_refresh_result(
+        self,
+        target: dict,
+        fetched_quote: Quote,
+        resolved_analysis_price: Optional[Decimal],
+        resolved_soy_price: Optional[Decimal],
+        resolved_soy_date: Optional[date],
+    ) -> dict:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            quotes_repo = GlobalMarketQuotesRepository(session)
+            status_str = fetched_quote.status.name if hasattr(fetched_quote.status, "name") else str(fetched_quote.status)
+            saved_quote = quotes_repo.upsert_market_quote_safe(
+                provider_symbol=target["symbol"],
+                price=fetched_quote.price,
+                previous_close=fetched_quote.previous_close,
+                quote_timestamp=fetched_quote.quote_timestamp,
+                status=status_str,
+                error_message=fetched_quote.error_message,
+                provider=fetched_quote.provider or "yahoo",
+            )
+
+            inst_updates: dict = {}
+            if resolved_analysis_price is not None:
+                inst_updates["analysis_reference_price"] = resolved_analysis_price
+            if resolved_soy_price is not None:
+                inst_updates["start_of_year_price"] = resolved_soy_price
+                inst_updates["start_of_year_date"] = resolved_soy_date
+            if inst_updates:
+                session.execute(
+                    update(UserInstrument)
+                    .where(UserInstrument.id == target["inst_id"], UserInstrument.user_id == uid)
+                    .values(**inst_updates)
+                )
+
+            final_an = resolved_analysis_price if resolved_analysis_price is not None else target["analysis_reference_price"]
+            final_soy = resolved_soy_price if resolved_soy_price is not None else target["start_of_year_price"]
+            return {
+                "status": "ok",
+                "ticker": target["user_ticker"],
+                "price": safe_float(saved_quote.price),
+                "previous_close": safe_float(saved_quote.previous_close),
+                "analysis_reference_price": safe_float(final_an),
+                "start_of_year_price": safe_float(final_soy),
+                "provider": saved_quote.provider,
+                "quote_status": saved_quote.status,
+                "quote": {
+                    "price": safe_float(saved_quote.price),
+                    "previous_close": safe_float(saved_quote.previous_close),
+                    "status": saved_quote.status,
+                    "last_attempt_at": saved_quote.last_attempt_at.isoformat() if saved_quote.last_attempt_at else None,
+                },
+            }
+
+    def list_active_symbols(self) -> frozenset[str]:
+        uid = self._require_user_id()
+        with db_session.session_scope() as session:
+            rows = session.execute(
+                select(UserInstrument.provider_symbol, UserInstrument.user_ticker).where(
+                    UserInstrument.user_id == uid,
+                    UserInstrument.active.is_(True),
+                )
+            ).all()
+            return frozenset(
+                (ps or ut or "").strip().upper()
+                for ps, ut in rows
+                if (ps or ut or "").strip()
+            )
