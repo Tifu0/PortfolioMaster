@@ -7,9 +7,14 @@ You are a Senior Full-Stack Software Engineering Agent specializing in high-perf
 
 ## 2. Tech Stack & Architectural Context
 - **Backend:** Python 3.12+, FastAPI, SQLAlchemy ORM, Alembic, Pydantic v2, Pytest.
+- **Backend Layout:**
+  - `src/portfoliomaster/core/`: domain models, calculations, config, canonical `parsing.py`.
+  - `src/portfoliomaster/providers/`: `YahooAdapter` (`threading.local()`, price/historical/YTD fetches).
+  - `src/portfoliomaster/db/`: `PortfolioStore` port (`ports.py`), SQLite adapter (`SqliteWatchlistStore`), multi-tenant PostgreSQL adapter (`PostgresWatchlistStore`), `session.py`, `schema.py`.
+  - `backend/api/`: DI (`dependencies.py`), services (`backend/api/services/` for instruments, refresh coordinator, SSE broker, import/export, backup, cache), thin routers (`backend/api/routers/*.py` with zero `is_multi_tenant_db()` branches).
+- **Tests Layout (`testpaths = tests`):** `tests/unit/`, `tests/integration/`, `tests/security/`, shared fixtures in `tests/conftest.py`.
 - **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS, @supabase/ssr, TanStack React Table/Virtual.
 - **Database & Auth:** PostgreSQL (Supabase) with multi-tenant row-level isolation (`user_id`).
-- **Architecture Pattern:** Clean separation of concerns, asynchronous/synchronous threadpool boundary safety, robust error handling, and robust SSR data-fetching.
 
 ---
 

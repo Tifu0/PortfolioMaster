@@ -2,47 +2,28 @@
 
 from __future__ import annotations
 
-import concurrent.futures
-import logging
-import math
 import uuid
-from datetime import date, datetime, timedelta, timezone
-from decimal import Decimal
-from typing import Any, Callable, Optional
+from datetime import date
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-import pandas as pd
-import warnings
 
-from portfoliomaster.core.config import get_yahoo_suffix
-from portfoliomaster.core.models import Exchange, Instrument, Quote, QuoteStatus
-from portfoliomaster.db.repository import (
-    delete_instrument,
-    get_all_instruments,
-    get_instrument_by_ticker,
-    get_quote_by_instrument_id,
-    update_instrument_by_id,
-    upsert_instrument,
-    upsert_quote,
-)
+from portfoliomaster.db.ports import PortfolioStore
 from portfoliomaster.ingest.normalizer import normalize
 from portfoliomaster.providers.yahoo_adapter import (
     YahooAdapter,
     _create_ticker,
     resolve_company_name,
 )
-from ..common import (
-    _instrument_to_dict,
-    _quote_to_dict,
-    _to_float,
-    get_current_user_id,
-    is_multi_tenant_db,
-    is_production,
-)
-from .positions import invalidate_positions_cache
-from ..schemas import CheckYahooResponse, InstrumentCreate, InstrumentUpdate
 
-logger = logging.getLogger(__name__)
+from ..common import get_current_user_id
+from ..dependencies import (
+    get_portfolio_store,
+    get_system_portfolio_store,
+    get_yahoo_provider,
+)
+from ..schemas import CheckYahooResponse, InstrumentCreate, InstrumentUpdate
+from ..services import instrument_service
 
 router = APIRouter(prefix="/api/instruments", tags=["instruments"])
 
@@ -50,190 +31,62 @@ router = APIRouter(prefix="/api/instruments", tags=["instruments"])
 def _fetch_start_of_year_quote(
     provider_symbol: str, year: Optional[int] = None
 ) -> Optional[tuple[float, date]]:
-    """Fetch closing price and trading date for the beginning of the given (or current) year."""
-    y = year or date.today().year
-    target_date = date(y, 1, 1)
-    if not provider_symbol:
-        return None
-    try:
-        t = _create_ticker(provider_symbol)
-        start_str = target_date.isoformat()
-        end_str = (target_date + timedelta(days=10)).isoformat()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            hist = t.history(start=start_str, end=end_str)
-            if hist.empty or "Close" not in hist:
-                hist = t.history(period="ytd")
-        if not hist.empty and "Close" in hist:
-            close_series = hist["Close"].dropna()
-            if not close_series.empty:
-                price = close_series.iloc[0]
-                idx = close_series.index[0]
-                actual_dt = (
-                    idx.date()
-                    if hasattr(idx, "date")
-                    else (
-                        idx.to_pydatetime().date()
-                        if hasattr(idx, "to_pydatetime")
-                        else target_date
-                    )
-                )
-                if float(price) > 0:
-                    return round(float(price), 4), actual_dt
-    except Exception:
-        pass
-    return None
+    """Delegate start-of-year lookup to canonical YahooAdapter method."""
+    return get_yahoo_provider().fetch_start_of_year_quote(provider_symbol, year)
 
 
 def _fetch_historical_quote_and_date(
     provider_symbol: str, target_date: date, window_days: int = 10
 ) -> Optional[tuple[float, date]]:
-    """Fetch closing price and trading date on or before target_date with resilient lookback.
-    
-    CRITICAL FIX (Bug 2): Eliminates false historical price fallback!
-    Only allows fallback to fast_info if target_date is today or within the last 5 days.
-    """
-    if not provider_symbol or not target_date:
-        return None
-    try:
-        # Special case: Start of Year (Jan 1)
-        if target_date.month == 1 and target_date.day == 1:
-            return _fetch_start_of_year_quote(provider_symbol, target_date.year)
-
-        t = _create_ticker(provider_symbol)
-
-        # 1. Historical lookback window
-        start_str = (target_date - timedelta(days=window_days)).isoformat()
-        end_str = (target_date + timedelta(days=1)).isoformat()
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            hist = t.history(start=start_str, end=end_str)
-
-        if not hist.empty and "Close" in hist:
-            valid_rows = []
-            for idx, row in hist.iterrows():
-                row_dt = idx.date() if hasattr(idx, "date") else idx.to_pydatetime().date()
-                val = row["Close"]
-                if row_dt <= target_date and pd.notna(val) and float(val) > 0:
-                    valid_rows.append((float(val), row_dt))
-
-            if valid_rows:
-                price, actual_dt = valid_rows[-1]
-                return round(price, 4), actual_dt
-
-        # 2. Resilient fallback: ONLY for today / recent days within 5 days!
-        days_from_today = (date.today() - target_date).days
-        if 0 <= days_from_today <= 5:
-            price = None
-            actual_dt = target_date
-
-            try:
-                fi = getattr(t, "fast_info", None)
-                if fi:
-                    lp = getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None)
-                    if lp is not None and not math.isnan(float(lp)) and float(lp) > 0:
-                        price = float(lp)
-                    if price is None:
-                        pc = getattr(fi, "previous_close", None) or getattr(fi, "regularMarketPreviousClose", None)
-                        if pc is not None and not math.isnan(float(pc)) and float(pc) > 0:
-                            price = float(pc)
-            except Exception:
-                pass
-
-            if price is None:
-                try:
-                    hist_recent = t.history(period="5d")
-                    if not hist_recent.empty and "Close" in hist_recent:
-                        recent_series = hist_recent["Close"].dropna()
-                        if not recent_series.empty:
-                            last_val = recent_series.iloc[-1]
-                            if float(last_val) > 0:
-                                price = float(last_val)
-                                last_idx = recent_series.index[-1]
-                                actual_dt = last_idx.date() if hasattr(last_idx, "date") else target_date
-                except Exception:
-                    pass
-
-            if price is not None and price > 0:
-                return round(price, 4), actual_dt
-
-    except Exception as e:
-        logger.debug(f"Error in _fetch_historical_quote_and_date for {provider_symbol}: {e}")
-
-    return None
+    """Delegate historical lookup to canonical YahooAdapter method."""
+    return get_yahoo_provider().fetch_historical_quote_and_date(
+        provider_symbol, target_date, window_days=window_days
+    )
 
 
 def _fetch_historical_quote_for_date(provider_symbol: str, target_date: date) -> Optional[float]:
-    """Fetch closing price on or shortly before target_date from Yahoo Finance."""
-    res = _fetch_historical_quote_and_date(provider_symbol, target_date, window_days=10)
-    return res[0] if res else None
+    """Delegate scalar historical lookup to canonical YahooAdapter method."""
+    return get_yahoo_provider().fetch_historical_quote_for_date(provider_symbol, target_date)
 
 
-def _get_yahoo_adapter() -> YahooAdapter:
-    import sys
-    main_mod = sys.modules.get("backend.api.main")
-    if main_mod and hasattr(main_mod, "YahooAdapter"):
-        cls_or_fn = getattr(main_mod, "YahooAdapter")
-        try:
-            return cls_or_fn()
-        except TypeError:
-            return cls_or_fn
-    return YahooAdapter()
+def _resolve_missing_analysis_prices_sync(user_id: Optional[uuid.UUID] = None) -> dict:
+    """Resolve missing analysis reference prices via PortfolioStore DI."""
+    store = (
+        get_portfolio_store(user_id=user_id)
+        if user_id is not None
+        else get_system_portfolio_store()
+    )
+    return instrument_service.resolve_missing_analysis_prices(
+        store,
+        get_yahoo_provider(),
+        user_id=user_id,
+        fetch_hist_fn=_fetch_historical_quote_and_date,
+    )
+
+
+def _resolve_missing_ytd_prices_sync(user_id: Optional[uuid.UUID] = None) -> dict:
+    """Resolve missing YTD reference prices via PortfolioStore DI."""
+    store = (
+        get_portfolio_store(user_id=user_id)
+        if user_id is not None
+        else get_system_portfolio_store()
+    )
+    return instrument_service.resolve_missing_ytd_prices(
+        store,
+        get_yahoo_provider(),
+        user_id=user_id,
+        fetch_soy_fn=_fetch_start_of_year_quote,
+    )
 
 
 @router.get("")
 def list_instruments(
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
 ):
     """All active instruments (for dropdowns / selection)."""
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            instruments = repo.get_instruments(active_only=True, include_quote=False)
-            return {
-                "instruments": [_instrument_to_dict(inst) for inst in instruments],
-                "count": len(instruments),
-            }
-
-    instruments = get_all_instruments(include_inactive=False)
-    return {
-        "instruments": [_instrument_to_dict(inst) for inst in instruments],
-        "count": len(instruments),
-    }
-
-
-def _parse_optional_iso_date(raw: Optional[str], field_name: str) -> Optional[date]:
-    """Parse an optional ISO-8601 date string or raise HTTP 422 on malformed input."""
-    if not raw or not raw.strip():
-        return None
-    try:
-        return date.fromisoformat(raw.strip())
-    except ValueError as exc:
-        raise HTTPException(
-            status_code=422,
-            detail=f"Invalid ISO date format for '{field_name}': expected YYYY-MM-DD",
-        ) from exc
-
-
-def _build_provider_symbol(norm_ticker: str, raw_ticker: str, exchange: Exchange | str, currency: str) -> str:
-    """Resolve Yahoo Finance provider_symbol from normalized ticker, exchange, and currency."""
-    suffix = get_yahoo_suffix(raw_ticker, exchange, currency)
-    if suffix and not norm_ticker.upper().endswith(suffix.upper()):
-        return f"{norm_ticker}{suffix}"
-    return norm_ticker
-
-
-def _positive_float(value: Any) -> Optional[float]:
-    """Return rounded positive float or None when missing/non-positive/NaN."""
-    if value is None:
-        return None
-    num = float(value)
-    if math.isnan(num) or num <= 0:
-        return None
-    return round(num, 4)
+    instruments = store.list_instruments(active_only=True)
+    return {"instruments": instruments, "count": len(instruments)}
 
 
 @router.get("/check-yahoo", response_model=CheckYahooResponse)
@@ -243,390 +96,47 @@ def check_yahoo_ticker(
     user_id: uuid.UUID = Depends(get_current_user_id),
 ):
     """Check whether a ticker exists on Yahoo Finance and resolve its exchange/name."""
-    if not ticker or not ticker.strip():
-        raise HTTPException(status_code=400, detail="ticker query parameter is required")
-
-    clean_ticker = ticker.strip()
-    curr = (currency or "").strip().upper()
-    norm_ticker, detected_exchange = normalize(clean_ticker, curr)
-    symbol = _build_provider_symbol(norm_ticker, clean_ticker, detected_exchange, curr)
-    exchange_val = detected_exchange.value if isinstance(detected_exchange, Exchange) else str(detected_exchange)
-    resolved_currency = curr or "USD"
-
-    try:
-        t = _create_ticker(symbol)
-        price: Optional[float] = None
-        previous_close: Optional[float] = None
-        company_name: Optional[str] = None
-
-        fi = getattr(t, "fast_info", None)
-        if fi:
-            md_fn = getattr(fi, "_get_exchange_metadata", None)
-            if callable(md_fn):
-                try:
-                    meta = md_fn()
-                    if isinstance(meta, dict):
-                        company_name = meta.get("longName") or meta.get("shortName")
-                        price = _positive_float(meta.get("regularMarketPrice") or meta.get("fulldayPrice"))
-                        previous_close = _positive_float(
-                            meta.get("regularMarketPreviousClose") or meta.get("chartPreviousClose")
-                        )
-                        if not curr and meta.get("currency"):
-                            resolved_currency = str(meta["currency"]).upper()
-                except Exception:
-                    pass
-
-            try:
-                fi_price = _positive_float(getattr(fi, "last_price", None) or getattr(fi, "regularMarketPrice", None))
-                if fi_price is not None:
-                    price = fi_price
-                fi_prev = _positive_float(
-                    getattr(fi, "previous_close", None) or getattr(fi, "regularMarketPreviousClose", None)
-                )
-                if fi_prev is not None:
-                    previous_close = fi_prev
-                if price is None and previous_close is not None:
-                    price = previous_close
-                fi_curr = getattr(fi, "currency", None)
-                if fi_curr:
-                    resolved_currency = str(fi_curr).upper()
-            except Exception:
-                pass
-
-        if not company_name:
-            company_name = resolve_company_name(symbol, t)
-
-        if price is None:
-            try:
-                hist = t.history(period="5d")
-                if not hist.empty and "Close" in hist:
-                    series = hist["Close"].dropna()
-                    if not series.empty:
-                        price = _positive_float(series.iloc[-1])
-                        if previous_close is None and len(series) >= 2:
-                            previous_close = _positive_float(series.iloc[-2])
-            except Exception:
-                pass
-
-        if price is not None and price > 0:
-            return CheckYahooResponse(
-                status="ok",
-                available=True,
-                valid=True,
-                ticker=clean_ticker,
-                provider_symbol=symbol,
-                exchange=exchange_val,
-                currency=resolved_currency,
-                price=price,
-                previous_close=previous_close,
-                company_name=company_name or clean_ticker,
-                message=None,
-                error=None,
-            )
-
-        not_found_msg = (
-            f"Symbol '{symbol}' was contacted on Yahoo Finance, but no recent price could be confirmed."
-        )
-        return CheckYahooResponse(
-            status="ok",
-            available=False,
-            valid=False,
-            ticker=clean_ticker,
-            provider_symbol=symbol,
-            exchange=exchange_val,
-            currency=resolved_currency,
-            price=None,
-            previous_close=previous_close,
-            company_name=company_name,
-            message=not_found_msg,
-            error=not_found_msg,
-        )
-
-    except Exception as e:
-        logger.warning("Yahoo check failed for %s: %s", symbol, e)
-        detail = (
-            "Failed to query Yahoo Finance."
-            if is_production()
-            else f"Network or Yahoo Finance error: {e}"
-        )
-        raise HTTPException(status_code=502, detail=detail) from e
+    return instrument_service.check_yahoo_ticker_metadata(
+        ticker,
+        currency,
+        normalize_fn=normalize,
+        create_ticker_fn=_create_ticker,
+        resolve_name_fn=resolve_company_name,
+    )
 
 
 @router.get("/{ticker}")
 def get_instrument(
     ticker: str,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
 ):
     """Single instrument with its quote."""
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            inst = repo.get_instrument_by_ticker(ticker)
-            if not inst:
-                raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-            return {
-                "instrument": _instrument_to_dict(inst),
-                "quote": _quote_to_dict(inst.quote) if inst.quote else None,
-            }
-
-    inst = get_instrument_by_ticker(ticker)
-    if not inst:
+    detail = store.get_instrument_detail(ticker)
+    if detail is None:
         raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-    quote = get_quote_by_instrument_id(inst.id) if inst.id else None
-    return {
-        "instrument": _instrument_to_dict(inst),
-        "quote": _quote_to_dict(quote) if quote else None,
-    }
-
-
-def _normalize_currency(curr: Optional[str], default_exchange: Optional[Exchange | str] = None) -> str:
-    """Normalize currency, translating AUTO, empty, or whitespace into detected or default currency.
-    
-    Guarantees 'AUTO' is never persisted to the database.
-    """
-    if not curr:
-        raw = ""
-    else:
-        raw = curr.strip().upper()
-    if raw == "AUTO" or not raw:
-        if default_exchange:
-            exch_str = default_exchange.value if isinstance(default_exchange, Exchange) else str(default_exchange).upper()
-            if exch_str in ("SPAIN", "BME", "IBEX", "PARIS", "FRANKFURT", "AMSTERDAM", "MILAN"):
-                return "EUR"
-            elif exch_str in ("LONDON", "LSE"):
-                return "GBP"
-            elif exch_str in ("SWISS", "SIX"):
-                return "CHF"
-            elif exch_str in ("TOKYO", "TSE"):
-                return "JPY"
-        return "USD"
-    return raw
+    instrument_dict, quote_dict = detail
+    return {"instrument": instrument_dict, "quote": quote_dict}
 
 
 @router.post("", status_code=201)
 def create_instrument_endpoint(
     data: InstrumentCreate,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
+    provider: YahooAdapter = Depends(get_yahoo_provider),
 ):
     """Add a new instrument to the watchlist."""
-    ticker = data.user_ticker.strip().upper()
-    if not ticker:
-        raise HTTPException(status_code=400, detail="user_ticker cannot be empty")
-
-    curr = (data.currency or "").strip().upper()
-    if curr == "AUTO":
-        curr = ""
-
-    norm_ticker, detected_exchange = normalize(ticker, curr)
-
-    if not data.exchange or data.exchange.upper() == "AUTO":
-        exchange = detected_exchange
-    else:
-        try:
-            exchange = Exchange(data.exchange.upper())
-        except ValueError:
-            exchange = detected_exchange
-
-    final_currency = _normalize_currency(data.currency, exchange)
-
-    provider_symbol = _build_provider_symbol(norm_ticker, ticker, exchange, final_currency)
-
-    company_name = data.company_name.strip()
-    if not company_name and data.fetch_yahoo:
-        resolved = resolve_company_name(provider_symbol)
-        if resolved:
-            company_name = resolved
-    if not company_name:
-        company_name = ticker
-
-    analysis_dt = _parse_optional_iso_date(data.analysis_date, "analysis_date")
-    soy_dt = _parse_optional_iso_date(data.start_of_year_date, "start_of_year_date")
-
-    analysis_price_dec = (
-        Decimal(str(data.analysis_reference_price))
-        if data.analysis_reference_price is not None and data.analysis_reference_price > 0
-        else None
+    return instrument_service.create_instrument(
+        data,
+        user_id,
+        store,
+        provider,
+        normalize_fn=normalize,
+        resolve_name_fn=resolve_company_name,
+        fetch_hist_fn=_fetch_historical_quote_and_date,
+        fetch_soy_fn=_fetch_start_of_year_quote,
     )
-    soy_price_dec = (
-        Decimal(str(data.start_of_year_price))
-        if data.start_of_year_price is not None and data.start_of_year_price > 0
-        else None
-    )
-    target_price_dec = (
-        Decimal(str(data.target_price))
-        if data.target_price is not None and data.target_price > 0
-        else None
-    )
-
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import (
-            GlobalMarketQuotesRepository,
-            MultiTenantWatchlistRepository,
-        )
-
-        manual_price = data.manual_price if data.manual_price and data.manual_price > 0 else None
-        fetched_quote = None
-        if data.fetch_yahoo:
-            if manual_price is None:
-                from .refresh import _get_yahoo_adapter
-
-                fetched_quote = _get_yahoo_adapter().fetch([provider_symbol]).get(provider_symbol)
-            if analysis_dt and not analysis_price_dec:
-                res_an = _fetch_historical_quote_and_date(provider_symbol, analysis_dt, window_days=10)
-                if res_an:
-                    analysis_price_dec = Decimal(str(res_an[0]))
-                    analysis_dt = res_an[1]
-            if soy_price_dec is None:
-                year_start_quote = (
-                    _fetch_start_of_year_quote(provider_symbol, analysis_dt.year)
-                    if analysis_dt
-                    else _fetch_start_of_year_quote(provider_symbol)
-                )
-                if year_start_quote:
-                    ytd_price, soy_dt = year_start_quote
-                    soy_price_dec = Decimal(str(ytd_price))
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            existing = repo.get_instrument_by_ticker(ticker, include_quote=False)
-            if existing:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Instrument with ticker '{ticker}' already exists in database.",
-                )
-
-            inst_created = repo.create_instrument(
-                user_ticker=ticker,
-                provider_symbol=provider_symbol,
-                exchange=exchange.value if hasattr(exchange, "value") else str(exchange),
-                currency=final_currency,
-                company_name=company_name,
-                analysis_date=analysis_dt,
-                analysis_reference_price=analysis_price_dec,
-                start_of_year_date=soy_dt,
-                start_of_year_price=soy_price_dec,
-                target_price=target_price_dec,
-                comment=data.comment.strip(),
-                active=True,
-            )
-
-            quote_info = None
-            if manual_price is not None:
-                # Tenant-supplied manual_price never mutates the shared global MarketQuote table.
-                quote_info = {"source": "manual", "price": manual_price}
-            elif fetched_quote is not None:
-                GlobalMarketQuotesRepository(session).upsert_market_quote_safe(
-                    provider_symbol=provider_symbol,
-                    price=fetched_quote.price,
-                    previous_close=fetched_quote.previous_close,
-                    quote_timestamp=fetched_quote.quote_timestamp,
-                    status=(
-                        fetched_quote.status.name
-                        if hasattr(fetched_quote.status, "name")
-                        else str(fetched_quote.status)
-                    ),
-                    error_message=fetched_quote.error_message,
-                    exchange=inst_created.exchange,
-                    currency=inst_created.currency,
-                    company_name=company_name,
-                    provider=fetched_quote.provider or "yahoo",
-                )
-                quote_info = {"source": "yahoo", "price": _to_float(fetched_quote.price)}
-
-            instrument = _instrument_to_dict(inst_created)
-
-        if fetched_quote is not None and manual_price is None:
-            invalidate_positions_cache()
-        else:
-            invalidate_positions_cache(user_id)
-        return {"status": "ok", "instrument": instrument, "quote": quote_info}
-
-    existing = get_instrument_by_ticker(ticker)
-    if existing:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Instrument with ticker '{ticker}' already exists in database.",
-        )
-
-    inst = Instrument(
-        user_ticker=ticker,
-        provider_symbol=provider_symbol,
-        exchange=exchange,
-        currency=final_currency,
-        company_name=company_name,
-        analysis_date=analysis_dt,
-        analysis_reference_price=analysis_price_dec,
-        start_of_year_date=soy_dt,
-        start_of_year_price=soy_price_dec,
-        target_price=target_price_dec,
-        comment=data.comment.strip(),
-        active=True,
-    )
-    upsert_instrument(inst)
-
-    persisted = get_instrument_by_ticker(ticker)
-    if not persisted or not persisted.id:
-        raise HTTPException(status_code=500, detail="Failed to persist instrument")
-
-    # Fetch initial quote or manual price
-    quote_info = None
-    if data.manual_price is not None and data.manual_price > 0:
-        q = Quote(
-            instrument_id=persisted.id,
-            price=Decimal(str(data.manual_price)),
-            previous_close=(
-                Decimal(str(data.manual_previous_close))
-                if data.manual_previous_close and data.manual_previous_close > 0
-                else None
-            ),
-            quote_timestamp=datetime.now(timezone.utc),
-            fetched_at=datetime.now(timezone.utc),
-            provider="Manual",
-            status=QuoteStatus.FRESH,
-        )
-        upsert_quote(q)
-        quote_info = {"source": "manual", "price": data.manual_price}
-    elif data.fetch_yahoo:
-        adapter = _get_yahoo_adapter()
-        quotes = adapter.fetch([provider_symbol])
-        if provider_symbol in quotes:
-            q = quotes[provider_symbol]
-            q.instrument_id = persisted.id
-            upsert_quote(q)
-            quote_info = {"source": "yahoo", "price": _to_float(q.price)}
-        else:
-            quote_info = {"source": "yahoo", "price": None, "note": f"Yahoo did not return a price for '{provider_symbol}'"}
-
-    # Resolve missing analysis price if date provided
-    if analysis_dt and not analysis_price_dec and data.fetch_yahoo:
-        res = _fetch_historical_quote_and_date(provider_symbol, analysis_dt, window_days=10)
-        if res:
-            p_val, actual_dt = res
-            persisted.analysis_reference_price = Decimal(str(p_val))
-            persisted.analysis_date = actual_dt
-            update_instrument_by_id(persisted)
-
-    # Resolve start of year price
-    if not soy_price_dec and data.fetch_yahoo:
-        ref_year = analysis_dt.year if analysis_dt else date.today().year
-        res_ytd = _fetch_start_of_year_quote(provider_symbol, ref_year)
-        if res_ytd:
-            p_ytd, dt_ytd = res_ytd
-            persisted.start_of_year_price = Decimal(str(p_ytd))
-            persisted.start_of_year_date = dt_ytd
-            update_instrument_by_id(persisted)
-
-    final_inst = get_instrument_by_ticker(ticker)
-    invalidate_positions_cache()
-    return {
-        "status": "ok",
-        "instrument": _instrument_to_dict(final_inst or persisted),
-        "quote": quote_info,
-    }
 
 
 @router.put("/{ticker}")
@@ -634,277 +144,28 @@ def update_instrument_endpoint(
     ticker: str,
     data: InstrumentUpdate,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
+    provider: YahooAdapter = Depends(get_yahoo_provider),
 ):
-    """Update instrument fields with strict tristate PATCH semantics (Bug 6 fix).
-    
-    Fields omitted in the JSON payload are preserved.
-    Fields explicitly sent as null are cleared to NULL in the database.
-    """
-    fields_set = getattr(data, "model_fields_set", set())
-
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-        from portfoliomaster.db.schema import MarketQuote
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            inst = repo.get_instrument_by_ticker(ticker, include_quote=False)
-            if not inst:
-                raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-
-            ticker_changed = False
-            new_ticker_val = None
-            if "new_ticker" in fields_set and data.new_ticker and data.new_ticker.strip().upper() != inst.user_ticker:
-                new_t = data.new_ticker.strip().upper()
-                existing = repo.get_instrument_by_ticker(new_t, include_quote=False)
-                if existing and existing.id != inst.id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail=f"Cannot rename to '{new_t}': another instrument already uses that ticker.",
-                    )
-                new_ticker_val = new_t
-                ticker_changed = True
-
-            # Recompute provider_symbol when ticker, exchange, or currency changed
-            recompute_symbol = (
-                ticker_changed or "exchange" in fields_set or "currency" in fields_set
-            )
-            effective_ticker = new_ticker_val if ticker_changed else inst.user_ticker
-            effective_curr = (
-                _normalize_currency(data.currency, inst.exchange)
-                if ("currency" in fields_set and data.currency is not None)
-                else (inst.currency or "USD")
-            )
-
-            provider_symbol_val = inst.provider_symbol
-            eff_exchange = inst.exchange
-            if recompute_symbol:
-                norm_ticker, detected_exchange = normalize(effective_ticker, effective_curr)
-                if "exchange" in fields_set and data.exchange is not None and data.exchange.strip() and data.exchange.strip().upper() != "AUTO":
-                    try:
-                        eff_exchange = Exchange(data.exchange.strip().upper()).value
-                    except ValueError:
-                        eff_exchange = (
-                            detected_exchange.value
-                            if hasattr(detected_exchange, "value")
-                            else str(detected_exchange)
-                        )
-                elif "exchange" in fields_set or detected_exchange != Exchange.UNKNOWN:
-                    eff_exchange = (
-                        detected_exchange.value
-                        if hasattr(detected_exchange, "value")
-                        else str(detected_exchange)
-                    )
-
-                provider_symbol_val = _build_provider_symbol(
-                    norm_ticker, effective_ticker, eff_exchange, effective_curr
-                )
-
-            # Parse reference prices and dates strictly
-            an_dt = (
-                _parse_optional_iso_date(data.analysis_date, "analysis_date")
-                if "analysis_date" in fields_set
-                else None
-            )
-
-            an_pr = None
-            if "analysis_reference_price" in fields_set and data.analysis_reference_price is not None and data.analysis_reference_price > 0:
-                an_pr = Decimal(str(data.analysis_reference_price))
-
-            soy_dt = (
-                _parse_optional_iso_date(data.start_of_year_date, "start_of_year_date")
-                if "start_of_year_date" in fields_set
-                else None
-            )
-
-            soy_pr = None
-            if "start_of_year_price" in fields_set and data.start_of_year_price is not None and data.start_of_year_price > 0:
-                soy_pr = Decimal(str(data.start_of_year_price))
-
-            tgt_pr = None
-            if "target_price" in fields_set and data.target_price is not None and data.target_price > 0:
-                tgt_pr = Decimal(str(data.target_price))
-
-            repo_fields_set = set(fields_set)
-            if recompute_symbol:
-                repo_fields_set.add("provider_symbol")
-
-            clean_company_name = (
-                (data.company_name.strip() or None)
-                if ("company_name" in fields_set and data.company_name is not None)
-                else None
-            )
-
-            updated = repo.update_instrument(
-                ticker=ticker,
-                fields_set=repo_fields_set,
-                new_ticker=new_ticker_val,
-                provider_symbol=provider_symbol_val,
-                exchange=eff_exchange if recompute_symbol else None,
-                currency=effective_curr if "currency" in fields_set else None,
-                company_name=clean_company_name,
-                analysis_date=an_dt,
-                analysis_reference_price=an_pr,
-                start_of_year_date=soy_dt,
-                start_of_year_price=soy_pr,
-                target_price=tgt_pr,
-                comment=data.comment.strip() if "comment" in fields_set and data.comment is not None else None,
-                active=data.active if "active" in fields_set else None,
-            )
-
-            # Ensure market quote placeholder exists for provider_symbol
-            if provider_symbol_val:
-                mq = session.get(MarketQuote, provider_symbol_val)
-                if not mq:
-                    mq = MarketQuote(
-                        provider_symbol=provider_symbol_val,
-                        exchange=updated.exchange,
-                        currency=updated.currency,
-                        company_name=updated.company_name,
-                        last_attempt_at=None,
-                    )
-                    session.add(mq)
-
-            invalidate_positions_cache(user_id)
-            return {
-                "status": "ok",
-                "instrument": _instrument_to_dict(updated),
-            }
-
-    inst = get_instrument_by_ticker(ticker)
-    if not inst:
-        raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-
-    fields_set = getattr(data, "model_fields_set", set())
-
-    ticker_changed = False
-    if "new_ticker" in fields_set and data.new_ticker and data.new_ticker.strip().upper() != inst.user_ticker:
-        new_t = data.new_ticker.strip().upper()
-        existing = get_instrument_by_ticker(new_t)
-        if existing and existing.id != inst.id:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot rename to '{new_t}': another instrument already uses that ticker.",
-            )
-        inst.user_ticker = new_t
-        ticker_changed = True
-
-    if "currency" in fields_set and data.currency is not None:
-        inst.currency = _normalize_currency(data.currency, inst.exchange)
-
-    if ticker_changed or "exchange" in fields_set or "currency" in fields_set:
-        curr_for_norm = inst.currency or ""
-        norm_ticker, detected_exchange = normalize(inst.user_ticker, curr_for_norm)
-
-        if "exchange" in fields_set and data.exchange is not None and data.exchange.strip() and data.exchange.strip().upper() != "AUTO":
-            try:
-                inst.exchange = Exchange(data.exchange.strip().upper())
-            except ValueError:
-                inst.exchange = detected_exchange
-        elif detected_exchange != Exchange.UNKNOWN:
-            inst.exchange = detected_exchange
-
-        inst.provider_symbol = _build_provider_symbol(
-            norm_ticker, inst.user_ticker, inst.exchange, curr_for_norm
-        )
-
-    if "company_name" in fields_set and data.company_name is not None:
-        if data.company_name.strip():
-            inst.company_name = data.company_name.strip()
-        else:
-            inst.company_name = inst.user_ticker
-
-    # CRITICAL FIX (Bug 6): Tristate PATCH semantics for nullable fields
-    if "target_price" in fields_set:
-        if data.target_price is not None and data.target_price > 0:
-            inst.target_price = Decimal(str(data.target_price))
-        else:
-            inst.target_price = None
-
-    if "analysis_reference_price" in fields_set:
-        if data.analysis_reference_price is not None and data.analysis_reference_price > 0:
-            inst.analysis_reference_price = Decimal(str(data.analysis_reference_price))
-        else:
-            inst.analysis_reference_price = None
-
-    if "analysis_date" in fields_set:
-        inst.analysis_date = _parse_optional_iso_date(data.analysis_date, "analysis_date")
-
-    if "start_of_year_price" in fields_set:
-        if data.start_of_year_price is not None and data.start_of_year_price > 0:
-            inst.start_of_year_price = Decimal(str(data.start_of_year_price))
-        else:
-            inst.start_of_year_price = None
-
-    if "start_of_year_date" in fields_set:
-        inst.start_of_year_date = _parse_optional_iso_date(
-            data.start_of_year_date, "start_of_year_date"
-        )
-
-    if "comment" in fields_set:
-        inst.comment = (data.comment or "").strip()
-
-    if "active" in fields_set and data.active is not None:
-        inst.active = bool(data.active)
-
-    update_instrument_by_id(inst)
-
-    # Quote update
-    if "latest_price" in fields_set and data.latest_price is not None and data.latest_price > 0 and inst.id:
-        q = Quote(
-            instrument_id=inst.id,
-            price=Decimal(str(data.latest_price)),
-            previous_close=(
-                Decimal(str(data.previous_close))
-                if data.previous_close and data.previous_close > 0
-                else None
-            ),
-            quote_timestamp=datetime.now(timezone.utc),
-            fetched_at=datetime.now(timezone.utc),
-            provider="Manual",
-            status=QuoteStatus.FRESH,
-        )
-        upsert_quote(q)
-    elif ticker_changed and inst.id and inst.provider_symbol:
-        try:
-            adapter = _get_yahoo_adapter()
-            quotes = adapter.fetch([inst.provider_symbol])
-            if inst.provider_symbol in quotes and quotes[inst.provider_symbol].is_valid():
-                q = quotes[inst.provider_symbol]
-                q.instrument_id = inst.id
-                upsert_quote(q)
-        except Exception as e:
-            logger.debug(f"Could not fetch quote on rename: {e}")
-
-    invalidate_positions_cache()
-    return {"status": "ok", "instrument": _instrument_to_dict(inst)}
+    """Update instrument fields with strict tristate PATCH semantics."""
+    return instrument_service.update_instrument(
+        ticker,
+        data,
+        user_id,
+        store,
+        provider,
+        normalize_fn=normalize,
+    )
 
 
 @router.delete("/{ticker}")
 def delete_instrument_endpoint(
     ticker: str,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
 ):
     """Delete an instrument and its associated quote from the database."""
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.multi_tenant_repository import MultiTenantWatchlistRepository
-
-        with session_scope() as session:
-            repo = MultiTenantWatchlistRepository(session, user_id)
-            deleted = repo.delete_instrument(ticker)
-            if not deleted:
-                raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-            invalidate_positions_cache(user_id)
-            return {"status": "deleted", "deleted": ticker, "ticker": ticker}
-
-    inst = get_instrument_by_ticker(ticker)
-    if not inst:
-        raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-    delete_instrument(ticker)
-    invalidate_positions_cache()
-    return {"status": "deleted", "deleted": ticker, "ticker": ticker}
+    return instrument_service.delete_instrument(ticker, user_id, store)
 
 
 @router.post("/{ticker}/fetch-analysis-price")
@@ -912,108 +173,18 @@ def fetch_analysis_price_endpoint(
     ticker: str,
     target_date: Optional[str] = None,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
+    provider: YahooAdapter = Depends(get_yahoo_provider),
 ):
     """Fetch historical quote from Yahoo Finance for instrument's analysis_date."""
-    if is_multi_tenant_db():
-        import portfoliomaster.db.session as db_session
-        from portfoliomaster.db.schema import UserInstrument
-        from sqlalchemy import func, select, update
-
-        clean_ticker = ticker.strip()
-        with db_session.session_scope() as session:
-            row = session.execute(
-                select(
-                    UserInstrument.id,
-                    UserInstrument.user_ticker,
-                    UserInstrument.provider_symbol,
-                    UserInstrument.analysis_date,
-                )
-                .where(
-                    UserInstrument.user_id == user_id,
-                    func.upper(UserInstrument.user_ticker) == clean_ticker.upper(),
-                )
-            ).first()
-            if not row:
-                raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-            inst_id, inst_ticker, provider_symbol, inst_analysis_date = row
-
-            parsed_target_date: Optional[date] = None
-            if target_date and target_date.strip():
-                try:
-                    parsed_target_date = date.fromisoformat(target_date.strip())
-                except ValueError:
-                    raise HTTPException(status_code=400, detail=f"Invalid date format '{target_date}'. Expected YYYY-MM-DD.")
-            elif inst_analysis_date:
-                parsed_target_date = inst_analysis_date
-            else:
-                raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no analysis_date configured.")
-
-            if not provider_symbol:
-                raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol resolved.")
-
-        res = _fetch_historical_quote_and_date(provider_symbol, parsed_target_date, window_days=10)
-        if not res:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No market quote found on Yahoo Finance for {provider_symbol} on or near {parsed_target_date}.",
-            )
-
-        price, actual_dt = res
-        with db_session.session_scope() as session:
-            session.execute(
-                update(UserInstrument)
-                .where(UserInstrument.id == inst_id, UserInstrument.user_id == user_id)
-                .values(
-                    analysis_reference_price=Decimal(str(price)),
-                    analysis_date=actual_dt,
-                )
-            )
-
-        invalidate_positions_cache(user_id)
-        return {
-            "status": "ok",
-            "ticker": inst_ticker,
-            "analysis_date": actual_dt.isoformat(),
-            "analysis_reference_price": price,
-        }
-
-    inst = get_instrument_by_ticker(ticker)
-    if not inst:
-        raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-
-    parsed_target_date: Optional[date] = None
-    if target_date and target_date.strip():
-        try:
-            parsed_target_date = date.fromisoformat(target_date.strip())
-        except ValueError:
-            raise HTTPException(status_code=400, detail=f"Invalid date format '{target_date}'. Expected YYYY-MM-DD.")
-    elif inst.analysis_date:
-        parsed_target_date = inst.analysis_date
-    else:
-        raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no analysis_date configured.")
-
-    if not inst.provider_symbol:
-        raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol resolved.")
-
-    res = _fetch_historical_quote_and_date(inst.provider_symbol, parsed_target_date, window_days=10)
-    if not res:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No market quote found on Yahoo Finance for {inst.provider_symbol} on or near {parsed_target_date}.",
-        )
-
-    price, actual_dt = res
-    inst.analysis_reference_price = Decimal(str(price))
-    inst.analysis_date = actual_dt
-    update_instrument_by_id(inst)
-    invalidate_positions_cache()
-
-    return {
-        "status": "ok",
-        "ticker": inst.user_ticker,
-        "analysis_date": actual_dt.isoformat(),
-        "analysis_reference_price": price,
-    }
+    return instrument_service.fetch_analysis_price(
+        ticker,
+        target_date,
+        user_id,
+        store,
+        provider,
+        fetch_hist_fn=_fetch_historical_quote_and_date,
+    )
 
 
 @router.post("/{ticker}/fetch-ytd-price")
@@ -1021,302 +192,45 @@ def fetch_ytd_price_endpoint(
     ticker: str,
     target_year: Optional[int] = None,
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
+    provider: YahooAdapter = Depends(get_yahoo_provider),
 ):
     """Fetch start of year quote from Yahoo Finance for instrument for the given year."""
-    if is_multi_tenant_db():
-        import portfoliomaster.db.session as db_session
-        from portfoliomaster.db.schema import UserInstrument
-        from sqlalchemy import func, select, update
-
-        clean_ticker = ticker.strip()
-        with db_session.session_scope() as session:
-            row = session.execute(
-                select(
-                    UserInstrument.id,
-                    UserInstrument.user_ticker,
-                    UserInstrument.provider_symbol,
-                    UserInstrument.start_of_year_date,
-                )
-                .where(
-                    UserInstrument.user_id == user_id,
-                    func.upper(UserInstrument.user_ticker) == clean_ticker.upper(),
-                )
-            ).first()
-            if not row:
-                raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-            inst_id, inst_ticker, provider_symbol, inst_soy_date = row
-
-            y = target_year or (inst_soy_date.year if inst_soy_date else date.today().year)
-            if not provider_symbol:
-                raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol resolved.")
-
-        res = _fetch_start_of_year_quote(provider_symbol, y)
-        if not res:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No start-of-year quote found on Yahoo Finance for {provider_symbol} in year {y}.",
-            )
-
-        price, actual_dt = res
-        with db_session.session_scope() as session:
-            session.execute(
-                update(UserInstrument)
-                .where(UserInstrument.id == inst_id, UserInstrument.user_id == user_id)
-                .values(
-                    start_of_year_price=Decimal(str(price)),
-                    start_of_year_date=actual_dt,
-                )
-            )
-
-        invalidate_positions_cache(user_id)
-        return {
-            "status": "ok",
-            "ticker": inst_ticker,
-            "start_of_year_date": actual_dt.isoformat(),
-            "start_of_year_price": price,
-        }
-
-    inst = get_instrument_by_ticker(ticker)
-    if not inst:
-        raise HTTPException(status_code=404, detail=f"Instrument '{ticker}' not found")
-
-    y = target_year or (inst.start_of_year_date.year if inst.start_of_year_date else date.today().year)
-    if not inst.provider_symbol:
-        raise HTTPException(status_code=400, detail=f"Instrument '{ticker}' has no provider_symbol resolved.")
-
-    res = _fetch_start_of_year_quote(inst.provider_symbol, y)
-    if not res:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No start-of-year quote found on Yahoo Finance for {inst.provider_symbol} in year {y}.",
-        )
-
-    price, actual_dt = res
-    inst.start_of_year_price = Decimal(str(price))
-    inst.start_of_year_date = actual_dt
-    update_instrument_by_id(inst)
-    invalidate_positions_cache()
-
-    return {
-        "status": "ok",
-        "ticker": inst.user_ticker,
-        "start_of_year_date": actual_dt.isoformat(),
-        "start_of_year_price": price,
-    }
-
-
-def _resolve_candidates_parallel(
-    candidates: list[tuple[Any, Callable[[], Optional[tuple[float, date]]]]],
-) -> tuple[list[tuple[Any, float, date]], int]:
-    """Execute Yahoo historical lookups concurrently outside DB sessions."""
-    if not candidates:
-        return [], 0
-
-    def _run_one(item):
-        key, fn = item
-        try:
-            res = fn()
-            if res:
-                return key, res[0], res[1]
-        except Exception as e:
-            logger.debug("Error resolving historical price: %s", e)
-        return key, None, None
-
-    resolved: list[tuple[Any, float, date]] = []
-    failed = 0
-    max_workers = min(8, len(candidates))
-    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
-        for key, price_val, dt_val in pool.map(_run_one, candidates):
-            if price_val is not None and dt_val is not None:
-                resolved.append((key, price_val, dt_val))
-            else:
-                failed += 1
-    return resolved, failed
-
-
-def _resolve_missing_analysis_prices_sync(user_id: Optional[uuid.UUID] = None) -> dict:
-    """Resolve missing analysis reference prices for a tenant (PG) or local SQLite DB."""
-    if is_multi_tenant_db():
-        if user_id is None:
-            return {"status": "ok", "updated": 0, "failed": 0, "skipped": 0, "total": 0}
-        import portfoliomaster.db.session as db_session
-        from portfoliomaster.db.schema import UserInstrument
-        from sqlalchemy import select, update
-
-        with db_session.session_scope() as session:
-            rows = session.execute(
-                select(
-                    UserInstrument.id,
-                    UserInstrument.provider_symbol,
-                    UserInstrument.analysis_date,
-                    UserInstrument.analysis_reference_price,
-                ).where(
-                    UserInstrument.user_id == user_id,
-                    UserInstrument.active.is_(True),
-                )
-            ).all()
-
-        total = len(rows)
-        candidates = [
-            (
-                row_id,
-                lambda s=prov_sym, d=an_dt: _fetch_historical_quote_and_date(s, d, window_days=10),
-            )
-            for row_id, prov_sym, an_dt, an_price in rows
-            if an_dt and not an_price and prov_sym
-        ]
-        missing_sym_failed = sum(
-            1 for _, prov_sym, an_dt, an_price in rows if an_dt and not an_price and not prov_sym
-        )
-        resolved, fetch_failed = _resolve_candidates_parallel(candidates)
-        if resolved:
-            with db_session.session_scope() as session:
-                for row_id, price_val, dt_val in resolved:
-                    session.execute(
-                        update(UserInstrument)
-                        .where(UserInstrument.id == row_id, UserInstrument.user_id == user_id)
-                        .values(
-                            analysis_reference_price=Decimal(str(price_val)),
-                            analysis_date=dt_val,
-                        )
-                    )
-        invalidate_positions_cache(user_id)
-        return {
-            "status": "ok",
-            "updated": len(resolved),
-            "failed": fetch_failed + missing_sym_failed,
-            "skipped": total - len(candidates) - missing_sym_failed,
-            "total": total,
-        }
-
-    active_instruments = get_all_instruments(include_inactive=False)
-    total = len(active_instruments)
-    inst_by_id: dict[int, Instrument] = {}
-    candidates = []
-    missing_sym_failed = 0
-    for inst in active_instruments:
-        if inst.analysis_date and not inst.analysis_reference_price:
-            if not inst.provider_symbol or not inst.id:
-                missing_sym_failed += 1
-                continue
-            inst_by_id[inst.id] = inst
-            candidates.append(
-                (
-                    inst.id,
-                    lambda s=inst.provider_symbol, d=inst.analysis_date: _fetch_historical_quote_and_date(s, d, window_days=10),
-                )
-            )
-
-    resolved, fetch_failed = _resolve_candidates_parallel(candidates)
-    for inst_id, price_val, dt_val in resolved:
-        inst = inst_by_id[inst_id]
-        inst.analysis_reference_price = Decimal(str(price_val))
-        inst.analysis_date = dt_val
-        update_instrument_by_id(inst)
-
-    invalidate_positions_cache()
-    return {
-        "status": "ok",
-        "updated": len(resolved),
-        "failed": fetch_failed + missing_sym_failed,
-        "skipped": total - len(candidates) - missing_sym_failed,
-        "total": total,
-    }
-
-
-def _resolve_missing_ytd_prices_sync(user_id: Optional[uuid.UUID] = None) -> dict:
-    """Resolve missing YTD reference prices for a tenant (PG) or local SQLite DB."""
-    current_year = date.today().year
-    if is_multi_tenant_db():
-        if user_id is None:
-            return {"status": "ok", "updated": 0, "failed": 0, "skipped": 0, "total": 0}
-        import portfoliomaster.db.session as db_session
-        from portfoliomaster.db.schema import UserInstrument
-        from sqlalchemy import select, update
-
-        with db_session.session_scope() as session:
-            rows = session.execute(
-                select(
-                    UserInstrument.id,
-                    UserInstrument.provider_symbol,
-                    UserInstrument.start_of_year_price,
-                ).where(
-                    UserInstrument.user_id == user_id,
-                    UserInstrument.active.is_(True),
-                )
-            ).all()
-
-        total = len(rows)
-        candidates = [
-            (row_id, lambda s=prov_sym, y=current_year: _fetch_start_of_year_quote(s, y))
-            for row_id, prov_sym, soy_price in rows
-            if not soy_price and prov_sym
-        ]
-        missing_sym_failed = sum(1 for _, prov_sym, soy_price in rows if not soy_price and not prov_sym)
-        resolved, fetch_failed = _resolve_candidates_parallel(candidates)
-        if resolved:
-            with db_session.session_scope() as session:
-                for row_id, price_val, dt_val in resolved:
-                    session.execute(
-                        update(UserInstrument)
-                        .where(UserInstrument.id == row_id, UserInstrument.user_id == user_id)
-                        .values(
-                            start_of_year_price=Decimal(str(price_val)),
-                            start_of_year_date=dt_val,
-                        )
-                    )
-        invalidate_positions_cache(user_id)
-        return {
-            "status": "ok",
-            "updated": len(resolved),
-            "failed": fetch_failed + missing_sym_failed,
-            "skipped": total - len(candidates) - missing_sym_failed,
-            "total": total,
-        }
-
-    active_instruments = get_all_instruments(include_inactive=False)
-    total = len(active_instruments)
-    inst_by_id: dict[int, Instrument] = {}
-    candidates = []
-    missing_sym_failed = 0
-    for inst in active_instruments:
-        if not inst.start_of_year_price:
-            if not inst.provider_symbol or not inst.id:
-                missing_sym_failed += 1
-                continue
-            inst_by_id[inst.id] = inst
-            candidates.append(
-                (inst.id, lambda s=inst.provider_symbol, y=current_year: _fetch_start_of_year_quote(s, y))
-            )
-
-    resolved, fetch_failed = _resolve_candidates_parallel(candidates)
-    for inst_id, price_val, dt_val in resolved:
-        inst = inst_by_id[inst_id]
-        inst.start_of_year_price = Decimal(str(price_val))
-        inst.start_of_year_date = dt_val
-        update_instrument_by_id(inst)
-
-    invalidate_positions_cache()
-    return {
-        "status": "ok",
-        "updated": len(resolved),
-        "failed": fetch_failed + missing_sym_failed,
-        "skipped": total - len(candidates) - missing_sym_failed,
-        "total": total,
-    }
+    return instrument_service.fetch_ytd_price(
+        ticker,
+        target_year,
+        user_id,
+        store,
+        provider,
+        fetch_soy_fn=_fetch_start_of_year_quote,
+    )
 
 
 @router.post("/resolve-missing-analysis-prices")
 def resolve_missing_analysis_prices(
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
+    provider: YahooAdapter = Depends(get_yahoo_provider),
 ):
     """Batch resolve missing analysis reference prices for instruments having analysis_date."""
-    return _resolve_missing_analysis_prices_sync(user_id=user_id)
+    return instrument_service.resolve_missing_analysis_prices(
+        store,
+        provider,
+        user_id=user_id,
+        fetch_hist_fn=_fetch_historical_quote_and_date,
+    )
 
 
 @router.post("/resolve-missing-ytd-prices")
 def resolve_missing_ytd_prices(
     user_id: uuid.UUID = Depends(get_current_user_id),
+    store: PortfolioStore = Depends(get_portfolio_store),
+    provider: YahooAdapter = Depends(get_yahoo_provider),
 ):
     """Batch resolve missing start-of-year prices for instruments for the current year."""
-    return _resolve_missing_ytd_prices_sync(user_id=user_id)
+    return instrument_service.resolve_missing_ytd_prices(
+        store,
+        provider,
+        user_id=user_id,
+        fetch_soy_fn=_fetch_start_of_year_quote,
+    )

@@ -12,6 +12,7 @@ from typing import Optional, Union
 
 from .config import DISPLAY_DECIMAL_PLACES
 from .models import CalculationResult
+from .parsing import parse_decimal
 
 Number = Union[float, Decimal, int, str, None]
 
@@ -22,46 +23,8 @@ _ZERO = Decimal(0)
 
 
 def _to_decimal(value: Number) -> Optional[Decimal]:
-    """Convert a value to Decimal, returning None for missing/invalid input.
-
-    Accepts Decimal directly, int/float (safe via str conversion), and
-    strings in comma or dot decimal form, e.g. "166,45", "1.147,21",
-    "1.5", "NaN", "-inf". Non-numeric strings and infinities yield None.
-    """
-    if value is None:
-        return None
-    if isinstance(value, Decimal):
-        if value.is_nan() or value.is_infinite():
-            return None
-        return value
-    if isinstance(value, bool):  # bool is a subclass of int — reject it.
-        return None
-    if isinstance(value, (int, float)):
-        d = Decimal(str(value))
-        if d.is_nan() or d.is_infinite():
-            return None
-        return d
-    if isinstance(value, str):
-        s = value.strip()
-        if not s:
-            return None
-        try:
-            # Tolerate thousands separators and both decimal styles.
-            s = s.replace(" ", "").replace("%", "")
-            if "," in s and "." in s:
-                if s.rfind(",") > s.rfind("."):
-                    s = s.replace(".", "").replace(",", ".")  # European: 1.147,21
-                else:
-                    s = s.replace(",", "")  # US style: 1,147.21
-            elif "," in s:
-                s = s.replace(",", ".")
-            d = Decimal(s)
-        except (InvalidOperation, ValueError):
-            return None
-        if d.is_nan() or d.is_infinite():
-            return None
-        return d
-    return None
+    """Convert a value to Decimal via canonical parser, returning None for missing/invalid input."""
+    return parse_decimal(value)
 
 
 def _safe_div(numerator: Decimal, denominator: Decimal) -> Optional[Decimal]:

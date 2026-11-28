@@ -45,22 +45,15 @@ from fastapi.responses import JSONResponse
 
 from portfoliomaster.core.config import get_batch_size, get_refresh_interval
 from portfoliomaster.db.connection import init_db
-from portfoliomaster.db.repository import get_all_instruments
-from portfoliomaster.providers.yahoo_adapter import YahooAdapter
 
+from .dependencies import get_system_portfolio_store
 from .routers.backup import router as backup_router
 from .routers.config import router as config_router
 from .routers.import_export import router as import_export_router
-from .routers.instruments import (
-    _fetch_historical_quote_and_date,
-    _fetch_historical_quote_for_date,
-    _fetch_start_of_year_quote,
-    router as instruments_router,
-)
+from .routers.instruments import router as instruments_router
 from .routers.positions import router as positions_router
 from .routers.refresh import (
     _execute_refresh_all,
-    _state,
     router as refresh_router,
 )
 
@@ -75,21 +68,11 @@ logger = logging.getLogger(__name__)
 
 def _has_active_instruments() -> bool:
     """Synchronously check whether at least one active instrument exists in DB."""
-    if is_multi_tenant_db():
-        from portfoliomaster.db.session import session_scope
-        from portfoliomaster.db.schema import UserInstrument
-        from sqlalchemy import func, select
-        try:
-            with session_scope() as session:
-                cnt = session.scalar(
-                    select(func.count()).select_from(UserInstrument).where(UserInstrument.active.is_(True))
-                )
-                return bool(cnt and cnt > 0)
-        except Exception as ex:
-            logger.warning("[AutoRefresh] Could not query active instruments: %s", ex)
-            return False
-    instruments = get_all_instruments()
-    return bool(instruments)
+    try:
+        return get_system_portfolio_store().count_active_instruments() > 0
+    except Exception as ex:
+        logger.warning("[AutoRefresh] Could not query active instruments: %s", ex)
+        return False
 
 
 def _verify_startup_db() -> None:
@@ -328,16 +311,7 @@ async def favicon():
     """Handle browser favicon request silently without 404 logs."""
     return Response(status_code=204)
 
-# Re-exports for backward-compatibility with test suites and external consumers
-__all__ = [
-    "app",
-    "YahooAdapter",
-    "_execute_refresh_all",
-    "_fetch_historical_quote_and_date",
-    "_fetch_historical_quote_for_date",
-    "_fetch_start_of_year_quote",
-    "_state",
-]
+__all__ = ["app"]
 
 if __name__ == "__main__":
     import uvicorn
