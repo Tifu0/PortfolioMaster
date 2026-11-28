@@ -5,75 +5,37 @@
 [![Interactive Docs](https://img.shields.io/badge/Swagger%20UI-Docs-purple?style=for-the-badge&logo=fastapi)](https://portfoliomaster-backend.onrender.com/docs)
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg?style=for-the-badge)](https://www.gnu.org/licenses/gpl-3.0)
 
-**PortfolioMaster** is a high-performance investment Watchlist tracking and analytics platform. Supporting both **cloud multi-tenant production** (Next.js on Vercel + FastAPI on Render + Supabase PostgreSQL) and **local-first privacy** (Next.js + SQLite), it replaces traditional spreadsheet workflows (Google Sheets / Excel) with a modern, real-time, ultra-responsive dashboard.
+**PortfolioMaster** is an investment watchlist tracking and price-target analytics platform. It supports **multi-tenant cloud production** (Next.js on Vercel + FastAPI on Render + Supabase PostgreSQL with RLS) as well as **local-first execution** (SQLite fallback when `DATABASE_URL` is unset).
 
-- 🌐 **Live Web Application**: [https://portfolio-master-sigma-peach.vercel.app/](https://portfolio-master-sigma-peach.vercel.app/)
-- ⚡ **Production Backend API**: [https://portfoliomaster-backend.onrender.com/](https://portfoliomaster-backend.onrender.com/)
-- 📖 **Interactive API Documentation (Swagger)**: [https://portfoliomaster-backend.onrender.com/docs](https://portfoliomaster-backend.onrender.com/docs)
-
-Built on a decoupled modern architecture:
-- **Frontend**: **Next.js 16 (React 19)**, **TypeScript**, **Tailwind CSS v4**, and **@tanstack/react-table**.
-- **Backend**: **FastAPI** REST API with **Uvicorn**, powered by **Python** core calculations, PostgreSQL (Supabase) / SQLite persistence, and live market quotes via **Yahoo Finance** (`yfinance`).
-
+- 🌐 **Live App**: [https://portfolio-master-sigma-peach.vercel.app/](https://portfolio-master-sigma-peach.vercel.app/)
+- ⚡ **Backend API**: [https://portfoliomaster-backend.onrender.com/](https://portfoliomaster-backend.onrender.com/)
+- 📖 **Swagger Docs**: [https://portfoliomaster-backend.onrender.com/docs](https://portfoliomaster-backend.onrender.com/docs)
 
 ---
 
-<img width="1919" height="1079" alt="Captura de pantalla 2026-10-17 175413" src="https://github.com/user-attachments/assets/47c9fa94-b971-41c8-987b-17a0a23aa751" />
+<img width="1919" height="1079" alt="PortfolioMaster Watchlist Dashboard" src="https://github.com/user-attachments/assets/47c9fa94-b971-41c8-987b-17a0a23aa751" />
 
 ---
 
-## ✨ Features
+## ✨ Key Features
 
-- **📊 Interactive Watchlist Table**:
-  - **📅 Inline Analysis Date Column**: Dedicated column for displaying the analysis date with single-click inline editing, keyboard shortcuts (`Enter` to save, `Escape` to cancel, blur to commit), and automatic price recalculation via Yahoo Finance.
-  - **📝 Inline Research Notes & Descriptions**: Clickable document icon (`FileText`) on each ticker to view and edit company analysis notes, investment thesis, and comments directly inline with SQLite persistence.
-  - **↔️ Interactive Column Resizing**: Google Sheets-style column width adjustment with drag handles, double-click to auto-reset individual columns, automatic `localStorage` persistence, and a **`Restore Columns`** button in the toolbar.
-  - Multi-column sorting powered by TanStack Table, retaining column sort choices (e.g. Daily Change ascending) across page reloads.
-  - Real-time instant search by ticker or company name.
-  - Dynamic filters by market exchange and currency with single-row responsive layout.
+- **📊 Virtualized Interactive Watchlist (`WatchlistTable`)**:
+  - Tracks live price, daily variation, YTD variation, return since your `analysis_date`, and **Decline to Target** with visual proximity alerts.
+  - **Inline Analysis Date & Research Notes**: Edit analysis dates inline (`Enter`/`Blur` saves and resolves historical Yahoo quotes) and expand row-level thesis notes without rebuilding columns or re-rendering other rows.
+  - **Responsive & Accessible UI**: Full EN/ES bilingual support (`translations.ts`), dark theme, mobile (`375px`) and desktop (`1280px`) layouts, customizable toolbar switches (`role="switch"`), row-height presets (`32–88px`), column sorting/sizing persisted via SSR-safe `localStorage`.
 
-- **📈 Portfolio Metric Cards & Header Status**:
-  - Live summary statistics displayed at the top: Total active positions, Top gainer, Top loser, and Average daily change.
-  - Modern runtime badge positioned in the top-right header displaying active auto-refresh interval and Yahoo Finance batch size (e.g. `Auto 300s · Batch 50`); during an active refresh, it switches to live batch progress.
+- **🔄 Real-Time Market Refresh & Multi-Tenant SSE**:
+  - Hybrid batch quote engine (`yf.download` + `ThreadPoolExecutor` + Yahoo `fast_info`) with per-user refresh cooldown (`RefreshRun`) and decoupled global `market_quotes` storage.
+  - Split refresh pipeline: `POST /api/refresh` triggers refreshes while `GET /api/refresh/stream` streams tenant-filtered progress events (`asyncio.Queue`) to merge deltas smoothly in the UI.
+  - Thread-safe bounded read cache with SHA-256 `ETag` / `304 Not Modified` support and idle-aware background scheduling.
 
-- **🔄 Unified Market Data & Analysis Refresh Engine**:
-  - One-click **`Update Quotes`** button that refreshes all live quotes via Yahoo Finance AND automatically resolves missing historical analysis prices and start-of-year (YTD) reference prices in one unified operation.
-  - **High-Speed Concurrent Quote Engine**: Hybrid vectorization (`yf.download`) coupled with parallel `ThreadPoolExecutor` workers using lightweight Yahoo `fast_info` + resilient browser session headers, bypassing heavy OHLCV candle downloads and crumb rate limits. 30 symbols refresh in **1.2s - 1.5s**.
-  - **Zero-Read Bulk Database Upsert (`upsert_market_quotes_batch`)**: Native SQL `INSERT ... ON CONFLICT (provider_symbol) DO UPDATE SET ...` without pre-SELECT or `RETURNING *`, compatible with both PostgreSQL and SQLite >= 3.24. An in-memory delta filter skips unchanged quotes entirely, eliminating redundant database writes during off-hours or closed markets.
-  - **In-Memory Read Cache with ETag / HTTP 304**: `GET /api/positions` and `GET /api/metrics` are served from a thread-safe in-memory cache (60s TTL) with SHA-256 ETag generation. Matching `If-None-Match` headers return zero-body HTTP 304 responses, saving egress bandwidth. The cache is invalidated automatically on any data mutation (quote refresh, instrument CRUD, import, backup restore).
-  - **Idle-Aware Background Refresh Scheduler**: Background quote refreshes automatically pause after 15 minutes of client inactivity (configurable via `IDLE_TIMEOUT_SECONDS`). Render healthchecks (`/health`, `/`), CORS preflights (`OPTIONS`), documentation probes (`/docs`), and `HEAD` requests are excluded from activity tracking. Instant wake-up on the next real user request.
-  - **Request-Storm Prevention & SSE Delta Merging**: Frontend in-flight concurrency guards consolidate parallel fetch triggers; SSE `batch` events carry quote deltas directly in the payload for in-memory React state merging, triggering a full network `GET /api/positions` only once on the final `complete` event instead of after every intermediate batch.
-  - **Progressive Real-Time Streaming via Server-Sent Events (SSE)** (`GET /api/refresh/stream`): A centralized pub/sub broadcaster streams batch events (`start`, `batch`, `complete`) to the client for **both manual refreshes and scheduled background loops**.
-  - **Incremental Per-Batch Persistence & Live Table Updates**: Quotes are committed to PostgreSQL / SQLite after each batch and immediately rendered in the UI table in real time, rather than blocking until all batches finish.
-  - **Zero-Flicker State Preservation**: Incremental updates in `PortfolioProvider` and `WatchlistTable` strictly preserve table state — scroll position, active search filters, column sorting, column widths, and open inline editing (`Analysis Date` or `Research Notes`) are never interrupted or reset.
-  - **Same-Origin API**: Next.js serves browser requests under `/api/*` and sends the Supabase bearer token to FastAPI from a Secure, HttpOnly session cookie. The watchlist reads the same session on the server to render the signed-in portfolio in the initial document.
-  - **Adaptive Sync Heartbeat**: Adaptive background sync with intelligent log filtering to keep development consoles clean and signal-focused.
-  
-- **📥 CSV & Excel Spreadsheet Import**:
-  - Drag-and-drop file upload supporting `.csv` and `.xlsx` files.
-  - Two-step import workflow: dry-run validation with preview table, anomaly detection, and explicit database commit.
-  - Automatic column mapping and ticker normalization (e.g. `BME:MAP`, `EPA:MC`, `US` prefixes).
+- **📥 Spreadsheet Import, Export & Backups**:
+  - Two-step `.csv` / `.xlsx` import (`POST /api/import/preview` dry-run + `POST /api/import/confirm`) with formula-injection sanitization and row/size bounds.
+  - Dedicated `/import` and `/backup` views supporting ingest-compatible exports (`.xlsx`, `.csv`, `.json`), JSON backups, and SQLite snapshots in local mode.
 
-- **💾 Backup, Export & Safe Restoration System**:
-  - **Dedicated "Backup & Export" View & Tab**: Accessible directly from the main navigation bar (`/backup`), offering full-page access to watchlist exports (`.xlsx`, `.csv`, `.json`), SQLite snapshots (`.db`), and backup restorations without relying solely on modals.
-  - **Multi-Format Watchlist Export**: Quick download of the complete watchlist into **Excel (`.xlsx`)**, **CSV (`.csv`)**, or structured **JSON (`.json`)** with live quotes, calculated returns, and research notes.
-  - **100% Round-Trip Ingest Compatibility**: Column headers and numeric formats in exported `.xlsx` and `.csv` files are 100% compatible with the import pipeline—enabling seamless re-import without data loss (preserving target prices, analysis benchmarks, start-of-year YTD prices, and notes).
-  - **Atomic SQLite Snapshots (`.db`)**: Safe snapshot creation using Python's native `sqlite3.Connection.backup()` API, avoiding file locks and corruption during concurrent quote refreshes.
-  - **Automatic Local Safety Backups**: Automated snapshots saved to `backups/` prior to any destructive operation (`DELETE /api/database`, `POST /api/import/confirm`, or database restorations), with automatic rotation maintaining the 10 most recent snapshots.
-  - **SQLite & JSON Restore Validator**: Upload or drag-and-drop restore with `PRAGMA integrity_check` verification, schema validation, and 1-click restore from local automatic snapshots with confirmation guards.
-
-
-- **⚙️ Customizable Action Toolbar with Persistence & Row Height Controller**:
-  - **Toolbar Customization Popover**: Positioned at the far right of the action toolbar, allowing users to toggle the visibility of individual action buttons (Update Quotes, Add Instrument, Restore Columns, Row Height, Export / Copy, Import Values, and Clear DB).
-  - **Safe Database Reset Protection**: The destructive `Clear DB` button is hidden by default and protected by both toolbar visibility toggle and confirmation modal guard.
-  - **Client-Side Persistence & Hydration Safety**: Button visibility and density preferences are remembered across page reloads via `localStorage` (`portfoliomaster_toolbar_config` and `portfoliomaster_row_height`) with hydration mismatch protection in Next.js 16.
-  - **Reset to Defaults**: 1-click restore to recommended default toolbar layout and standard row height.
-
----
-
-## 🚀 Local Execution
-
-Local setup instructions (1-step `run.bat`, manual backend/frontend launch, `.env` configuration, sample CSV import, and SQLite-to-Supabase migration) live in [`local/README.md`](local/README.md), alongside the local-only `portfolio.db`, `CSV_example.csv`, and `SQL_supabase.txt` workspace files.
+- **🔒 Security & Multi-Tenant Isolation**:
+  - Browser traffic routes exclusively through Next.js same-origin `/api/[...path]` proxy using `HttpOnly` Supabase SSR session cookies (`API_BASE_URL` never exposed to the client).
+  - Strict Supabase JWT verification (`HS256`/`RS256`/`ES256`, `role == "authenticated"`) and `user_id` tenant scoping across PostgreSQL queries and SSE streams.
 
 ---
 
@@ -81,176 +43,86 @@ Local setup instructions (1-step `run.bat`, manual backend/frontend launch, `.en
 
 ```text
 PortfolioMaster/
-├── backend/
-│   ├── api/
-│   │   ├── main.py             # FastAPI application and REST endpoints
-│   │   └── activity.py         # Client activity tracking and idle-aware scheduler gating
-│   └── tests/
-│       ├── test_api.py         # Backend API integration tests
-│       ├── test_backup_api.py  # Backup & Export API integration tests
-│       ├── test_idle_refresh.py # Idle scheduler and healthcheck exclusion tests
-│       └── test_positions_cache.py # In-memory cache, ETag, and HTTP 304 tests
-│
-├── frontend/                   # Next.js web application (App Router)
-│   ├── app/                    # Routes, layouts, loading skeletons, and error handling
-│   ├── components/             # React components (WatchlistTable, BackupExportView, BackupExportModal, MetricCards, ImportView, ManualEntryModal)
-│   ├── context/                # React 19 PortfolioProvider and reactive hooks (usePortfolio)
-│   ├── lib/                    # Typed API client (api.ts) and TypeScript models (types.ts)
-│   ├── public/                 # Static assets, llms.txt, robots.txt
-│   ├── scripts/                # Automated verification and test scripts
-│   └── next.config.ts          # Next.js application configuration
-│
-├── src/portfoliomaster/        # Core business logic and persistence (Pure Python)
-│   ├── backup/                 # SQLite atomic snapshots, auto-safety backups, and multi-format exporters (CSV/Excel/JSON)
-│   ├── core/                   # Financial formulas, calculations, models, and configuration
-│   ├── db/                     # SQLite & PostgreSQL persistence (connection, repository, delta-aware upsert)
-│   ├── ingest/                 # Spreadsheet parser, normalizer, and validator
-│   ├── providers/              # Market data providers (Yahoo Finance adapter & mock)
-│   └── refresh/                # Batch quote runner with fault tolerance
-│
-├── backups/                    # Local automatic safety snapshots (rotated, git-ignored)
-├── local/                      # Local execution guide (README.md) & git-ignored local data files
-├── tests/                      # Core test suite (calculations, database, ingest, providers, backup/export, batch_runner)
-├── requirements.lock           # Pinned Python runtime dependencies (generated from pyproject.toml)
-├── requirements-dev.lock       # Pinned Python dev/test dependencies (generated from pyproject.toml)
-├── pyproject.toml              # Single source of truth for Python dependencies and package metadata
-├── pytest.ini                  # Pytest configuration
-└── run.bat                     # Windows 1-step launch script
+├── backend/api/
+│   ├── main.py                 # FastAPI entrypoint, lifespan, and background scheduler
+│   ├── dependencies.py         # DI wiring (stores, refresh coordinator, auth guards)
+│   ├── activity.py             # Client activity tracker for idle scheduler gating
+│   ├── routers/                # Thin HTTP routers (config, positions, instruments, refresh, import_export, backup)
+│   └── services/               # Domain services, SSE broker, and bounded read cache
+├── src/portfoliomaster/
+│   ├── core/                   # Financial models, calculations, config, canonical parsing.py
+│   ├── db/                     # PortfolioStore port, SqliteWatchlistStore, PostgresWatchlistStore, schema.py
+│   ├── providers/              # Thread-safe YahooAdapter and MockProvider
+│   ├── ingest/                 # Spreadsheet parsing, normalization, and validation
+│   ├── backup/                 # CSV/Excel/JSON exporters and SQLite backup helpers
+│   └── refresh/                # Fault-tolerant batch runner
+├── frontend/
+│   ├── app/                    # Next.js 16 App Router pages (/, /import, /backup), auth & /api/[...path] proxy
+│   ├── components/
+│   │   ├── watchlist/          # WatchlistTable orchestrator + memoized InlineDateCell / InstrumentDescriptionPanel, toolbar, popovers
+│   │   ├── instrument-modal/   # ManualEntryModal shell + AddInstrumentForm / EditInstrumentForm
+│   │   └── backup/             # Dedicated backup/export/restore sections
+│   ├── context/                # AuthContext, LanguageContext, PortfolioContext, PortfolioRefreshContext
+│   ├── lib/                    # API client, SSR-safe storage.ts, watchlist-formatters.ts, instrument-constants.ts, translations.ts
+│   └── scripts/                # Behavioral unit & SSR verification suites (npm test)
+├── alembic/                    # Chained PostgreSQL/SQLite migrations
+├── docs/specs/                 # Architecture & Spec-TDD specifications (01..07)
+├── tests/                      # Consolidated Pytest suites (unit/, integration/, security/)
+├── pyproject.toml              # Single source of truth for Python dependencies
+└── requirements*.lock          # Deterministic runtime and dev lockfiles (uv)
 ```
+
+For contributor conventions and Spec-TDD rules, see [`AGENTS.md`](AGENTS.md) and [`local/README.md`](local/README.md).
 
 ---
 
-## 🔌 API Reference
+## 🔌 API Overview
 
-The backend exposes clean JSON REST endpoints consumed by the Next.js frontend:
-
-| Method | Endpoint | Description |
+| Method | Endpoint | Purpose |
 |---|---|---|
-| `GET` | `/health` | Liveness & database readiness probe (excluded from activity tracking; aliases: `/healthcheck`, `/api/health`, `/api/healthcheck`) |
-| `GET` | `/api/positions` | List active instruments with quotes and calculated financial returns (Daily, YTD, vs. Analysis, Decline to Target) |
-| `GET` | `/api/metrics` | Portfolio summary metrics (total count, top gainer, top loser, average variation) |
-| `GET` | `/api/instruments` | Raw list of all registered instruments |
-| `GET` | `/api/instruments/{ticker}` | Retrieve details for a specific instrument |
-| `POST` | `/api/instruments` | Create a new instrument with automatic resolution of live quotes, historical analysis price, and YTD price |
-| `PUT` | `/api/instruments/{ticker}` | Update fields of an existing instrument (supports ticker renaming, currency, exchange, targets, analysis price/date, YTD price/date, notes) |
-| `DELETE` | `/api/instruments/{ticker}` | Delete an instrument from the watchlist |
-| `POST` | `/api/instruments/{ticker}/refresh` | Refresh market quote and auto-resolve missing analysis and YTD prices for a single instrument |
-| `POST` | `/api/refresh` | Batch-refresh quotes from Yahoo Finance using vectorized multi-threaded downloads with per-batch SQLite persistence. |
-| `GET` | `/api/refresh/stream` | Server-Sent Events (SSE) stream emitting real-time batch progress (`mode=listen` for continuous pub/sub listener or `?trigger=1` to initiate) |
-| `POST` | `/api/instruments/{ticker}/fetch-analysis-price` | Fetch historical quote from Yahoo Finance for instrument's analysis date (with resilient lookback and same-day fallback) |
-| `POST` | `/api/instruments/{ticker}/fetch-ytd-price` | Fetch start-of-year quote from Yahoo Finance for instrument for current year |
-| `POST` | `/api/instruments/resolve-missing-analysis-prices` | Auto-resolve historical analysis reference prices from Yahoo Finance |
-| `POST` | `/api/instruments/resolve-missing-ytd-prices` | Auto-resolve start-of-year (YTD) reference prices from Yahoo Finance |
-| `GET` | `/api/config` | Retrieve runtime configuration (refresh interval, batch size, last refresh status), and live batch progress |
-| `POST` | `/api/import/preview` | Dry-run validation of an uploaded CSV/Excel spreadsheet |
-| `POST` | `/api/import/confirm` | Commit validated spreadsheet instruments into the database (creates safety backup) |
-| `DELETE` | `/api/database` | Reset the SQLite database completely (creates safety backup) |
-| `GET` | `/api/export/csv` | Download active watchlist as an ingest-compatible `.csv` file |
-| `GET` | `/api/export/excel` | Download active watchlist as a styled, ingest-compatible `.xlsx` spreadsheet |
-| `GET` | `/api/export/json` | Download active watchlist as a structured, versioned `.json` dump |
-| `GET` | `/api/backup/download` | Download an atomic, thread-safe raw SQLite snapshot (`.db`) |
-| `POST` | `/api/backup/restore` | Restore database from an uploaded `.db` or `.json` file with pre-restore safety snapshot |
-| `GET` | `/api/backup/list` | List available automatic local snapshots in `backups/` |
-| `POST` | `/api/backup/restore/{filename}` | 1-click restore from a local snapshot file |
+| `GET` | `/health` | Readiness probe (`/healthcheck`, `/api/health`) |
+| `GET` | `/api/config` | Runtime refresh settings and active run status |
+| `GET` | `/api/positions`, `/api/metrics` | Watchlist rows with computed returns and portfolio summary metrics |
+| `GET/POST/PUT/DELETE` | `/api/instruments`, `.../{ticker}` | Instrument CRUD, plus `GET /api/instruments/check-yahoo` |
+| `POST` | `/api/instruments/{ticker}/fetch-analysis-price`, `.../fetch-ytd-price` | Historical analysis and start-of-year price resolution |
+| `POST` | `/api/refresh`, `.../instruments/{ticker}/refresh` | Trigger batch or single-ticker quote refresh |
+| `GET` | `/api/refresh/stream` | Tenant-isolated SSE progress stream |
+| `POST` | `/api/import/preview`, `/api/import/confirm` | Dry-run preview and transactional spreadsheet import |
+| `GET` | `/api/export/{csv,excel,json}` | Download watchlist in CSV, Excel, or JSON |
+| `GET/POST/DELETE` | `/api/backup/*`, `/api/database` | Backup download/restore and database reset |
 
 ---
 
 ## 🧪 Testing
 
-Both backend and frontend contain automated test suites.
-
-### Backend & Core Tests (Python)
-
-Install the development requirements before running the Python suite. This also installs the runtime requirements.
-
+### Backend (`tests/`)
+Install dev dependencies from lockfiles (never edit lockfiles by hand):
 ```bash
 pip install -r requirements-dev.lock && pip install --no-deps -e .
 ```
 
-Pytest is configured in [`pytest.ini`](pytest.ini) with strict timeouts (`--timeout=10`), unbuffered real-time stdout (`-s`, `-u`), and automatically excludes live network tests by default (`-m "not network"`) to guarantee fast, deterministic runs without hanging on rate limits.
+Run tests (`pytest.ini` skips live network tests by default via `-m "not network"`):
+```bash
+pytest              # Offline unit/integration/security suite (129 tests)
+pytest -m network   # Live Yahoo Finance network tests (1 test)
+pytest -m ""        # Complete suite (130 tests)
+```
 
-1. **Standard Execution (Offline / Fast - Default):**
-   Runs all unit and integration tests using mocks (159 tests):
-   ```bash
-   venv\Scripts\python -u -m pytest
-   ```
-
-2. **Network Integration Tests (Live Yahoo Finance):**
-   Runs only the tests that connect to external APIs (Yahoo Finance):
-   ```bash
-   venv\Scripts\python -u -m pytest -m network
-   ```
-
-3. **Complete Suite (All Tests):**
-   Runs both offline and live network tests:
-   ```bash
-   venv\Scripts\python -u -m pytest -m ""
-   ```
-
-### Frontend Tests (TypeScript)
-Run contract verification and component tests:
+### Frontend (`frontend/`)
 ```bash
 cd frontend
-npm test
+npm run lint
+npx tsc --noEmit --incremental false
+npm test            # 7 behavioral & SSR test suites
+npm run build
 ```
 
 ---
 
-## ☁️ Production Deployment Architecture
+## ☁️ Deployment Architecture
 
-PortfolioMaster supports high-availability, multi-tenant cloud deployment:
-
-- **Frontend**: **Next.js 16 (App Router)** deployed to **Vercel** (`frontend` as root directory)  
-  👉 **Live App**: [https://portfolio-master-sigma-peach.vercel.app/](https://portfolio-master-sigma-peach.vercel.app/)
-- **Backend API**: **FastAPI** ASGI web service deployed to **Render** with Uvicorn  
-  👉 **API Base**: [https://portfoliomaster-backend.onrender.com/](https://portfoliomaster-backend.onrender.com/)  
-  👉 **Swagger Docs**: [https://portfoliomaster-backend.onrender.com/docs](https://portfoliomaster-backend.onrender.com/docs)
-- **Database**: **Supabase PostgreSQL** with Row-Level Security (RLS) policies and shared `market_quotes` decoupling.
-- **Authentication**: **Supabase Auth** with cryptographic JWT verification (`HS256`, `RS256`, or `ES256`; audience `authenticated`).
-- **Local Development**: Isolated SQLite backend (`portfolio.db`) with automatic fallback when `DATABASE_URL` is unset.
-
-### 1. Render Deployment (FastAPI Web Service)
-1. Link repository to Render and create a **Web Service** using `render.yaml`.
-2. Configure settings:
-   - **Environment**: Python 3.12.6
-   - **Build Command**: `pip install -r requirements.lock && pip install --no-deps .`
-   - **Pre-Deploy Command**: `alembic upgrade head`
-   - **Start Command**: `uvicorn backend.api.main:app --host 0.0.0.0 --port $PORT`
-   - **Health Check Path**: `/health`
-3. Set Environment Variables:
-   - `DATABASE_URL`: `postgresql+psycopg://postgres.[REF]:[PASSWORD]@aws-0-[REGION].pooler.supabase.co:6543/postgres?sslmode=require` (Supavisor Transaction Pooler on port 6543)
-   - `SUPABASE_JWT_SECRET`: Legacy signing secret from the Supabase project, required for HS256. For asymmetric signing, set `SUPABASE_URL` and leave the secret unset.
-   - `SUPABASE_URL`: `https://[REF].supabase.co`
-   - `CORS_ORIGINS`: `https://portfolio-master-sigma-peach.vercel.app`
-   - `ENVIRONMENT`: `production`
-   - `REFRESH_INTERVAL_SECONDS`: `300` (5-minute production interval; set to `0` to disable auto-refresh)
-   - `REFRESH_BATCH_SIZE`: `50` (halves database round-trips vs. default 25)
-   - `IDLE_TIMEOUT_SECONDS`: `900` (pause background refreshes after 15 min of client inactivity)
-
-### 2. Vercel Deployment (Next.js App Router)
-1. Import repository on Vercel.
-2. Configure settings:
-   - **Root Directory**: `frontend`
-   - **Framework Preset**: `Next.js`
-3. Set Environment Variables:
-   - `NEXT_PUBLIC_API_URL`: `https://portfoliomaster-backend.onrender.com`
-   - `NEXT_PUBLIC_SUPABASE_URL`: `https://[REF].supabase.co`
-   - `NEXT_PUBLIC_SUPABASE_ANON_KEY`: Your Supabase anon public key
-
----
-
-## 🚚 Migrating Legacy SQLite Data to Supabase PostgreSQL
-
-For step-by-step SQLite migration commands (`scripts/migrate_sqlite_to_web.py` with `local/portfolio.db`), see [`local/README.md`](local/README.md).
----
-
-## 🔒 Privacy & Architecture Modes
-
-- **Multi-Tenant Cloud Mode:** When `DATABASE_URL` is set to Supabase PostgreSQL, all user data is partitioned by `user_id` authenticated via Supabase JWT with Row Level Security.
-- **Local-First Mode:** When `DATABASE_URL` is unset in development, data is stored locally in SQLite (`portfolio.db` or `DATABASE_URL=sqlite:///local/portfolio.db`).
-
----
-
-## 📄 License
-
-This project is licensed under the **GNU General Public License v3.0 (GPL-3.0)**. See the [LICENSE](LICENSE) file for complete details.
+- **Backend (Render via `render.yaml`)**: Python `3.12.6`, build `pip install -r requirements.lock && pip install --no-deps .`, pre-deploy `alembic upgrade head`, start `uvicorn backend.api.main:app --host 0.0.0.0 --port ${PORT:-8000}`.
+  - Key env vars: `DATABASE_URL` (Supabase pooler), `SUPABASE_URL`, `SUPABASE_JWT_SECRET` (if `HS256`), `CORS_ORIGINS`, `ENVIRONMENT=production`, `REFRESH_INTERVAL_SECONDS=300`, `REFRESH_COOLDOWN_SECONDS=120`, `REFRESH_BATCH_SIZE=50`.
+- **Frontend (Vercel, root `frontend/`)**: Next.js 16 + Tailwind CSS v4.
+  - Key env vars: `API_BASE_URL` (server-side proxy target to Render), `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`.
+- **Local Mode**: Leave `DATABASE_URL` unset for isolated SQLite persistence (`portfolio.db`); see [`local/README.md`](local/README.md).
