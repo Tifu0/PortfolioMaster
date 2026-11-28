@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { clearApiClientCache } from '@/lib/api';
 import { isAuthConfigured, supabaseUrl, type AuthUser } from '@/lib/supabase';
 import { useLanguage } from '@/context/LanguageContext';
+import { removeStoredItem } from '@/lib/storage';
 
 export interface AuthContextType {
   user: AuthUser | null;
@@ -87,10 +88,10 @@ export function AuthProvider({ children, initialUser = null }: { children: React
     try {
       const project = new URL(supabaseUrl).hostname.split('.')[0];
       const legacyKey = `sb-${project}-auth-token`;
-      localStorage.removeItem(legacyKey);
-      localStorage.removeItem(`${legacyKey}-code-verifier`);
+      removeStoredItem(legacyKey);
+      removeStoredItem(`${legacyKey}-code-verifier`);
     } catch {
-      // Storage may be disabled by browser policy.
+      // URL parsing may fail for malformed env config.
     }
 
     const listener = (event: Event) => handleAuthRequired(event);

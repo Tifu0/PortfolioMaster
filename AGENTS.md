@@ -14,6 +14,12 @@ You are a Senior Full-Stack Software Engineering Agent specializing in high-perf
   - `backend/api/`: DI (`dependencies.py`), services (`backend/api/services/` for instruments, refresh coordinator, SSE broker, import/export, backup, cache), thin routers (`backend/api/routers/*.py` with zero `is_multi_tenant_db()` branches).
 - **Tests Layout (`testpaths = tests`):** `tests/unit/`, `tests/integration/`, `tests/security/`, shared fixtures in `tests/conftest.py`.
 - **Frontend:** Next.js 16 (App Router), React 19, TypeScript, Tailwind CSS, @supabase/ssr, TanStack React Table/Virtual.
+- **Frontend Layout:**
+  - `frontend/lib/`: API client (`api.ts`), SSR-safe `storage.ts`, pure `watchlist-formatters.ts`, `instrument-constants.ts`, `formatters.ts`, `modal-policies.ts`, typed EN/ES `translations.ts`.
+  - `frontend/context/`: `AuthContext`, `LanguageContext`, `PortfolioContext`, `PortfolioRefreshContext` (split data vs. SSE progress state).
+  - `frontend/components/watchlist/`: `WatchlistTable.tsx` thin orchestrator, `WatchlistToolbar.tsx`, `RowHeightPopover.tsx`, `WipeDatabaseModal.tsx`, `WatchlistEmptyState.tsx`, `useWatchlistActions.ts`, `watchlistColumns.tsx`, and `React.memo` `InlineDateCell.tsx` / `InstrumentDescriptionPanel.tsx`.
+  - `frontend/components/instrument-modal/`: `ManualEntryModal.tsx` shell, `AddInstrumentForm.tsx`, `EditInstrumentForm.tsx`.
+  - `frontend/scripts/`: behavioral unit/SSR verification suites (`npm test`, zero grep tests).
 - **Database & Auth:** PostgreSQL (Supabase) with multi-tenant row-level isolation (`user_id`).
 
 ---
