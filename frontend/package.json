@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test": "tsx scripts/test_i18n_and_policies.mts && tsx scripts/test_formatters_and_metrics.mts && tsx scripts/test_table_ssr_and_budget.mts && tsx scripts/test_api_client.mts && tsx scripts/test_refresh_sync.mts && tsx scripts/test_backup_modal_ssr.mts"
+    "test": "tsx scripts/test_i18n_and_policies.mts && tsx scripts/test_formatters_and_metrics.mts && tsx scripts/test_table_ssr_and_budget.mts && tsx scripts/test_api_client.mts && tsx scripts/test_refresh_sync.mts && tsx scripts/test_backup_modal_ssr.mts && tsx scripts/test_u7_modular_units.mts"
   },
   "dependencies": {
     "@supabase/ssr": "0.12.7",

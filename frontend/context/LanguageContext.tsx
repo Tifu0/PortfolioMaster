@@ -2,6 +2,7 @@
 
 import React, { createContext, useContext, useEffect, useState, useMemo, useCallback, useSyncExternalStore } from 'react';
 import { translations, type Language, type TranslationKey } from '@/lib/translations';
+import { getStoredString, setStoredString } from '@/lib/storage';
 
 const LANGUAGE_STORAGE_KEY = 'portfoliomaster_language';
 
@@ -10,12 +11,8 @@ function getDefaultLanguage(): Language {
 }
 
 function readSavedLanguage(): Language {
-  try {
-    const saved = localStorage.getItem(LANGUAGE_STORAGE_KEY);
-    if (saved === 'en' || saved === 'es') return saved;
-  } catch {
-    // Storage may be unavailable in the browser.
-  }
+  const saved = getStoredString(LANGUAGE_STORAGE_KEY);
+  if (saved === 'en' || saved === 'es') return saved;
   return getDefaultLanguage();
 }
 
@@ -49,11 +46,7 @@ export function LanguageProvider({ children }: { children: React.ReactNode }) {
 
   const setLanguage = useCallback((newLang: Language) => {
     setSelectedLanguage(newLang);
-    try {
-      localStorage.setItem(LANGUAGE_STORAGE_KEY, newLang);
-    } catch {
-      // Ignore localStorage write error
-    }
+    setStoredString(LANGUAGE_STORAGE_KEY, newLang);
   }, []);
 
   const t = useCallback(
